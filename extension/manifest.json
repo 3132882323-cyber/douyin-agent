@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "店策 Agent - 抖店千川经营副驾",
+  "version": "2.5.1",
+  "description": "从已登录的抖店和巨量千川页面读取经营快照，在本机生成千川调整建议、库存预警和每日经营报告。无需开发者 API。",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://fxg.jinritemai.com/*",
+    "https://qianchuan.jinritemai.com/*",
+    "https://buyin.jinritemai.com/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://fxg.jinritemai.com/*"],
+      "js": ["content-common.js", "content-doudian.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://qianchuan.jinritemai.com/*", "https://buyin.jinritemai.com/*"],
+      "js": ["content-common.js", "content-qianchuan.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "打开店策 Agent"
+  },
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

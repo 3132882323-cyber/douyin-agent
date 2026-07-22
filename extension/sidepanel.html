@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>店策 Agent</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <main class="panel-shell">
+      <header>
+        <div class="brand-mark">策</div>
+        <div><h1>店策 Agent</h1><p>运营总管 · 货架 · 直播 · 千川 · 库存</p></div>
+        <button id="refresh-button" class="icon-button" title="刷新">↻</button>
+      </header>
+
+      <section id="connection" class="connection pending">
+        <span></span><div><strong>正在连接本地 Agent</strong><p>读取抖店与千川脱敏快照</p></div>
+      </section>
+
+      <section class="hero">
+        <div class="eyebrow">今日经营简报</div>
+        <h2 id="headline">等待首次同步</h2>
+        <p id="summary">打开后台页面后点击“同步并诊断”。</p>
+        <div class="hero-actions">
+          <button id="sync-diagnose" class="primary">同步并诊断</button>
+          <button id="copy-brief" class="secondary">复制简报</button>
+        </div>
+      </section>
+
+      <nav id="role-nav" class="role-nav" aria-label="选择运营岗位">
+        <button class="active" data-role="运营总管">总管</button>
+        <button data-role="货架运营">货架</button>
+        <button data-role="直播运营">直播</button>
+        <button data-role="投放运营">投放</button>
+        <button data-role="商品运营">商品</button>
+      </nav>
+
+      <section class="scan-card">
+        <div class="scan-head">
+          <div><strong>全店自动巡检</strong><p id="scan-detail">按清单自动打开页面并采集，不需要 API</p></div>
+          <span id="scan-state" class="scan-tag idle">未运行</span>
+        </div>
+        <div class="scan-progress"><span id="scan-progress-bar"></span></div>
+        <div class="scan-actions">
+          <button id="full-scan-button">自动获取全店数据</button>
+          <button id="retry-scan-button" hidden>重试失败页</button>
+          <button id="cancel-scan-button" hidden>停止巡检</button>
+        </div>
+        <div class="scan-schedule"><span>手动模式：只有点击按钮才会巡检</span></div>
+        <small id="scan-summary">覆盖经营、商品、订单、内容、直播、货架与千川核心页面</small>
+      </section>
+
+      <section class="progress-card">
+        <div><strong id="progress-rate">0%</strong><small>今日完成</small></div>
+        <div><strong id="doing-count">0</strong><small>进行中</small></div>
+        <div><strong id="observing-count">0</strong><small>待观察</small></div>
+        <div><strong id="data-freshness">--</strong><small>数据状态</small></div>
+      </section>
+
+      <section class="trend-card">
+        <div class="section-heading"><h3>近7天经营变化</h3><span id="trend-count">积累中</span></div>
+        <div id="trend-list" class="trend-list empty-state">历史数据正在积累，完成两次巡检后开始展示变化</div>
+      </section>
+
+      <section class="manager-card">
+        <div class="section-heading"><h3 id="task-heading">今日必须处理</h3><span id="manager-count">最多 3 项</span></div>
+        <div id="manager-tasks" class="stack empty-state">正在汇总各岗位任务</div>
+      </section>
+
+      <section id="growth-section" class="growth-card">
+        <div class="section-heading"><h3>今日增长机会</h3><span id="growth-count">0 项</span></div>
+        <div id="growth-tasks" class="stack empty-state">暂无稳定增长机会</div>
+      </section>
+
+      <section class="module-section" data-owner="货架运营">
+        <div class="section-heading"><h3>货架运营</h3><span id="shelf-status">待同步</span></div>
+        <div id="shelf-metrics" class="metric-strip"></div>
+        <div id="shelf-actions" class="stack empty-state">请打开商城运营概览同步</div>
+      </section>
+
+      <section class="module-section" data-owner="直播运营">
+        <div class="section-heading"><h3>直播与内容运营</h3><span id="live-status">待同步</span></div>
+        <div id="live-metrics" class="metric-strip"></div>
+        <div id="live-actions" class="stack empty-state">请打开店铺直播或千川直播大屏同步</div>
+      </section>
+
+      <section class="module-section" data-owner="投放运营">
+        <div class="section-heading"><h3>千川计划调整</h3><span id="plan-count">0 项</span></div>
+        <div id="plans" class="stack empty-state">请先同步千川计划和报表页面</div>
+      </section>
+
+      <section class="module-section" data-owner="商品运营">
+        <div class="section-heading"><h3>库存预警</h3><span id="inventory-count">0 项</span></div>
+        <div id="inventory" class="stack empty-state">请先同步商品或库存页面</div>
+      </section>
+
+      <details class="fold-card">
+        <summary>其他提醒 <span id="alert-count">0 项</span></summary>
+        <section>
+        <div id="alerts" class="stack empty-state">暂无诊断结果</div>
+        </section>
+      </details>
+
+      <details class="fold-card">
+        <summary>策略阈值与日报 <span>本机设置</span></summary>
+      <section class="settings-card inner-card">
+        <div class="section-heading"><h3>策略阈值与日报</h3><span>本机设置</span></div>
+        <div class="settings-grid">
+          <label>ROI 目标<input id="roi-target" type="number" min="0.1" max="20" step="0.1"></label>
+          <label>判断消耗门槛<input id="spend-threshold" type="number" min="0" step="10"></label>
+          <label>低库存阈值<input id="stock-threshold" type="number" min="0" step="1"></label>
+          <label>日报时间<input id="report-time" type="time"></label>
+        </div>
+        <label class="switch-row"><input id="report-enabled" type="checkbox"> 每日自动生成本地经营报告</label>
+        <div class="settings-actions">
+          <button id="save-settings" class="small-primary">保存设置</button>
+          <button id="generate-report" class="small-secondary">立即生成日报</button>
+        </div>
+        <p id="settings-status" class="settings-status"></p>
+      </section>
+      </details>
+
+      <details class="fold-card">
+        <summary>数据质量与覆盖 <span>只读快照</span></summary>
+      <section>
+        <div id="coverage" class="coverage"></div>
+      </section>
+      </details>
+
+      <section class="privacy-card">
+        <strong>本地优先，所有执行动作需人工确认</strong>
+        <p>扩展不读取 Cookie；数据仅发送至本机 127.0.0.1。当前只生成调整建议、预警和报告，不会自动修改预算、库存或计划状态。</p>
+      </section>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

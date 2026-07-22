@@ -1,0 +1,449 @@
+/** 店策 Agent - MV3 service worker */
+
+const BRIDGE_URL = "http://127.0.0.1:8765";
+const ALARM_NAME = "dian-agent-sync";
+const FULL_SCAN_ALARM = "dian-agent-full-scan";
+const DEFAULT_SETTINGS = {
+  autoSync: false,
+  intervalMinutes: 5,
+  autoFullScan: false,
+  fullScanIntervalHours: 6,
+  privacyMode: true,
+};
+
+const FULL_SCAN_PAGES = [
+  { id: "overview", label: "经营概览", source: "doudian", url: "https://fxg.jinritemai.com/ffa/mshop/homepage/index", waitMs: 5500 },
+  { id: "orders", label: "订单管理", source: "doudian", url: "https://fxg.jinritemai.com/ffa/morder/order/list", waitMs: 6000, harvestList: true },
+  { id: "products", label: "商品管理", source: "doudian", url: "https://fxg.jinritemai.com/ffa/g/list", waitMs: 6000, harvestList: true },
+  { id: "inventory", label: "库存管理", source: "doudian", url: "https://fxg.jinritemai.com/ffa/g/stock-manage/list", waitMs: 6000, harvestList: true },
+  { id: "refunds", label: "售后工作台", source: "doudian", url: "https://fxg.jinritemai.com/ffa/merchant-aftersale-workbench/aftersale/list", waitMs: 6000, harvestList: true },
+  { id: "reviews", label: "评价管理", source: "doudian", url: "https://fxg.jinritemai.com/ffa/maftersale/comment", waitMs: 6000, harvestList: true },
+  { id: "shelf", label: "商城运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/growth-common/growth-shelf", waitMs: 7000 },
+  { id: "live", label: "直播管理", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/shop-live", waitMs: 8000 },
+  { id: "short_video", label: "短视频运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/short-video", waitMs: 6500, harvestList: true },
+  { id: "image_text", label: "图文运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/image-text-operation", waitMs: 6500 },
+  { id: "search", label: "搜索运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/mcompass/search", waitMs: 6500, harvestList: true },
+  { id: "recommend_card", label: "推荐卡运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/recommend-card/home", waitMs: 6500, harvestList: true },
+  { id: "funds", label: "账户中心", source: "doudian", url: "https://fxg.jinritemai.com/ffa/fund-control/account-center", waitMs: 5500 },
+  { id: "qianchuan_campaigns", label: "千川商品投放", source: "doudian", url: "https://fxg.jinritemai.com/ffa/ad/promotion-v2", tabText: "商品投放", waitMs: 7500 },
+  { id: "qianchuan_live", label: "千川直播投放", source: "doudian", url: "https://fxg.jinritemai.com/ffa/ad/promotion-v2", tabText: "直播投放", waitMs: 7500 },
+  { id: "qianchuan_report", label: "千川投放数据", source: "doudian", url: "https://fxg.jinritemai.com/ffa/ad/promotion-v2", tabText: "投放数据", waitMs: 7500 },
+];
+
+const SOURCE_PATTERNS = {
+  doudian: ["https://fxg.jinritemai.com/*"],
+  qianchuan: ["https://qianchuan.jinritemai.com/*", "https://buyin.jinritemai.com/*"],
+};
+
+const SOURCE_URLS = {
+  doudian: "https://fxg.jinritemai.com/ffa/mshop/homepage/index",
+  qianchuan: "https://qianchuan.jinritemai.com/home",
+};
+
+// Serialize read-modify-write operations so concurrent tabs cannot overwrite
+// each other's catalog or status entries.
+let storageMutationQueue = Promise.resolve();
+let fullScanPromise = null;
+let fullScanCancelled = false;
+
+function mutateLocalStorage(keys, mutator) {
+  const operation = storageMutationQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const current = await chrome.storage.local.get(keys);
+      const updates = (await mutator(current)) || {};
+      if (Object.keys(updates).length) await chrome.storage.local.set(updates);
+      return updates;
+    });
+  storageMutationQueue = operation.catch(() => undefined);
+  return operation;
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const stored = await chrome.storage.local.get("settings");
+  await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS, ...(stored.settings || {}), autoSync: false, autoFullScan: false } });
+  await configureAlarm();
+  await updateStatus("system", "扩展已就绪");
+});
+
+chrome.runtime.onStartup.addListener(configureAlarm);
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === ALARM_NAME) syncAll("scheduled");
+  if (alarm.name === FULL_SCAN_ALARM) startFullScan("scheduled").catch(() => undefined);
+});
+
+async function getSettings() {
+  const stored = await chrome.storage.local.get("settings");
+  return { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
+}
+
+async function configureAlarm() {
+  const settings = await getSettings();
+  await chrome.alarms.clear(ALARM_NAME);
+  await chrome.alarms.clear(FULL_SCAN_ALARM);
+  if (settings.autoSync) {
+    chrome.alarms.create(ALARM_NAME, {
+      delayInMinutes: 1,
+      periodInMinutes: Math.max(1, Number(settings.intervalMinutes) || 5),
+    });
+  }
+  if (settings.autoFullScan) {
+    chrome.alarms.create(FULL_SCAN_ALARM, {
+      delayInMinutes: 10,
+      periodInMinutes: Math.max(60, Number(settings.fullScanIntervalHours) * 60 || 360),
+    });
+  }
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function setFullScanState(patch) {
+  const updates = await mutateLocalStorage(["fullScan"], ({ fullScan }) => ({ fullScan: { ...(fullScan || {}), ...patch } }));
+  if (updates.fullScan) {
+    await fetch(`${BRIDGE_URL}/scan-status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+      body: JSON.stringify(updates.fullScan),
+    }).catch(() => undefined);
+  }
+}
+
+function waitForTabReady(tabId, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      error ? reject(error) : resolve();
+    };
+    const listener = (updatedId, changeInfo) => {
+      if (updatedId === tabId && changeInfo.status === "complete") finish();
+    };
+    const timer = setTimeout(() => finish(new Error("页面加载超时")), timeoutMs);
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function navigateScanTab(tabId, url) {
+  const current = await chrome.tabs.get(tabId);
+  const ready = waitForTabReady(tabId, 45000);
+  if ((current.url || "").split("#")[0] === url.split("#")[0]) await chrome.tabs.reload(tabId);
+  else await chrome.tabs.update(tabId, { url, active: false });
+  try {
+    await ready;
+  } catch (error) {
+    const latest = await chrome.tabs.get(tabId);
+    const expected = new URL(url);
+    const actual = new URL(latest.url || "about:blank");
+    if (actual.hostname !== expected.hostname || actual.pathname !== expected.pathname) throw error;
+  }
+}
+
+async function activatePageTab(tabId, text) {
+  if (!text) return true;
+  const [{ result = false } = {}] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (wantedText) => {
+      const candidates = Array.from(document.querySelectorAll("[role='tab'], button, [class*='tab']"));
+      const target = candidates.find((element) => (element.innerText || "").trim() === wantedText && element.getClientRects().length > 0);
+      if (!target) return false;
+      target.click();
+      return true;
+    },
+    args: [text],
+  });
+  return result;
+}
+
+async function scanOnePage(tabId, page, reason) {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await navigateScanTab(tabId, page.url);
+      await sleep(page.waitMs);
+      if (page.tabText) {
+        const activated = await activatePageTab(tabId, page.tabText);
+        if (!activated) throw new Error(`未找到“${page.tabText}”页签`);
+        await sleep(3500);
+      }
+      const scanMode = page.harvestList ? "full-scan-list" : "full-scan-page";
+      const response = await collectFromTab(page.source, { id: tabId }, `${scanMode}-${reason}-${page.id}`);
+      if (!response?.ok) throw new Error(response?.error || "采集失败");
+      if (response.page_type === "unknown") throw new Error("页面类型未识别");
+      if (response.page_type !== page.id) throw new Error(`页面识别为 ${response.page_type}，预期为 ${page.id}`);
+      return { id: page.id, label: page.label, ok: true, page_type: response.page_type, quality: response.quality || null };
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await sleep(1200);
+    }
+  }
+  return { id: page.id, label: page.label, ok: false, error: lastError?.message || String(lastError) };
+}
+
+async function runFullScan(reason = "manual", pageIds = null) {
+  fullScanCancelled = false;
+  const startedAt = Date.now();
+  const results = [];
+  const targeted = Array.isArray(pageIds) && pageIds.length > 0;
+  const previousScan = (await chrome.storage.local.get("fullScan")).fullScan || {};
+  const scanPages = targeted ? FULL_SCAN_PAGES.filter((page) => pageIds.includes(page.id)) : FULL_SCAN_PAGES;
+  let scanTab;
+  await setFullScanState({ status: "running", reason, started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, results: [] });
+  try {
+    scanTab = await chrome.tabs.create({ url: "about:blank", active: false });
+    for (let index = 0; index < scanPages.length; index += 1) {
+      if (fullScanCancelled) break;
+      const page = scanPages[index];
+      await setFullScanState({ current: page.label, index: index + 1 });
+      const result = await scanOnePage(scanTab.id, page, reason);
+      results.push(result);
+      await setFullScanState({ results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
+    }
+    let finalResults = results;
+    if (targeted && !fullScanCancelled) {
+      const merged = new Map((previousScan.results || []).map((item) => [item.id, item]));
+      results.forEach((item) => merged.set(item.id, item));
+      finalResults = FULL_SCAN_PAGES.map((page) => merged.get(page.id)).filter(Boolean);
+    }
+    const incomplete = finalResults.length < FULL_SCAN_PAGES.length;
+    const status = fullScanCancelled ? "cancelled" : finalResults.some((item) => !item.ok) || incomplete ? "partial" : "completed";
+    await setFullScanState({ status, current: "", finished_at: Date.now(), results: finalResults, index: targeted ? finalResults.length : scanPages.length, total: targeted ? FULL_SCAN_PAGES.length : scanPages.length, success: finalResults.filter((item) => item.ok).length, failed: finalResults.filter((item) => !item.ok).length, low_quality: finalResults.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
+    await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
+    if (!fullScanCancelled) {
+      await fetch(`${BRIDGE_URL}/reports/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+        body: "{}",
+      }).catch(() => undefined);
+    }
+    return { status, results };
+  } catch (error) {
+    await setFullScanState({ status: "error", current: "", finished_at: Date.now(), error: error.message || String(error), results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length });
+    return { status: "error", error: error.message || String(error), results };
+  } finally {
+    if (scanTab?.id) await chrome.tabs.remove(scanTab.id).catch(() => undefined);
+  }
+}
+
+function startFullScan(reason = "manual", pageIds = null) {
+  if (!fullScanPromise) {
+    fullScanPromise = runFullScan(reason, pageIds).finally(() => { fullScanPromise = null; });
+  }
+  return fullScanPromise;
+}
+
+async function querySourceTabs(source) {
+  return chrome.tabs.query({ url: SOURCE_PATTERNS[source] });
+}
+
+async function collectFromTab(source, tab, reason) {
+  try {
+    return await chrome.tabs.sendMessage(tab.id, { type: "collect-now", reason });
+  } catch (firstError) {
+    const platformScript = source === "doudian" ? "content-doudian.js" : "content-qianchuan.js";
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["content-common.js", platformScript],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      return await chrome.tabs.sendMessage(tab.id, { type: "collect-now", reason: `${reason}-reinjected` });
+    } catch (secondError) {
+      throw new Error(`${firstError.message || firstError}; 重新注入后仍失败：${secondError.message || secondError}`);
+    }
+  }
+}
+
+async function syncSource(source, reason = "manual") {
+  const tabs = await querySourceTabs(source);
+  if (!tabs.length) {
+    await updateStatus(source, "未打开对应后台页面", "warning");
+    return { source, tabs: 0, collected: 0, errors: [] };
+  }
+
+  let collected = 0;
+  const errors = [];
+  for (const tab of tabs.slice(0, 8)) {
+    try {
+      const response = await collectFromTab(source, tab, reason);
+      if (response?.ok) collected += 1;
+      else errors.push(response?.error || `标签页 ${tab.id} 未返回数据`);
+    } catch (error) {
+      errors.push(error.message || String(error));
+    }
+  }
+
+  if (collected) {
+    await updateStatus(source, `已同步 ${collected} 个页面`, "ok");
+  } else {
+    await updateStatus(source, "页面存在，但采集脚本未就绪；请刷新页面", "error");
+  }
+  return { source, tabs: tabs.length, collected, errors };
+}
+
+async function syncAll(reason = "manual") {
+  const results = await Promise.all([
+    syncSource("doudian", reason),
+    syncSource("qianchuan", reason),
+  ]);
+  await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
+  return results;
+}
+
+async function storeAndPush(source, snapshot) {
+  if (!SOURCE_PATTERNS[source] || !snapshot || typeof snapshot !== "object") {
+    throw new Error("无效的数据快照");
+  }
+
+  const pageType = String(snapshot.page_type || "unknown").replace(/[^a-z0-9_-]/gi, "_");
+  const capturedAt = Number(snapshot.captured_at || snapshot.timestamp || Date.now());
+  let bridgeResult;
+
+  // Push first. A browser-cache quota error must never prevent the core sync.
+  try {
+    const response = await fetch(`${BRIDGE_URL}/push`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Dian-Agent": "2",
+      },
+      body: JSON.stringify({ source, data: snapshot }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    bridgeResult = { ok: true };
+  } catch (error) {
+    bridgeResult = { ok: false, error: error.message || String(error) };
+  }
+
+  // Keep only small metadata in chrome.storage.local. Full snapshots are
+  // partitioned and retained by the local bridge.
+  try {
+    await mutateLocalStorage(["catalog"], ({ catalog: savedCatalog }) => {
+      const catalog = structuredClone(savedCatalog || {});
+      catalog[source] = catalog[source] || {};
+      catalog[source][pageType] = {
+        captured_at: capturedAt,
+        title: snapshot.title || "",
+        url: snapshot.url || "",
+        quality: snapshot.quality || {},
+      };
+      return { catalog };
+    });
+  } catch (error) {
+    bridgeResult.cacheWarning = error.message || String(error);
+  }
+
+  await updateStatus(
+    "bridge",
+    bridgeResult.ok ? "本地 Agent 已连接" : "本地 Agent 未启动",
+    bridgeResult.ok ? "ok" : "error",
+  );
+  return bridgeResult;
+}
+
+async function updateStatus(key, message, level = "info") {
+  await mutateLocalStorage(["status"], ({ status: savedStatus }) => {
+    const status = structuredClone(savedStatus || {});
+    status[key] = { message, level, time: Date.now() };
+    return { status };
+  });
+}
+
+async function checkBridge() {
+  try {
+    const response = await fetch(`${BRIDGE_URL}/health`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    await updateStatus("bridge", "本地 Agent 已连接", "ok");
+    return { ok: true, data };
+  } catch (error) {
+    await updateStatus("bridge", "本地 Agent 未启动", "error");
+    return { ok: false, error: error.message || String(error) };
+  }
+}
+
+async function getDashboard() {
+  const [stored, doudianTabs, qianchuanTabs, bridge] = await Promise.all([
+    chrome.storage.local.get(["status", "catalog", "settings", "lastSyncAttempt", "fullScan"]),
+    querySourceTabs("doudian"),
+    querySourceTabs("qianchuan"),
+    checkBridge(),
+  ]);
+  return {
+    status: stored.status || {},
+    catalog: stored.catalog || {},
+    settings: { ...DEFAULT_SETTINGS, ...(stored.settings || {}) },
+    lastSyncAttempt: stored.lastSyncAttempt || null,
+    fullScan: stored.fullScan || { status: "idle", total: FULL_SCAN_PAGES.length, index: 0, success: 0, failed: 0 },
+    tabs: { doudian: doudianTabs.length, qianchuan: qianchuanTabs.length },
+    bridge,
+  };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  (async () => {
+    if (message.type === "page-data") {
+      sendResponse(await storeAndPush(message.source, message.data));
+      return;
+    }
+    if (message.type === "manual-sync" || message.type === "manual-poll") {
+      sendResponse({ ok: true, results: await syncAll("manual") });
+      return;
+    }
+    if (message.type === "start-full-scan") {
+      if (fullScanPromise) {
+        sendResponse({ ok: true, started: false, message: "巡检正在进行" });
+      } else {
+        startFullScan("manual", Array.isArray(message.page_ids) ? message.page_ids : null).catch((error) => setFullScanState({ status: "error", current: "", finished_at: Date.now(), error: error.message || String(error) }));
+        sendResponse({ ok: true, started: true });
+      }
+      return;
+    }
+    if (message.type === "retry-failed-scan") {
+      const stored = await chrome.storage.local.get("fullScan");
+      const failedIds = (stored.fullScan?.results || []).filter((item) => !item.ok).map((item) => item.id);
+      if (!failedIds.length) sendResponse({ ok: false, error: "没有需要重试的失败页面" });
+      else {
+        startFullScan("retry-failed", failedIds).catch(() => undefined);
+        sendResponse({ ok: true, started: true, total: failedIds.length });
+      }
+      return;
+    }
+    if (message.type === "cancel-full-scan") {
+      fullScanCancelled = true;
+      sendResponse({ ok: true });
+      return;
+    }
+    if (message.type === "get-dashboard" || message.type === "get-status") {
+      sendResponse({ ok: true, dashboard: await getDashboard() });
+      return;
+    }
+    if (message.type === "test-bridge") {
+      sendResponse(await checkBridge());
+      return;
+    }
+    if (message.type === "update-settings") {
+      const next = { ...(await getSettings()), ...(message.settings || {}) };
+      next.intervalMinutes = Math.max(1, Number(next.intervalMinutes) || 5);
+      next.fullScanIntervalHours = Math.max(1, Number(next.fullScanIntervalHours) || 6);
+      await chrome.storage.local.set({ settings: next });
+      await configureAlarm();
+      sendResponse({ ok: true, settings: next });
+      return;
+    }
+    if (message.type === "open-platform") {
+      const url = SOURCE_URLS[message.source];
+      if (!url) throw new Error("未知平台");
+      await chrome.tabs.create({ url });
+      sendResponse({ ok: true });
+      return;
+    }
+    sendResponse({ ok: false, error: "未知消息" });
+  })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+  return true;
+});

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>店策 Agent</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="brand-row">
+        <div class="brand-mark">策</div>
+        <div>
+          <h1>店策 Agent</h1>
+          <p>抖店 × 千川经营副驾</p>
+        </div>
+        <span class="read-only">只读</span>
+      </header>
+
+      <section id="overall" class="overall pending">
+        <span class="pulse"></span>
+        <div>
+          <strong id="overall-title">正在检查连接</strong>
+          <p id="overall-detail">数据只保存在本机</p>
+        </div>
+      </section>
+
+      <section class="source-grid" aria-label="数据源状态">
+        <article class="source-card">
+          <div class="source-head">
+            <div><span class="source-icon shop">店</span><strong>抖店后台</strong></div>
+            <span id="doudian-state" class="tag idle">检测中</span>
+          </div>
+          <p id="doudian-detail">等待识别页面</p>
+          <button class="text-button" data-open="doudian">打开抖店 →</button>
+        </article>
+        <article class="source-card">
+          <div class="source-head">
+            <div><span class="source-icon ads">投</span><strong>巨量千川</strong></div>
+            <span id="qianchuan-state" class="tag idle">检测中</span>
+          </div>
+          <p id="qianchuan-detail">等待识别页面</p>
+          <button class="text-button" data-open="qianchuan">打开千川 →</button>
+        </article>
+      </section>
+
+      <section class="settings-row">
+        <div>
+          <strong>隐私脱敏</strong>
+          <p>手机号、证件号与邮箱默认掩码</p>
+        </div>
+        <label class="switch" aria-label="隐私脱敏">
+          <input id="privacy-toggle" type="checkbox" checked>
+          <span></span>
+        </label>
+      </section>
+
+      <section class="scan-action">
+        <button id="full-scan-button">自动获取全店数据</button>
+        <p id="scan-detail">自动巡检核心经营页面，完成后生成诊断</p>
+      </section>
+
+      <section class="actions">
+        <button id="sync-button" class="primary">同步当前页面</button>
+        <button id="panel-button" class="secondary">打开经营副驾</button>
+      </section>
+
+      <footer>
+        <span id="last-sync">尚未同步</span>
+        <span>仅连接 127.0.0.1</span>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

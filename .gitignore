@@ -1,0 +1,21 @@
+# Local business data and generated reports
+bridge/data/
+bridge/bridge.log
+
+# Private extension signing material and generated packages
+*.pem
+*.crx
+dist/
+
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
