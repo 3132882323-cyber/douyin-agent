@@ -3,8 +3,8 @@ const LABELS = {
   doudian: "抖店", qianchuan: "千川", overview: "概览", orders: "订单",
   refunds: "售后", products: "商品", inventory: "库存", reviews: "评价",
   live: "直播", compass: "罗盘", funds: "资金", campaigns: "计划",
-  report: "报表", materials: "素材", account: "账户", shelf: "货架",
-  qianchuan_live: "直播投放", qianchuan_campaigns: "商品投放", unknown: "其他",
+  report: "报表", materials: "素材", video_library: "视频库", live_dashboard: "直播大屏", account: "账户", shelf: "货架",
+  qianchuan_live: "直播推广", qianchuan_campaigns: "商品推广", qianchuan_live_dashboard: "直播大屏", qianchuan_video_library: "视频库", unknown: "其他",
 };
 
 let latestBrief = "";
@@ -36,7 +36,7 @@ function renderFullScan(scan = {}) {
   const labels = { idle: "未运行", running: "巡检中", completed: "已完成", partial: "部分完成", cancelled: "已停止", interrupted: "已中断", error: "失败" };
   state.textContent = labels[scan.status] || "未运行";
   state.className = `scan-tag ${running || scan.status === "completed" ? "ok" : ["partial", "interrupted"].includes(scan.status) ? "warn" : scan.status === "error" ? "error" : "idle"}`;
-  const total = Number(scan.total || 16);
+  const total = Number(scan.total || 18);
   const index = Number(scan.index || 0);
   document.getElementById("scan-progress-bar").style.width = `${Math.min(100, total ? index / total * 100 : 0)}%`;
   document.getElementById("scan-detail").textContent = running ? `正在采集：${scan.current || "准备中"}（${index}/${total}）` : scan.finished_at ? `上次完成：成功 ${scan.success || 0}，失败 ${scan.failed || 0}` : "按清单自动打开页面并采集，不需要 API";
@@ -112,6 +112,30 @@ function renderInventory(items = []) {
   container.replaceChildren(...items.slice(0, 8).map((item) => recommendationCard(item, "inventory")));
 }
 
+function renderCreativeAnalysis(creative = {}) {
+  const summary = creative.summary || {};
+  document.getElementById("creative-status").textContent = creative.data_status === "ready" ? "数据已就绪" : "待同步";
+  document.getElementById("creative-count").textContent = `${summary.total_videos || 0} 条`;
+  renderMetricStrip("creative-metrics", {
+    视频数: summary.total_videos || 0,
+    有消耗: summary.spending_videos || 0,
+    未测试: summary.untested_videos || 0,
+    高风险: summary.risky_videos || 0,
+    高潜: summary.high_potential_videos || 0,
+  });
+  renderTasks("creative-actions", creative.recommendations || []);
+  const container = document.getElementById("creative-videos");
+  const videos = creative.videos || [];
+  if (!videos.length) return empty(container, "暂无视频数据，请同步巨量千川视频库");
+  container.className = "stack";
+  container.replaceChildren(...videos.slice(0, 8).map((item) => recommendationCard({
+    plan: item.name,
+    level: item.level,
+    suggestion: item.suggestion,
+    reason: `${item.status} · 消耗 ${item.evidence?.spend == null ? "--" : item.evidence.spend} · ROI ${item.evidence?.roi == null ? "--" : item.evidence.roi}`,
+  }, "plan")));
+}
+
 function taskCard(item) {
   const card = document.createElement("article");
   card.className = `task-card ${item.level || "info"}`;
@@ -176,7 +200,7 @@ function roleTasks(ops, opportunity = false) {
   return source.filter((item) => item.status !== "done" && (currentRole === "运营总管" || item.owner === currentRole) && (opportunity ? item.level === "opportunity" : item.level !== "opportunity"));
 }
 
-function renderOperations(ops, shelf, live, coverage = []) {
+function renderOperations(ops, shelf, live, creative, coverage = []) {
   currentOps = ops;
   const tasks = roleTasks(ops, false).slice(0, 3);
   const growth = roleTasks(ops, true).slice(0, 3);
@@ -192,13 +216,14 @@ function renderOperations(ops, shelf, live, coverage = []) {
   document.getElementById("observing-count").textContent = scoped.filter((item) => item.status === "observing").length;
   const fresh = coverage.filter((item) => item.fresh).length;
   document.getElementById("data-freshness").textContent = coverage.length ? `${fresh}/${coverage.length}` : "--";
-  document.querySelectorAll(".module-section").forEach((section) => { section.hidden = currentRole !== "运营总管" && section.dataset.owner !== currentRole; });
+  document.querySelectorAll(".module-section").forEach((section) => { section.hidden = currentRole !== "运营总管" && !String(section.dataset.owner || "").split(/\s+/).includes(currentRole); });
   document.getElementById("shelf-status").textContent = shelf.data_status === "ready" ? "数据已就绪" : "待同步";
   renderMetricStrip("shelf-metrics", { 曝光: shelf.funnel?.exposure, 点击: shelf.funnel?.clicks, 成交人数: shelf.funnel?.buyers, 点击率: shelf.funnel?.click_rate == null ? null : `${shelf.funnel.click_rate.toFixed(1)}%` });
   renderTasks("shelf-actions", shelf.recommendations || []);
   document.getElementById("live-status").textContent = live.data_status === "ready" ? "数据已就绪" : "待同步";
-  renderMetricStrip("live-metrics", { 场次: live.funnel?.sessions, 观看: live.funnel?.views, 商品点击: live.funnel?.product_clicks, 订单: live.funnel?.orders, 成交额: live.funnel?.gmv });
+  renderMetricStrip("live-metrics", { 进房: live.funnel?.views, 进房率: live.funnel?.enter_rate == null ? null : `${live.funnel.enter_rate.toFixed(1)}%`, 商品点击: live.funnel?.product_clicks, 订单: live.funnel?.orders, ROI: live.funnel?.roi });
   renderTasks("live-actions", live.recommendations || []);
+  renderCreativeAnalysis(creative || {});
 }
 
 function renderAlerts(alerts = []) {
@@ -263,7 +288,7 @@ async function loadDashboard() {
   document.getElementById("summary").textContent = insights.summary || "请查看下方建议。";
   renderPlans(actionCenter.plan_recommendations || []);
   renderInventory(actionCenter.inventory_alerts || []);
-  renderOperations(ops, actionCenter.shelf_analysis || {}, actionCenter.live_analysis || {}, insights.coverage || []);
+  renderOperations(ops, actionCenter.shelf_analysis || {}, actionCenter.live_analysis || {}, actionCenter.creative_analysis || {}, insights.coverage || []);
   renderAlerts(insights.alerts || []);
   renderCoverage(insights.coverage || []);
   renderSettings(settings);
@@ -273,6 +298,7 @@ async function loadDashboard() {
     insights.headline, insights.summary,
     ...(ops.today_top_actions || []).slice(0, 8).map((item, index) => `总管 ${index + 1}. [${item.owner}] ${item.title}：${item.action}`),
     ...(actionCenter.plan_recommendations || []).slice(0, 5).map((item, index) => `千川 ${index + 1}. ${item.plan}：${item.suggestion}`),
+    ...(actionCenter.creative_analysis?.recommendations || []).slice(0, 5).map((item, index) => `素材 ${index + 1}. ${item.title}：${item.action}`),
     ...(actionCenter.inventory_alerts || []).slice(0, 5).map((item, index) => `库存 ${index + 1}. ${item.product}：${item.suggestion}`),
   ].filter(Boolean).join("\n");
 }

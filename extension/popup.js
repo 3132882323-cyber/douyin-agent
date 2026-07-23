@@ -61,7 +61,7 @@ async function render() {
   const scan = dashboard.fullScan || {};
   const scanButton = document.getElementById("full-scan-button");
   scanButton.disabled = scan.status === "running";
-  scanButton.textContent = scan.status === "running" ? `正在巡检 ${scan.index || 0}/${scan.total || 16}` : "自动获取全店数据";
+  scanButton.textContent = scan.status === "running" ? `正在巡检 ${scan.index || 0}/${scan.total || 18}` : "自动获取全店数据";
   document.getElementById("scan-detail").textContent = scan.status === "running"
     ? `正在采集：${scan.current || "准备中"}`
     : scan.finished_at ? `上次成功 ${scan.success || 0} 页，失败 ${scan.failed || 0} 页` : "自动巡检核心经营页面，完成后生成诊断";

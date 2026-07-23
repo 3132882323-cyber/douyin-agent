@@ -620,6 +620,111 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
     return list(unique.values())[:20]
 
 
+def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Analyze Qianchuan video-library rows for live-stream acquisition work."""
+    settings = settings or load_agent_settings()
+    roi_target = float(settings["roi_target"])
+    min_spend = float(settings["min_spend_for_action"])
+    videos: list[dict[str, Any]] = []
+    # Include legacy `campaigns` because v2.5.x misclassified the real video
+    # library route as a campaign-management page.
+    records = _table_records("qianchuan", {"video_library", "materials", "campaigns"})
+    for entry in records:
+        record = entry["record"]
+        _, raw_name = _pick(record, ("视频", "素材名称", "创意名称", "视频名称"))
+        _, assessment = _pick(record, ("素材评估", "素材状态", "评估"))
+        if raw_name is None or not any(keyword in "|".join(record) for keyword in ("视频", "素材评估", "时长", "创作者声明")):
+            continue
+        name = _clean_entity_name(raw_name, f"第 {entry['row_index'] + 1} 条视频")
+        spend = _evidence_value(record, ("消耗", "花费"))
+        roi = _evidence_value(record, ("支付roi", "成交roi", "roi"))
+        orders = _evidence_value(record, ("成交订单", "支付订单", "转化数"))
+        impressions = _evidence_value(record, ("展示", "曝光"))
+        clicks = _evidence_value(record, ("点击数", "点击量"))
+        ctr = _evidence_value(record, ("点击率", "ctr"))
+        _, tags = _pick(record, ("标签",))
+        _, source = _pick(record, ("来源",))
+        _, duration = _pick(record, ("时长",))
+        assessment_text = str(assessment or "")
+        evidence = {
+            "spend": spend,
+            "roi": roi,
+            "orders": orders,
+            "impressions": impressions,
+            "clicks": clicks,
+            "ctr": ctr,
+            "assessment": assessment_text[:80],
+            "tags": str(tags or "")[:80],
+            "source": str(source or "")[:80],
+            "duration": str(duration or "")[:40],
+        }
+        if spend is not None and spend >= min_spend and (orders == 0 or roi == 0):
+            level, status = "high", "高消耗低转化"
+            suggestion = "暂停继续复制该视频，先复盘前 3 秒、直播利益点和进房后承接；修改后用小预算重新测试。"
+        elif roi is not None and roi >= roi_target and (orders or 0) >= 3:
+            level, status = "opportunity", "可复制放量"
+            suggestion = "保留原素材继续投放，并拆出同钩子、不同卖点或不同主播口播的变体，小步扩量验证。"
+        elif any(keyword in assessment_text for keyword in ("优质", "高潜", "跑量")):
+            level, status = "opportunity", "高潜素材"
+            suggestion = "优先进入下一轮直播引流测试，补齐消耗、进房和成交数据后再决定放量。"
+        elif spend == 0:
+            level, status = "warning", "尚未测试"
+            suggestion = "放入小预算素材测试组，统一人群、出价和时段后比较点击、进房与成交。"
+        else:
+            level, status = "info", "观察中"
+            suggestion = "继续观察消耗、点击、进房和成交；数据不足时不要仅凭播放量判断素材。"
+        videos.append(
+            {
+                "id": f"creative-{entry['table_index']}-{entry['row_index']}",
+                "name": name,
+                "level": level,
+                "status": status,
+                "suggestion": suggestion,
+                "evidence": evidence,
+                "confidence": "high" if entry["quality_score"] >= 70 and spend is not None else "medium",
+                "guardrail": "只生成素材建议，不上传、删除或修改千川视频。",
+            }
+        )
+
+    risky = [item for item in videos if item["level"] == "high"]
+    opportunities = [item for item in videos if item["level"] == "opportunity"]
+    untested = [item for item in videos if item["status"] == "尚未测试"]
+    spending = [item for item in videos if (item["evidence"].get("spend") or 0) > 0]
+    measured = [item for item in videos if item["evidence"].get("roi") is not None or item["evidence"].get("ctr") is not None]
+    recommendations: list[dict[str, Any]] = []
+    if not videos:
+        recommendations.append({"level": "info", "owner": "投放运营", "title": "同步千川视频库", "action": "登录巨量千川，打开素材工具中的视频库后点击同步或重新巡查。", "acceptance": "视频库出现素材数量、消耗和素材评估。", "evidence": "当前没有可识别的视频库表格。"})
+    else:
+        if risky:
+            recommendations.append({"level": "high", "owner": "投放运营", "title": f"先处理 {len(risky)} 条高消耗低转化视频", "action": "停止继续复制低效素材，逐条复盘前 3 秒钩子、核心卖点、直播利益点和进房承接。", "acceptance": "低效素材不再新增无效消耗，改版素材完成小预算复测。", "evidence": f"视频库识别到 {len(risky)} 条达到消耗门槛但无成交或 ROI 为 0 的素材。"})
+        if len(videos) < 3:
+            recommendations.append({"level": "warning", "owner": "直播运营", "title": "直播引流素材储备不足", "action": "至少补齐开场钩子、商品卖点、直播利益点三类视频，再用相同投放条件横向测试。", "acceptance": "三类素材均有可比较的点击、进房和成交数据。", "evidence": f"当前视频库仅识别到 {len(videos)} 条素材。"})
+        if untested and len(untested) >= max(2, len(videos) // 2):
+            recommendations.append({"level": "warning", "owner": "投放运营", "title": "建立素材小预算测试矩阵", "action": "把未测试素材按钩子、卖点和场景分组，统一人群、出价、时段与预算，避免不同变量混测。", "acceptance": "每条候选素材都取得首轮消耗、点击和进房数据。", "evidence": f"{len(untested)}/{len(videos)} 条素材尚未获得消耗。"})
+        if opportunities:
+            recommendations.append({"level": "opportunity", "owner": "直播运营", "title": f"复用 {len(opportunities)} 条高潜素材结构", "action": "保留有效钩子，分别替换卖点、主播口播或直播利益点，形成可持续素材变体。", "acceptance": "变体素材达到原素材点击或进房效率，并至少有一条形成成交。", "evidence": f"视频库识别到 {len(opportunities)} 条高潜或达到 ROI 目标的素材。"})
+        if len(measured) < len(videos):
+            recommendations.append({"level": "info", "owner": "投放运营", "title": "补齐视频到直播成交链路", "action": "在千川报表中补充展示、点击、进房、商品点击、成交和 ROI，避免只按消耗或素材评估做判断。", "acceptance": "主要在投视频都能关联到点击、进房和成交指标。", "evidence": f"仅 {len(measured)}/{len(videos)} 条视频包含 ROI 或点击率字段。"})
+
+    priority = {"high": 0, "warning": 1, "opportunity": 2, "info": 3}
+    videos.sort(key=lambda item: (priority.get(item["level"], 9), -(item["evidence"].get("spend") or 0)))
+    return {
+        "generated_at": _now_label(),
+        "data_status": "ready" if videos else "missing",
+        "summary": {
+            "total_videos": len(videos),
+            "spending_videos": len(spending),
+            "untested_videos": len(untested),
+            "risky_videos": len(risky),
+            "high_potential_videos": len(opportunities),
+            "total_spend": round(sum(item["evidence"].get("spend") or 0 for item in videos), 2),
+        },
+        "videos": videos[:30],
+        "recommendations": recommendations,
+        "mode": "read_only",
+    }
+
+
 def build_inventory_alerts(settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     settings = settings or load_agent_settings()
     low = int(settings["low_inventory_threshold"])
@@ -700,18 +805,28 @@ def build_shelf_analysis() -> dict[str, Any]:
 
 def build_live_analysis() -> dict[str, Any]:
     metrics, signals, snapshot = _safe_snapshot_metrics("doudian", {"live", "qianchuan_live"})
-    q_metrics, q_signals, q_snapshot = _safe_snapshot_metrics("qianchuan", {"qianchuan_live"})
+    q_metrics, q_signals, q_snapshot = _safe_snapshot_metrics("qianchuan", {"qianchuan_live", "live_dashboard"})
     metrics.update({key: value for key, value in q_metrics.items() if key not in metrics})
     signals.extend(signal for signal in q_signals if signal not in signals)
+    live_records = _table_records("qianchuan", {"qianchuan_live", "live_dashboard"})
+    record = live_records[0]["record"] if live_records else {}
     sessions = _parse_number(metrics.get("直播场次"))
-    views = _parse_number(metrics.get("直播间观看人数") or metrics.get("观看次数"))
-    product_clicks = _parse_number(metrics.get("商品点击人数"))
-    orders = _parse_number(metrics.get("成交订单数"))
-    gmv = _parse_number(metrics.get("成交金额") or metrics.get("用户支付金额"))
-    spend = _parse_number(metrics.get("投放消耗（店铺被投）"))
+    impressions = _parse_number(metrics.get("展示次数")) or _evidence_value(record, ("展示", "曝光"))
+    views = _parse_number(metrics.get("进入直播间人数") or metrics.get("直播间观看人数") or metrics.get("观看次数")) or _evidence_value(record, ("进入直播间", "观看人数"))
+    product_clicks = _parse_number(metrics.get("直播间商品点击人数") or metrics.get("商品点击人数")) or _evidence_value(record, ("商品点击人数", "商品点击"))
+    orders = _parse_number(metrics.get("整体成交订单数") or metrics.get("直播间成交订单数") or metrics.get("成交订单数")) or _evidence_value(record, ("整体成交订单", "净成交订单", "成交订单"))
+    gmv = _parse_number(metrics.get("整体成交金额(元)") or metrics.get("直播间成交金额") or metrics.get("成交金额") or metrics.get("用户支付金额")) or _evidence_value(record, ("整体成交金额", "净成交金额", "成交金额"))
+    spend = _parse_number(metrics.get("整体消耗(元)") or metrics.get("视频消耗") or metrics.get("投放消耗（店铺被投）")) or _evidence_value(record, ("整体消耗", "消耗", "花费"))
+    roi = _parse_number(metrics.get("整体支付ROI") or metrics.get("净成交ROI")) or _evidence_value(record, ("整体支付roi", "净成交roi", "roi"))
+    refund_rate = _parse_number(metrics.get("1小时内退款率")) or _evidence_value(record, ("退款率",))
+    enter_rate = views / impressions * 100 if impressions and views is not None else None
+    product_click_rate = product_clicks / views * 100 if views and product_clicks is not None else None
+    conversion_rate = orders / product_clicks * 100 if product_clicks and orders is not None else None
     actions: list[dict[str, Any]] = []
     if sessions == 0 or any("当前待直播计划 0" in signal for signal in signals):
         actions.append({"level": "warning", "owner": "直播运营", "title": "先排一场基准直播", "action": "建立开播计划，确定主播、货盘、脚本和至少一个主推品；先跑出完整漏斗再谈 ROI 优化。", "acceptance": "直播场次大于 0，并取得观看、商品点击和成交三段数据。", "evidence": f"直播场次 {sessions or 0:g}，当前未形成可分析的直播样本。"})
+    elif spend and impressions and not views:
+        actions.append({"level": "high", "owner": "投放运营", "title": "视频有曝光但没有进房", "action": "优先更换前 3 秒钩子、封面文案和直播利益点，不要先提高出价。", "acceptance": "进房人数大于 0，进房率连续两个测试周期改善。", "evidence": f"展示 {impressions:g}，进房 {views or 0:g}，已消耗 {spend:g}。"})
     elif views and not product_clicks:
         actions.append({"level": "warning", "owner": "直播运营", "title": "有人看但不点商品", "action": "优化开场钩子、商品讲解顺序和购物车引导。", "acceptance": "商品点击率连续两个场次提升。", "evidence": f"观看 {views:g}，商品点击 {product_clicks or 0:g}。"})
     elif product_clicks and not orders:
@@ -720,13 +835,16 @@ def build_live_analysis() -> dict[str, Any]:
         actions.insert(0, {"level": "high", "owner": "投放运营", "title": "直播投放先止损", "action": "降低或暂停新增消耗，核查直播间承接后再恢复。", "acceptance": "恢复投放前取得自然流量成交或明确修复项。", "evidence": f"直播投放消耗 {spend:g}，成交订单 {orders or 0:g}。"})
     if not snapshot and not q_snapshot:
         actions.append({"level": "info", "owner": "直播运营", "title": "缺少直播大屏数据", "action": "打开店铺直播或千川直播大屏并同步。", "acceptance": "出现直播场次与观看转化指标。", "evidence": "尚无直播快照。"})
-    return {"generated_at": _now_label(), "data_status": "ready" if snapshot or q_snapshot else "missing", "snapshot": snapshot or q_snapshot, "metrics": metrics, "funnel": {"sessions": sessions, "views": views, "product_clicks": product_clicks, "orders": orders, "gmv": gmv, "spend": spend}, "signals": signals, "recommendations": actions, "mode": "read_only"}
+    if refund_rate is not None and refund_rate >= 20:
+        actions.append({"level": "warning", "owner": "直播运营", "title": "成交后退款偏高", "action": "核对主播承诺、商品预期、尺码说明和售后原因，避免素材与直播间过度承诺。", "acceptance": "退款率回落并且净成交 ROI 改善。", "evidence": f"当前退款率 {refund_rate:g}%。"})
+    return {"generated_at": _now_label(), "data_status": "ready" if snapshot or q_snapshot else "missing", "snapshot": snapshot or q_snapshot, "metrics": metrics, "funnel": {"sessions": sessions, "impressions": impressions, "views": views, "enter_rate": enter_rate, "product_clicks": product_clicks, "product_click_rate": product_click_rate, "orders": orders, "conversion_rate": conversion_rate, "gmv": gmv, "spend": spend, "roi": roi, "refund_rate": refund_rate}, "signals": signals, "recommendations": actions, "mode": "read_only"}
 
 
 def build_ops_manager() -> dict[str, Any]:
     shelf, live = build_shelf_analysis(), build_live_analysis()
     plans, inventory = build_plan_recommendations(), build_inventory_alerts()
-    tasks = [*shelf["recommendations"], *live["recommendations"]]
+    creative = build_qianchuan_creative_analysis()
+    tasks = [*shelf["recommendations"], *live["recommendations"], *creative["recommendations"]]
     for item in plans[:5]:
         tasks.append({"level": item["level"], "owner": "投放运营", "title": item["plan"], "action": item["suggestion"], "acceptance": "按一个完整转化窗口复盘 ROI、消耗与成交。", "evidence": item["reason"]})
     for item in inventory[:3]:
@@ -758,7 +876,7 @@ def build_ops_manager() -> dict[str, Any]:
         "all_tasks": tasks,
         "progress": {**progress, "total": len(tasks), "completed_rate": round(progress["done"] / len(tasks) * 100) if tasks else 0},
         "roles": ["运营总管", "货架运营", "直播运营", "投放运营", "商品运营"],
-        "modules": {"shelf": {"status": shelf["data_status"], "action_count": len(shelf["recommendations"])}, "live": {"status": live["data_status"], "action_count": len(live["recommendations"])}, "qianchuan": {"action_count": len(plans)}, "inventory": {"alert_count": len(inventory)}},
+        "modules": {"shelf": {"status": shelf["data_status"], "action_count": len(shelf["recommendations"])}, "live": {"status": live["data_status"], "action_count": len(live["recommendations"])}, "qianchuan": {"action_count": len(plans)}, "creative": {"status": creative["data_status"], "action_count": len(creative["recommendations"])}, "inventory": {"alert_count": len(inventory)}},
         "mode": "read_only",
     }
 
@@ -810,7 +928,7 @@ def save_scan_status(value: dict[str, Any]) -> dict[str, Any]:
 def load_scan_status() -> dict[str, Any]:
     path = _scan_status_path()
     if not path.exists():
-        return {"status": "idle", "index": 0, "total": 16, "success": 0, "failed": 0, "results": []}
+        return {"status": "idle", "index": 0, "total": 18, "success": 0, "failed": 0, "results": []}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {"status": "idle"}
@@ -822,6 +940,7 @@ def build_action_center() -> dict[str, Any]:
     settings = load_agent_settings()
     plans = build_plan_recommendations(settings)
     inventory = build_inventory_alerts(settings)
+    creative = build_qianchuan_creative_analysis(settings)
     return {
         "generated_at": _now_label(),
         "settings": settings,
@@ -829,11 +948,13 @@ def build_action_center() -> dict[str, Any]:
         "inventory_alerts": inventory,
         "shelf_analysis": build_shelf_analysis(),
         "live_analysis": build_live_analysis(),
+        "creative_analysis": creative,
         "summary": {
             "plan_actions": len(plans),
             "high_risk_plans": sum(1 for item in plans if item["level"] == "high"),
             "inventory_alerts": len(inventory),
             "critical_inventory": sum(1 for item in inventory if item["level"] == "high"),
+            "creative_actions": len(creative["recommendations"]),
         },
         "mode": "read_only",
     }
@@ -904,6 +1025,12 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
             lines.extend([f"{index}. **{item['plan']}**：{item['suggestion']}", f"   - 依据：{item['reason']}"])
     else:
         lines.append("- 暂无可执行建议；请同步千川计划列表和报表页面。")
+    lines.extend(["", "## 千川视频库与直播引流素材", ""])
+    creative = action_center["creative_analysis"]
+    summary = creative["summary"]
+    lines.append(f"- 视频 {summary['total_videos']} 条；在投/有消耗 {summary['spending_videos']} 条；未测试 {summary['untested_videos']} 条；高风险 {summary['risky_videos']} 条；高潜 {summary['high_potential_videos']} 条。")
+    for item in creative["recommendations"][:8]:
+        lines.append(f"- **{item['title']}**：{item['action']}（{item['evidence']}）")
     lines.extend(["", "## 库存预警", ""])
     inventory = action_center["inventory_alerts"]
     if inventory:
@@ -982,7 +1109,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.5.3"
+    server_version = "DianAgent/2.6.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -1020,7 +1147,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.5.3",
+                    "version": "2.6.0",
                     "mode": "read_only",
                     "snapshot_count": len(catalog),
                     "sources": {
@@ -1047,6 +1174,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/live-analysis":
             self._json(build_live_analysis())
+            return
+        if path == "/qianchuan-creative-analysis":
+            self._json(build_qianchuan_creative_analysis())
             return
         if path == "/ops-manager":
             self._json(build_ops_manager())

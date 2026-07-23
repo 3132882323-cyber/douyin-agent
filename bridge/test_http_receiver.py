@@ -123,6 +123,33 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertAlmostEqual(product_a["evidence"]["days_of_cover"], 1.4)
         self.assertEqual(product_b["title"], "已缺货")
 
+    def test_qianchuan_video_library_builds_live_creative_actions(self) -> None:
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "video_library",
+                "quality": {"score": 90, "metric_count": 0, "row_count": 3},
+                "tables": [
+                    {
+                        "headers": ["视频", "素材评估", "消耗(元)", "整体支付ROI", "成交订单数", "标签", "时长"],
+                        "rows": [
+                            ["开场引流 A", "优质", "500", "2.20", "6", "直播引流", "00:18"],
+                            ["低效素材 B", "", "300", "0", "0", "直播引流", "00:24"],
+                            ["待测素材 C", "", "0", "-", "0", "商品卖点", "00:15"],
+                        ],
+                    }
+                ],
+            },
+        )
+        analysis = http_receiver.build_qianchuan_creative_analysis()
+        self.assertEqual(analysis["summary"]["total_videos"], 3)
+        self.assertEqual(analysis["summary"]["risky_videos"], 1)
+        self.assertEqual(analysis["summary"]["untested_videos"], 1)
+        self.assertEqual(analysis["summary"]["high_potential_videos"], 1)
+        self.assertEqual(analysis["videos"][0]["name"], "低效素材 B")
+        self.assertTrue(any("高消耗低转化" in item["title"] for item in analysis["recommendations"]))
+
     def test_settings_and_daily_report_are_local_and_configurable(self) -> None:
         settings = http_receiver.save_agent_settings(
             {"roi_target": 2.0, "low_inventory_threshold": 20, "daily_report_time": "08:30"}

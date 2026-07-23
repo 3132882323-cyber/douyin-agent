@@ -11,12 +11,18 @@
   function detectPageType() {
     const path = location.pathname.toLowerCase();
     const pageText = document.body?.innerText || "";
-    if (/设置直播规划|直播大屏/.test(pageText)) return "qianchuan_live";
+    const activeTab = Array.from(document.querySelectorAll("[role='tab'][aria-selected='true'], [class*='tab'][class*='active']"))
+      .map((element) => (element.innerText || "").trim()).join(" ");
+    if (path.includes("video-library") || /视频库/.test(document.title)) return "video_library";
+    if (path.includes("material") || path.includes("creative")) return "materials";
+    if (path.includes("board-next") || /直播大屏/.test(document.title)) return "live_dashboard";
+    if (/商品/.test(activeTab) && /推广/.test(activeTab)) return "campaigns";
+    if (/直播/.test(activeTab) && /推广/.test(activeTab)) return "qianchuan_live";
+    if (/设置直播规划/.test(pageText)) return "qianchuan_live";
     if (path.includes("live") || path.includes("screen")) return "qianchuan_live";
     if (path === "/home" || path.endsWith("/home")) return "overview";
     if (path.includes("uni-prom") || path.includes("promotion") || path.includes("manage")) return "campaigns";
     if (path.includes("report") || path.includes("data")) return "report";
-    if (path.includes("material") || path.includes("creative")) return "materials";
     if (path.includes("account") || path.includes("fund")) return "account";
     if (location.hostname.includes("buyin")) return "affiliate";
     return "unknown";

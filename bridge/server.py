@@ -30,6 +30,7 @@ from http_receiver import (
     build_live_analysis,
     build_ops_manager,
     build_plan_recommendations,
+    build_qianchuan_creative_analysis,
     build_shelf_analysis,
     build_trends,
     generate_daily_report,
@@ -97,6 +98,11 @@ TOOLS = [
     Tool(
         name="get_qianchuan_adjustments",
         description="按计划明细生成千川预算、止损、素材优化和谨慎放量建议；只返回建议，不执行投放变更",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_qianchuan_creative_analysis",
+        description="分析巨量千川视频库素材的消耗、ROI、成交、素材评估和测试覆盖，输出直播引流素材分层与优化建议",
         inputSchema={"type": "object", "properties": {}, "required": []},
     ),
     Tool(
@@ -214,6 +220,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     if name == "get_qianchuan_adjustments":
         return _text({"recommendations": build_plan_recommendations(), "mode": "read_only"})
+
+    if name == "get_qianchuan_creative_analysis":
+        return _text(build_qianchuan_creative_analysis())
 
     if name == "get_inventory_alerts":
         return _text({"alerts": build_inventory_alerts(), "mode": "read_only"})

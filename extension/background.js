@@ -25,9 +25,11 @@ const FULL_SCAN_PAGES = [
   { id: "search", label: "搜索运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/mcompass/search", waitMs: 6500, harvestList: true },
   { id: "recommend_card", label: "推荐卡运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/recommend-card/home", waitMs: 6500, harvestList: true },
   { id: "funds", label: "账户中心", source: "doudian", url: "https://fxg.jinritemai.com/ffa/fund-control/account-center", waitMs: 5500 },
-  { id: "qianchuan_campaigns", label: "千川商品投放", source: "doudian", url: "https://fxg.jinritemai.com/ffa/ad/promotion-v2", tabText: "商品投放", waitMs: 7500 },
-  { id: "qianchuan_live", label: "千川直播投放", source: "doudian", url: "https://fxg.jinritemai.com/ffa/ad/promotion-v2", tabText: "直播投放", waitMs: 7500 },
-  { id: "qianchuan_report", label: "千川投放数据", source: "doudian", url: "https://fxg.jinritemai.com/ffa/ad/promotion-v2", tabText: "投放数据", waitMs: 7500 },
+  { id: "qianchuan_overview", expectedPageType: "overview", label: "千川经营首页", source: "qianchuan", url: "https://qianchuan.jinritemai.com/home", waitMs: 4500 },
+  { id: "qianchuan_campaigns", expectedPageType: "campaigns", label: "千川商品推广", source: "qianchuan", url: "https://qianchuan.jinritemai.com/uni-prom", tabTexts: ["商品全域推广", "商品推广"], waitMs: 5500, harvestList: true, collectTimeoutMs: 24000 },
+  { id: "qianchuan_live", label: "千川直播推广", source: "qianchuan", url: "https://qianchuan.jinritemai.com/uni-prom", tabTexts: ["直播全域推广", "直播推广", "直播间推广"], waitMs: 5500, harvestList: true, collectTimeoutMs: 24000 },
+  { id: "qianchuan_live_dashboard", expectedPageType: "live_dashboard", label: "千川直播大屏", source: "qianchuan", url: "https://qianchuan.jinritemai.com/board-next", waitMs: 5500 },
+  { id: "qianchuan_video_library", expectedPageType: "video_library", label: "千川视频库", source: "qianchuan", url: "https://qianchuan.jinritemai.com/tools/creative-management/video-library", waitMs: 5000, harvestList: true, collectTimeoutMs: 24000 },
 ];
 
 const SOURCE_PATTERNS = {
@@ -152,18 +154,22 @@ async function navigateScanTab(tabId, url) {
   }
 }
 
-async function activatePageTab(tabId, text) {
-  if (!text) return true;
+async function activatePageTab(tabId, texts) {
+  const wanted = (Array.isArray(texts) ? texts : [texts]).filter(Boolean);
+  if (!wanted.length) return true;
   const [{ result = false } = {}] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (wantedText) => {
+    func: (wantedTexts) => {
       const candidates = Array.from(document.querySelectorAll("[role='tab'], button, [class*='tab']"));
-      const target = candidates.find((element) => (element.innerText || "").trim() === wantedText && element.getClientRects().length > 0);
+      const target = candidates.find((element) => {
+        const label = (element.innerText || "").trim();
+        return element.getClientRects().length > 0 && wantedTexts.some((text) => label === text || (label.includes(text) && label.length <= text.length + 8));
+      });
       if (!target) return false;
       target.click();
       return true;
     },
-    args: [text],
+    args: [wanted],
   });
   return result;
 }
@@ -174,9 +180,10 @@ async function scanOnePage(tabId, page, reason) {
     try {
       await navigateScanTab(tabId, page.url);
       await sleep(page.waitMs);
-      if (page.tabText) {
-        const activated = await activatePageTab(tabId, page.tabText);
-        if (!activated) throw new Error(`未找到“${page.tabText}”页签`);
+      if (page.tabText || page.tabTexts) {
+        const wantedTabs = page.tabTexts || [page.tabText];
+        const activated = await activatePageTab(tabId, wantedTabs);
+        if (!activated) throw new Error(`未找到“${wantedTabs.join(" / ")}”页签`);
         await sleep(3500);
       }
       const scanMode = page.harvestList ? "full-scan-list" : "full-scan-page";
@@ -188,7 +195,8 @@ async function scanOnePage(tabId, page, reason) {
       );
       if (!response?.ok) throw new Error(response?.error || "采集失败");
       if (response.page_type === "unknown") throw new Error("页面类型未识别");
-      if (response.page_type !== page.id) throw new Error(`页面识别为 ${response.page_type}，预期为 ${page.id}`);
+      const expectedPageType = page.expectedPageType || page.id;
+      if (response.page_type !== expectedPageType) throw new Error(`页面识别为 ${response.page_type}，预期为 ${expectedPageType}`);
       return { id: page.id, label: page.label, ok: true, page_type: response.page_type, quality: response.quality || null };
     } catch (error) {
       lastError = error;

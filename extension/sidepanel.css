@@ -98,6 +98,10 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .metric-strip > div { min-width: 0; padding: 9px 5px; border-radius: 10px; background: #eef4ff; text-align: center; }
 .metric-strip strong { display: block; overflow: hidden; color: #1849a9; font-size: 12px; text-overflow: ellipsis; }
 .metric-strip small { display: block; margin-top: 3px; color: #667085; font-size: 8px; }
+.inner-fold { margin-top: 10px; border-top: 1px solid #f0f1f3; }
+.inner-fold > summary { display: flex; justify-content: space-between; padding: 10px 2px 7px; color: #475467; cursor: pointer; font-size: 9px; font-weight: 700; }
+.inner-fold > summary span { color: var(--muted); font-weight: 400; }
+.inner-fold > .stack { margin-top: 5px; }
 .empty-state { padding: 20px; border: 1px dashed #d0d5dd; border-radius: 12px; color: #98a2b3; text-align: center; font-size: 11px; background: white; }
 .alert-card { display: grid; grid-template-columns: 28px 1fr; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 12px; background: white; }
 .alert-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: #fffaeb; color: var(--amber); font-weight: 800; }
