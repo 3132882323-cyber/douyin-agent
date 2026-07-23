@@ -99,7 +99,12 @@ class SnapshotStoreTests(unittest.TestCase):
         plan_b = next(item for item in recommendations if item["plan"] == "计划 B")
         self.assertEqual(plan_a["action_type"], "reduce_budget")
         self.assertEqual(plan_a["level"], "high")
+        self.assertEqual(plan_a["diagnosis"], "ROI 明显低于目标")
+        self.assertIn("观察", plan_a["observation_window"])
+        self.assertIn("ROI", plan_a["acceptance"])
+        self.assertRegex(plan_a["task_id"], r"^[a-f0-9]{16}$")
         self.assertEqual(plan_b["action_type"], "scale_cautiously")
+        self.assertIn("10%–15%", plan_b["adjustment_range"])
 
     def test_inventory_alert_uses_days_of_cover(self) -> None:
         http_receiver.save_data(

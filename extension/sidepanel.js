@@ -103,7 +103,64 @@ function renderPlans(items = []) {
   document.getElementById("plan-count").textContent = `${items.length} 项`;
   if (!items.length) return empty(container, "暂无计划级建议，请同步千川计划和报表页面");
   container.className = "stack";
-  container.replaceChildren(...items.slice(0, 8).map((item) => recommendationCard(item, "plan")));
+  container.replaceChildren(...items.slice(0, 8).map(planWorkbenchCard));
+}
+
+function planWorkbenchCard(item) {
+  const card = document.createElement("article");
+  card.className = `plan-workbench-card ${item.level || "info"}`;
+  const top = document.createElement("div");
+  top.className = "recommendation-top";
+  const title = document.createElement("strong"); title.textContent = item.plan || "千川计划";
+  const tag = document.createElement("span");
+  tag.textContent = item.level === "high" ? "立即处理" : item.level === "opportunity" ? "具备放量条件" : "今日处理";
+  top.append(title, tag);
+  const diagnosis = document.createElement("h4"); diagnosis.textContent = item.diagnosis || "计划需要复核";
+  const steps = document.createElement("div"); steps.className = "plan-steps";
+  [
+    ["发现了什么", item.found || item.reason],
+    ["为什么判断", item.judgment],
+    ["建议动作", item.action || item.suggestion],
+    ["建议调整范围", item.adjustment_range],
+    ["观察多久", item.observation_window],
+    ["用什么指标验收", item.acceptance],
+  ].forEach(([label, value]) => {
+    const row = document.createElement("div");
+    const key = document.createElement("b"); key.textContent = label;
+    const text = document.createElement("p"); text.textContent = value || "--";
+    row.append(key, text); steps.append(row);
+  });
+  const guardrail = document.createElement("small");
+  guardrail.className = "plan-guardrail";
+  guardrail.textContent = item.guardrail || "所有预算、出价和启停操作均需投手人工确认。";
+  const actions = document.createElement("div"); actions.className = "plan-task-actions";
+  const state = document.createElement("span");
+  const labels = { todo: "待处理", doing: "进行中", observing: "待观察", done: "已完成" };
+  state.textContent = item.task_updated_at ? `已加入 · ${labels[item.task_status] || "待处理"}` : "尚未加入今日任务";
+  const button = document.createElement("button");
+  const next = item.task_updated_at
+    ? item.task_status === "todo" ? ["开始处理", "doing"]
+      : item.task_status === "doing" ? ["转待观察", "observing"]
+        : item.task_status === "observing" ? ["标记完成", "done"] : ["重新打开", "todo"]
+    : ["添加到任务", "todo"];
+  [button.textContent] = next;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await bridgeFetch("/tasks/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+        body: JSON.stringify({ task_id: item.task_id, status: next[1] }),
+      });
+      await loadDashboard();
+    } catch (error) {
+      state.textContent = `操作失败：${error.message}`;
+      button.disabled = false;
+    }
+  });
+  actions.append(state, button);
+  card.append(top, diagnosis, steps, guardrail, actions);
+  return card;
 }
 
 function renderInventory(items = []) {

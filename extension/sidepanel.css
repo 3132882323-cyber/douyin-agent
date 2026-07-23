@@ -132,6 +132,20 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .recommendation-card.opportunity .recommendation-top span { background: #ecfdf3; color: var(--green); }
 .recommendation-card p { margin: 6px 0 0; color: #344054; font-size: 10px; line-height: 1.55; }
 .recommendation-card small { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.section-intro { margin: -2px 0 9px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.plan-workbench-card { padding: 12px; border: 1px solid var(--line); border-left: 3px solid #f79009; border-radius: 12px; background: white; }
+.plan-workbench-card.high { border-left-color: var(--red); }
+.plan-workbench-card.opportunity { border-left-color: var(--green); }
+.plan-workbench-card h4 { margin: 8px 0; color: #101828; font-size: 11px; }
+.plan-steps { display: grid; gap: 6px; }
+.plan-steps > div { display: grid; grid-template-columns: 70px 1fr; gap: 7px; padding: 6px 7px; border-radius: 8px; background: #f8fafc; }
+.plan-steps b { color: #475467; font-size: 8px; line-height: 1.5; }
+.plan-steps p { margin: 0; color: #344054; font-size: 9px; line-height: 1.5; }
+.plan-guardrail { display: block; margin-top: 8px; color: #b54708; font-size: 8px; line-height: 1.45; }
+.plan-task-actions { display: flex; align-items: center; gap: 7px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #f0f1f3; }
+.plan-task-actions span { margin-right: auto; color: #667085; font-size: 8px; }
+.plan-task-actions button { padding: 6px 9px; border: 1px solid #2563eb; border-radius: 7px; background: #2563eb; color: white; cursor: pointer; font-size: 9px; font-weight: 700; }
+.plan-task-actions button:disabled { opacity: .55; cursor: wait; }
 .settings-card { padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: white; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .settings-grid label { color: var(--muted); font-size: 9px; }

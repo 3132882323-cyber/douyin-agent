@@ -562,6 +562,80 @@ def _clean_entity_name(value: Any, fallback: str) -> str:
     return (max(candidates, key=len) if candidates else fallback)[:100]
 
 
+def _plan_workbench_fields(item: dict[str, Any], task_states: dict[str, Any]) -> dict[str, Any]:
+    action_type = str(item.get("action_type") or "")
+    evidence = item.get("evidence") or {}
+    roi = evidence.get("roi")
+    roi_target = evidence.get("roi_target")
+    ctr = evidence.get("ctr")
+    orders = evidence.get("orders")
+    definitions = {
+        "stop_loss": {
+            "diagnosis": "有点击无成交" if ctr and not orders else "高消耗未转化",
+            "judgment": "继续消耗的边际风险已高于继续观察的价值，应先止损再排查素材、人群和商品承接。",
+            "adjustment_range": "预算下调 30%，或暂停新增消耗；任何资金动作均由投手人工确认。",
+            "observation_window": "调整后观察 2 小时或 1 个完整转化窗口。",
+            "acceptance": f"出现有效成交，且 ROI 恢复到 {float(roi_target or 0) * 0.8:g} 以上；否则继续止损。",
+        },
+        "reduce_budget": {
+            "diagnosis": "ROI 明显低于目标",
+            "judgment": "当前消耗已达到判断门槛，低效计划继续原预算运行会放大亏损。",
+            "adjustment_range": "单次预算建议下调 20%，不要同时修改出价、素材和人群。",
+            "observation_window": "调整后观察 2 小时或 1 个完整转化窗口。",
+            "acceptance": f"ROI 至少恢复到 {float(roi_target or 0) * 0.8:g}，且成交成本不继续上升。",
+        },
+        "optimize": {
+            "diagnosis": "素材点击不足" if ctr is not None and ctr < 1 else "ROI 待改善",
+            "judgment": "数据尚未达到强制止损条件，但当前效率不足以支持放量，应先修复转化瓶颈。",
+            "adjustment_range": "预算保持不变；一次只替换 1 组素材或优化 1 个承接环节。",
+            "observation_window": "新素材累计 100 次点击或运行 2 小时后复盘。",
+            "acceptance": f"点击率改善且 ROI 达到目标 {float(roi_target or 0):g}；未改善则进入止损评估。",
+        },
+        "scale_cautiously": {
+            "diagnosis": "表现稳定，可谨慎放量",
+            "judgment": "当前 ROI 和成交样本达到放量条件，但仍需控制单次调整幅度，避免打乱模型。",
+            "adjustment_range": "单次预算增加 10%–15%，一个观察窗口内只调整一次。",
+            "observation_window": "放量后观察 2–4 小时或 1 个完整转化窗口。",
+            "acceptance": f"ROI 保持在目标 {float(roi_target or 0):g} 以上，成交量增长且成本未明显上升。",
+        },
+        "inspect_plans": {
+            "diagnosis": "账户汇总异常，待定位计划",
+            "judgment": "只有账户汇总数据，无法安全定位到具体计划，不应直接批量调整。",
+            "adjustment_range": "暂不调整预算；先同步计划列表并锁定异常计划。",
+            "observation_window": "计划明细同步完成后立即重新诊断。",
+            "acceptance": "定位到具体计划，并补齐消耗、ROI、成交和素材证据。",
+        },
+        "hold_and_observe": {
+            "diagnosis": "账户表现稳定，继续观察",
+            "judgment": "汇总表现达到目标，但计划级证据不足，暂不执行批量放量。",
+            "adjustment_range": "预算保持不变，补齐计划明细后再判断。",
+            "observation_window": "下一个完整转化窗口。",
+            "acceptance": "计划级 ROI、成交和消耗数据完整，并确认无异常计划。",
+        },
+    }
+    fields = definitions.get(action_type, {
+        "diagnosis": "计划需要人工复核",
+        "judgment": "当前证据不足以自动形成明确调整结论。",
+        "adjustment_range": "暂不修改预算或出价。",
+        "observation_window": "补齐数据后重新诊断。",
+        "acceptance": "消耗、ROI、成交与素材证据完整。",
+    })
+    title = f"{item.get('plan') or '千川计划'} · {fields['diagnosis']}"
+    task_id = hashlib.sha256(f"投放运营|{title}".encode("utf-8")).hexdigest()[:16]
+    task_state = task_states.get(task_id, {})
+    return {
+        **fields,
+        "found": str(item.get("reason") or "当前计划数据异常"),
+        "action": str(item.get("suggestion") or "请回到千川后台核对。"),
+        "owner": "投放运营",
+        "workbench_title": title,
+        "task_id": task_id,
+        "task_status": task_state.get("status", "todo"),
+        "task_updated_at": task_state.get("updated_at"),
+        "current_roi": roi,
+    }
+
+
 def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     settings = settings or load_agent_settings()
     roi_target = float(settings["roi_target"])
@@ -674,7 +748,8 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
     unique: dict[tuple[str, str], dict[str, Any]] = {}
     for item in ordered:
         unique.setdefault((item["plan"], item["action_type"]), item)
-    return list(unique.values())[:20]
+    task_states = load_task_states()
+    return [{**item, **_plan_workbench_fields(item, task_states)} for item in list(unique.values())[:20]]
 
 
 def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -903,7 +978,16 @@ def build_ops_manager() -> dict[str, Any]:
     creative = build_qianchuan_creative_analysis()
     tasks = [*shelf["recommendations"], *live["recommendations"], *creative["recommendations"]]
     for item in plans[:5]:
-        tasks.append({"level": item["level"], "owner": "投放运营", "title": item["plan"], "action": item["suggestion"], "acceptance": "按一个完整转化窗口复盘 ROI、消耗与成交。", "evidence": item["reason"]})
+        tasks.append({
+            "level": item["level"],
+            "owner": "投放运营",
+            "title": item["workbench_title"],
+            "action": item["action"],
+            "acceptance": item["acceptance"],
+            "evidence": item["found"],
+            "impact": item["adjustment_range"],
+            "observation_window": item["observation_window"],
+        })
     for item in inventory[:3]:
         tasks.append({"level": item["level"], "owner": "商品运营", "title": f"{item['product']} · {item['title']}", "action": item["suggestion"], "acceptance": "补货或投放限制已人工确认。", "evidence": f"当前库存 {item['evidence']['stock']:g}。"})
     priority = {"high": 0, "warning": 1, "opportunity": 2, "info": 3}
@@ -1166,7 +1250,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.6.4"
+    server_version = "DianAgent/2.7.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -1204,7 +1288,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.6.4",
+                    "version": "2.7.0",
                     "mode": "read_only",
                     "snapshot_count": len(catalog),
                     "sources": {
