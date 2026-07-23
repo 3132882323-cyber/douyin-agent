@@ -57,6 +57,8 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .scan-schedule select { padding: 4px 6px; border: 1px solid #d0d5dd; border-radius: 7px; background: white; color: #344054; font-size: 9px; }
 .scan-schedule.account-choice label { width: 100%; justify-content: space-between; }
 .scan-schedule.account-choice select { max-width: 210px; min-width: 130px; }
+.current-page-button { width: 100%; min-height: 31px; margin-top: 8px; border: 1px solid #b2ccff; border-radius: 8px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 9px; font-weight: 700; }
+.current-page-button:disabled { opacity: .6; cursor: wait; }
 .scan-card > small { display: block; margin-top: 7px; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .progress-card { display: grid; grid-template-columns: repeat(4, 1fr); padding: 12px 6px; border: 1px solid var(--line); border-radius: 13px; background: white; }
 .progress-card div { text-align: center; border-right: 1px solid #f0f1f3; }

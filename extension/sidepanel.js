@@ -288,7 +288,7 @@ function renderQianchuanAccounts(payload = {}) {
   select.replaceChildren();
   const current = document.createElement("option");
   current.value = "";
-  current.textContent = accounts.length ? "请选择要分析的千川账号" : "当前账号（首次巡查后识别）";
+  current.textContent = "当前千川页面（不校验账号）";
   select.append(current);
   accounts.forEach((account) => {
     const option = document.createElement("option");
@@ -298,14 +298,13 @@ function renderQianchuanAccounts(payload = {}) {
   });
   if (selectedQianchuanAccount && accounts.some((account) => account.key === selectedQianchuanAccount)) {
     select.value = selectedQianchuanAccount;
-  } else if (accounts.length === 1) {
-    selectedQianchuanAccount = accounts[0].key;
-    select.value = selectedQianchuanAccount;
   }
   accountSelectionRequired = accounts.length > 1 && !selectedQianchuanAccount;
-  document.getElementById("qianchuan-account-hint").textContent = accountSelectionRequired
-    ? "检测到多个账号，请先选择；巡查时千川后台当前账号必须与选择一致。"
-    : selectedQianchuanAccount ? "巡查只分析所选账号；如后台账号不一致会停止千川采集。" : "首次巡查后会自动识别并记住当前千川账号。";
+  document.getElementById("qianchuan-account-hint").textContent = selectedQianchuanAccount
+    ? "巡查只分析所选账号；如后台账号不一致会停止千川采集。"
+    : accountSelectionRequired
+      ? "当前页面可直接读取；如需全店巡查，请先选择一个千川账号。"
+      : "当前页面模式不会校验账号；适合账号识别失败时直接读取。";
 }
 
 async function loadDashboard() {
@@ -370,6 +369,31 @@ document.getElementById("qianchuan-account-select").addEventListener("change", a
   accountSelectionRequired = false;
   await bridgeFetch("/settings", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ qianchuan_account_key: selectedQianchuanAccount }) });
   await loadDashboard();
+});
+document.getElementById("current-qianchuan-button").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const hint = document.getElementById("qianchuan-account-hint");
+  button.disabled = true;
+  button.textContent = "正在读取当前页面…";
+  try {
+    selectedQianchuanAccount = "";
+    document.getElementById("qianchuan-account-select").value = "";
+    await bridgeFetch("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+      body: JSON.stringify({ qianchuan_account_key: "" }),
+    });
+    const response = await chrome.runtime.sendMessage({ type: "sync-current-qianchuan" });
+    if (!response?.ok) throw new Error(response?.error || "读取失败");
+    const accountLabel = response.result?.account?.label ? ` · ${response.result.account.label}` : "";
+    hint.textContent = `读取成功：${LABELS[response.result?.page_type] || response.result?.page_type || "千川页面"}${accountLabel}`;
+    await loadDashboard();
+  } catch (error) {
+    hint.textContent = error.message || "读取失败，请先切换到巨量千川页面";
+  } finally {
+    button.disabled = false;
+    button.textContent = "读取当前千川页面";
+  }
 });
 document.getElementById("cancel-scan-button").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "cancel-full-scan" });

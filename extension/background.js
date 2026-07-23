@@ -323,6 +323,19 @@ async function syncAll(reason = "manual") {
   return results;
 }
 
+async function syncCurrentPage(sourceOnly = "") {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = activeTab?.url || "";
+  const source = url.startsWith("https://fxg.jinritemai.com/") ? "doudian"
+    : url.startsWith("https://qianchuan.jinritemai.com/") || url.startsWith("https://buyin.jinritemai.com/") ? "qianchuan" : "";
+  if (!activeTab?.id || !source) throw new Error("当前页面不是抖店或巨量千川后台");
+  if (sourceOnly && source !== sourceOnly) throw new Error("请先切换到需要读取的巨量千川页面");
+  const response = await collectFromTab(source, activeTab, "manual-current-page");
+  if (!response?.ok) throw new Error(response?.error || "当前页面读取失败");
+  await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
+  return { source, page_type: response.page_type, quality: response.quality, account: response.account || null };
+}
+
 async function storeAndPush(source, snapshot) {
   if (!SOURCE_PATTERNS[source] || !snapshot || typeof snapshot !== "object") {
     throw new Error("无效的数据快照");
@@ -435,6 +448,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "manual-sync" || message.type === "manual-poll") {
       sendResponse({ ok: true, results: await syncAll("manual") });
+      return;
+    }
+    if (message.type === "sync-current-page") {
+      sendResponse({ ok: true, result: await syncCurrentPage("") });
+      return;
+    }
+    if (message.type === "sync-current-qianchuan") {
+      sendResponse({ ok: true, result: await syncCurrentPage("qianchuan") });
       return;
     }
     if (message.type === "start-full-scan") {

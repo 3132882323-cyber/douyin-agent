@@ -97,7 +97,8 @@ document.getElementById("sync-button").addEventListener("click", async (event) =
   button.disabled = true;
   button.textContent = "正在同步…";
   try {
-    await chrome.runtime.sendMessage({ type: "manual-sync" });
+    const response = await chrome.runtime.sendMessage({ type: "sync-current-page" });
+    if (!response?.ok) throw new Error(response?.error || "同步失败");
     button.textContent = "同步完成";
     await render();
   } catch {
