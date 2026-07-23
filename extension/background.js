@@ -1,6 +1,7 @@
 /** 店策 Agent - MV3 service worker */
 
 const BRIDGE_URL = "http://127.0.0.1:8765";
+const QIANCHUAN_ENTRY_URL = "https://qianchuan.jinritemai.com/";
 const ALARM_NAME = "dian-agent-sync";
 const FULL_SCAN_ALARM = "dian-agent-full-scan";
 const DEFAULT_SETTINGS = {
@@ -25,7 +26,7 @@ const FULL_SCAN_PAGES = [
   { id: "search", label: "搜索运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/mcompass/search", waitMs: 6500, harvestList: true },
   { id: "recommend_card", label: "推荐卡运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/recommend-card/home", waitMs: 6500, harvestList: true },
   { id: "funds", label: "账户中心", source: "doudian", url: "https://fxg.jinritemai.com/ffa/fund-control/account-center", waitMs: 5500 },
-  { id: "qianchuan_overview", expectedPageType: "overview", label: "千川经营首页", source: "qianchuan", url: "https://qianchuan.jinritemai.com/home", waitMs: 4500 },
+  { id: "qianchuan_overview", expectedPageType: "overview", label: "千川经营首页", source: "qianchuan", url: QIANCHUAN_ENTRY_URL, fallbackUrls: ["https://qianchuan.jinritemai.com/home"], waitMs: 4500 },
   { id: "qianchuan_campaigns", expectedPageType: "campaigns", label: "千川商品推广", source: "qianchuan", url: "https://qianchuan.jinritemai.com/uni-prom", tabTexts: ["商品全域推广", "商品推广"], waitMs: 5500, harvestList: true, collectTimeoutMs: 24000 },
   { id: "qianchuan_live", label: "千川直播推广", source: "qianchuan", url: "https://qianchuan.jinritemai.com/uni-prom", tabTexts: ["直播全域推广", "直播推广", "直播间推广"], waitMs: 5500, harvestList: true, collectTimeoutMs: 24000 },
   { id: "qianchuan_live_dashboard", expectedPageType: "live_dashboard", label: "千川直播大屏", source: "qianchuan", url: "https://qianchuan.jinritemai.com/board-next", waitMs: 5500 },
@@ -39,7 +40,7 @@ const SOURCE_PATTERNS = {
 
 const SOURCE_URLS = {
   doudian: "https://fxg.jinritemai.com/ffa/mshop/homepage/index",
-  qianchuan: "https://qianchuan.jinritemai.com/home",
+  qianchuan: QIANCHUAN_ENTRY_URL,
 };
 
 // Serialize read-modify-write operations so concurrent tabs cannot overwrite
@@ -154,6 +155,25 @@ async function navigateScanTab(tabId, url) {
   }
 }
 
+async function inspectPlatformPage(tabId, source) {
+  let page;
+  try {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({ href: location.href, title: document.title, readyState: document.readyState }),
+    });
+    page = result;
+  } catch (error) {
+    throw new Error(`页面无法访问或被浏览器中止（ERR_FAILED）；请检查网络后重试。${error.message ? ` ${error.message}` : ""}`);
+  }
+  if (!page?.href) throw new Error("页面没有成功加载，请重试");
+  const loadedUrl = new URL(page.href);
+  if (source === "qianchuan" && (loadedUrl.pathname === "/login" || /巨量千川-登录|登录/.test(page.title || ""))) {
+    throw new Error("千川登录已失效，请先在巨量千川完成登录，再点击巡查");
+  }
+  return page;
+}
+
 async function activatePageTab(tabId, texts) {
   const wanted = (Array.isArray(texts) ? texts : [texts]).filter(Boolean);
   if (!wanted.length) return true;
@@ -176,9 +196,12 @@ async function activatePageTab(tabId, texts) {
 
 async function scanOnePage(tabId, page, reason, accountKey = "") {
   let lastError;
+  const candidateUrls = [page.url, ...(page.fallbackUrls || [])];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      await navigateScanTab(tabId, page.url);
+      const targetUrl = candidateUrls[Math.min(attempt - 1, candidateUrls.length - 1)];
+      await navigateScanTab(tabId, targetUrl);
+      await inspectPlatformPage(tabId, page.source);
       await sleep(page.waitMs);
       if (page.tabText || page.tabTexts) {
         const wantedTabs = page.tabTexts || [page.tabText];
@@ -330,6 +353,7 @@ async function syncCurrentPage(sourceOnly = "") {
     : url.startsWith("https://qianchuan.jinritemai.com/") || url.startsWith("https://buyin.jinritemai.com/") ? "qianchuan" : "";
   if (!activeTab?.id || !source) throw new Error("当前页面不是抖店或巨量千川后台");
   if (sourceOnly && source !== sourceOnly) throw new Error("请先切换到需要读取的巨量千川页面");
+  await inspectPlatformPage(activeTab.id, source);
   const response = await collectFromTab(source, activeTab, "manual-current-page");
   if (!response?.ok) throw new Error(response?.error || "当前页面读取失败");
   await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
