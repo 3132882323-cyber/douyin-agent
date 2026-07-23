@@ -283,7 +283,7 @@ async function refreshAll(syncFirst = false) {
   try {
     await loadDashboard();
   } catch (error) {
-    renderConnection(false, "本地 Agent 未启动", "请双击 bridge/start_bridge.bat");
+    renderConnection(false, "本地 Agent 未启动", "首次使用请双击 bridge/enable_autostart.bat");
     document.getElementById("headline").textContent = "暂时无法生成简报";
     document.getElementById("summary").textContent = error.message;
   } finally {

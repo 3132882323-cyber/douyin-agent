@@ -73,7 +73,7 @@ async function render() {
   if (!dashboard.bridge?.ok) {
     overall.className = "overall error";
     title.textContent = "本地 Agent 未启动";
-    detail.textContent = "请双击 bridge/start_bridge.bat";
+    detail.textContent = "首次使用请双击 bridge/enable_autostart.bat";
   } else if (!totalTabs) {
     overall.className = "overall warn";
     title.textContent = "等待后台页面";
