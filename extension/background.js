@@ -174,7 +174,7 @@ async function activatePageTab(tabId, texts) {
   return result;
 }
 
-async function scanOnePage(tabId, page, reason) {
+async function scanOnePage(tabId, page, reason, accountKey = "") {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
@@ -194,6 +194,10 @@ async function scanOnePage(tabId, page, reason) {
         `${page.label}采集超过 ${Math.round(collectTimeoutMs / 1000)} 秒，已跳过`,
       );
       if (!response?.ok) throw new Error(response?.error || "采集失败");
+      if (page.source === "qianchuan" && accountKey) {
+        if (!response.account?.key) throw new Error("未识别当前千川账号，请先在千川后台确认账号后重试");
+        if (response.account.key !== accountKey) throw new Error(`当前千川账号为“${response.account.label || "其他账号"}”，与所选分析账号不一致`);
+      }
       if (response.page_type === "unknown") throw new Error("页面类型未识别");
       const expectedPageType = page.expectedPageType || page.id;
       if (response.page_type !== expectedPageType) throw new Error(`页面识别为 ${response.page_type}，预期为 ${expectedPageType}`);
@@ -206,7 +210,7 @@ async function scanOnePage(tabId, page, reason) {
   return { id: page.id, label: page.label, ok: false, error: lastError?.message || String(lastError) };
 }
 
-async function runFullScan(reason = "manual", pageIds = null) {
+async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
   fullScanCancelled = false;
   const startedAt = Date.now();
   const results = [];
@@ -214,14 +218,14 @@ async function runFullScan(reason = "manual", pageIds = null) {
   const previousScan = (await chrome.storage.local.get("fullScan")).fullScan || {};
   const scanPages = targeted ? FULL_SCAN_PAGES.filter((page) => pageIds.includes(page.id)) : FULL_SCAN_PAGES;
   let scanTab;
-  await setFullScanState({ status: "running", reason, started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, results: [] });
+  await setFullScanState({ status: "running", reason, account_key: accountKey || "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, results: [] });
   try {
     scanTab = await chrome.tabs.create({ url: "about:blank", active: false });
     for (let index = 0; index < scanPages.length; index += 1) {
       if (fullScanCancelled) break;
       const page = scanPages[index];
       await setFullScanState({ current: page.label, index: index + 1 });
-      const result = await scanOnePage(scanTab.id, page, reason);
+      const result = await scanOnePage(scanTab.id, page, reason, accountKey);
       results.push(result);
       await setFullScanState({ results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
       // Give the browser UI and the platform page a short idle window between
@@ -254,9 +258,9 @@ async function runFullScan(reason = "manual", pageIds = null) {
   }
 }
 
-function startFullScan(reason = "manual", pageIds = null) {
+function startFullScan(reason = "manual", pageIds = null, accountKey = "") {
   if (!fullScanPromise) {
-    fullScanPromise = runFullScan(reason, pageIds).finally(() => { fullScanPromise = null; });
+    fullScanPromise = runFullScan(reason, pageIds, accountKey).finally(() => { fullScanPromise = null; });
   }
   return fullScanPromise;
 }
@@ -437,7 +441,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (fullScanPromise) {
         sendResponse({ ok: true, started: false, message: "巡检正在进行" });
       } else {
-        startFullScan("manual", Array.isArray(message.page_ids) ? message.page_ids : null).catch((error) => setFullScanState({ status: "error", current: "", finished_at: Date.now(), error: error.message || String(error) }));
+        startFullScan("manual", Array.isArray(message.page_ids) ? message.page_ids : null, String(message.account_key || "")).catch((error) => setFullScanState({ status: "error", current: "", finished_at: Date.now(), error: error.message || String(error) }));
         sendResponse({ ok: true, started: true });
       }
       return;

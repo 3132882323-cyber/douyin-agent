@@ -43,6 +43,7 @@ DEFAULT_AGENT_SETTINGS = {
     "daily_report_time": "09:00",
     "report_retention_days": 30,
     "history_retention_days": 30,
+    "qianchuan_account_key": "",
 }
 
 
@@ -73,6 +74,36 @@ def _snapshot_path(source: str, page_type: str) -> Path:
     return DATA_DIR / source / f"{page_type}.json"
 
 
+def _account_snapshot_path(account_key: str, page_type: str) -> Path:
+    return DATA_DIR / "qianchuan_accounts" / account_key / f"{page_type}.json"
+
+
+def _account_catalog_path() -> Path:
+    return DATA_DIR / "qianchuan_accounts.json"
+
+
+def list_qianchuan_accounts() -> list[dict[str, Any]]:
+    path = _account_catalog_path()
+    if not path.exists():
+        return []
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        accounts = value.get("accounts", []) if isinstance(value, dict) else []
+        return accounts if isinstance(accounts, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _remember_qianchuan_account(account: dict[str, Any]) -> None:
+    key = str(account.get("key") or "").lower()
+    if not SAFE_KEY.fullmatch(key):
+        return
+    label = str(account.get("label") or "千川账号").strip()[:80]
+    accounts = {str(item.get("key")): item for item in list_qianchuan_accounts() if isinstance(item, dict)}
+    accounts[key] = {"key": key, "label": label, "last_seen": _now_label()}
+    _atomic_json_write(_account_catalog_path(), {"accounts": sorted(accounts.values(), key=lambda item: item.get("last_seen", ""), reverse=True)})
+
+
 def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
     if source not in ALLOWED_SOURCES:
         raise ValueError(f"unknown source: {source}")
@@ -96,6 +127,12 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
         "saved_at": _now_label(),
     }
     _atomic_json_write(_snapshot_path(source, page_type), payload)
+    if source == "qianchuan" and isinstance(normalized.get("account"), dict):
+        account = normalized["account"]
+        account_key = str(account.get("key") or "").lower()
+        if SAFE_KEY.fullmatch(account_key):
+            _atomic_json_write(_account_snapshot_path(account_key, page_type), payload)
+            _remember_qianchuan_account(account)
     # Backward-compatible latest snapshot for existing MCP clients.
     _atomic_json_write(DATA_DIR / f"{source}.json", payload)
     _save_history_point(payload)
@@ -103,10 +140,24 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def load_data(source: str, page_type: str | None = None) -> dict[str, Any] | None:
+def load_data(source: str, page_type: str | None = None, account_key: str | None = None) -> dict[str, Any] | None:
     if source not in ALLOWED_SOURCES:
         return None
-    path = _snapshot_path(source, _safe_page_type(page_type)) if page_type else DATA_DIR / f"{source}.json"
+    selected_account = account_key
+    if source == "qianchuan" and selected_account is None:
+        selected_account = str(load_agent_settings().get("qianchuan_account_key") or "")
+    if source == "qianchuan" and selected_account:
+        safe_account = str(selected_account).lower()
+        if not SAFE_KEY.fullmatch(safe_account):
+            return None
+        if page_type:
+            path = _account_snapshot_path(safe_account, _safe_page_type(page_type))
+        else:
+            account_dir = DATA_DIR / "qianchuan_accounts" / safe_account
+            candidates = sorted(account_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True) if account_dir.exists() else []
+            path = candidates[0] if candidates else account_dir / "missing.json"
+    else:
+        path = _snapshot_path(source, _safe_page_type(page_type)) if page_type else DATA_DIR / f"{source}.json"
     if not path.exists():
         return None
     try:
@@ -125,7 +176,7 @@ def list_snapshots() -> list[dict[str, Any]]:
         if not source_dir.exists():
             continue
         for path in sorted(source_dir.glob("*.json")):
-            snapshot = load_data(source, path.stem)
+            snapshot = load_data(source, path.stem, account_key="")
             if not snapshot:
                 continue
             data = snapshot.get("data", {})
@@ -179,6 +230,7 @@ def _save_history_point(snapshot: dict[str, Any]) -> None:
         "metrics": data.get("metrics", {}),
         "safe_metrics": data.get("safe_metrics", {}),
         "quality": data.get("quality", {}),
+        "account_key": str((data.get("account") or {}).get("key") or "") if isinstance(data.get("account"), dict) else "",
     }
     directory = _history_dir(source, page_type)
     _atomic_json_write(directory / f"{captured_at}.json", point)
@@ -203,6 +255,7 @@ def load_history(source: str | None = None, page_type: str | None = None, days: 
         return []
     patterns = [root / source / page_type] if source and page_type else [root / source] if source else [root]
     points: list[dict[str, Any]] = []
+    selected_account = str(load_agent_settings().get("qianchuan_account_key") or "") if source == "qianchuan" else ""
     for base in patterns:
         if not base.exists():
             continue
@@ -211,7 +264,7 @@ def load_history(source: str | None = None, page_type: str | None = None, days: 
                 if int(path.stem) < cutoff_ms:
                     continue
                 value = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(value, dict):
+                if isinstance(value, dict) and (not selected_account or value.get("account_key") == selected_account):
                     points.append(value)
             except (ValueError, OSError, json.JSONDecodeError):
                 continue
@@ -422,6 +475,10 @@ def save_agent_settings(values: dict[str, Any]) -> dict[str, Any]:
     next_settings["daily_report_time"] = report_time
     next_settings["report_retention_days"] = min(365, max(1, int(next_settings["report_retention_days"])))
     next_settings["history_retention_days"] = min(365, max(1, int(next_settings["history_retention_days"])))
+    account_key = str(next_settings.get("qianchuan_account_key") or "").lower()
+    if account_key and not SAFE_KEY.fullmatch(account_key):
+        raise ValueError("invalid qianchuan_account_key")
+    next_settings["qianchuan_account_key"] = account_key
     _atomic_json_write(_settings_path(), next_settings)
     return next_settings
 
@@ -914,7 +971,7 @@ def _scan_status_path() -> Path:
 def save_scan_status(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("scan status must be an object")
-    allowed = {"status", "reason", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
+    allowed = {"status", "reason", "account_key", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
     status = {key: value[key] for key in allowed if key in value}
     if status.get("status") not in {"idle", "running", "completed", "partial", "cancelled", "error"}:
         raise ValueError("invalid scan status")
@@ -1109,7 +1166,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.6.0"
+    server_version = "DianAgent/2.6.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -1147,7 +1204,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.6.0",
+                    "version": "2.6.1",
                     "mode": "read_only",
                     "snapshot_count": len(catalog),
                     "sources": {
@@ -1177,6 +1234,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/qianchuan-creative-analysis":
             self._json(build_qianchuan_creative_analysis())
+            return
+        if path == "/qianchuan-accounts":
+            self._json({"accounts": list_qianchuan_accounts(), "selected_account_key": load_agent_settings().get("qianchuan_account_key", "")})
             return
         if path == "/ops-manager":
             self._json(build_ops_manager())

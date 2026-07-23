@@ -11,6 +11,8 @@ let latestBrief = "";
 let currentRole = "运营总管";
 let currentOps = null;
 let scanPoller = null;
+let selectedQianchuanAccount = "";
+let accountSelectionRequired = false;
 
 async function pollFullScan() {
   const response = await chrome.runtime.sendMessage({ type: "get-dashboard" });
@@ -43,8 +45,8 @@ function renderFullScan(scan = {}) {
   const rows = (scan.results || []).reduce((sum, item) => sum + Number(item.quality?.row_count || 0), 0);
   const virtualPasses = (scan.results || []).reduce((sum, item) => sum + Number(item.quality?.virtual_scroll_passes || 0), 0);
   document.getElementById("scan-summary").textContent = scan.error ? `失败原因：${scan.error}` : `成功 ${scan.success || 0} 页，失败 ${scan.failed || 0} 页，低质量 ${scan.low_quality || 0} 页；读取 ${rows} 行，滚动采集 ${virtualPasses} 次`;
-  document.getElementById("full-scan-button").disabled = running;
-  document.getElementById("full-scan-button").textContent = running ? "正在自动获取…" : "自动获取全店数据";
+  document.getElementById("full-scan-button").disabled = running || accountSelectionRequired;
+  document.getElementById("full-scan-button").textContent = running ? "正在自动获取…" : accountSelectionRequired ? "请先选择千川账号" : "自动获取全店数据";
   document.getElementById("cancel-scan-button").hidden = !running;
   document.getElementById("retry-scan-button").hidden = running || !(scan.failed > 0);
   if (running && !scanPoller) scanPoller = setInterval(() => pollFullScan().catch(() => undefined), 1500);
@@ -279,9 +281,36 @@ function renderSettings(settings) {
   document.getElementById("report-enabled").checked = settings.daily_report_enabled;
 }
 
+function renderQianchuanAccounts(payload = {}) {
+  const select = document.getElementById("qianchuan-account-select");
+  const accounts = payload.accounts || [];
+  selectedQianchuanAccount = String(payload.selected_account_key || "");
+  select.replaceChildren();
+  const current = document.createElement("option");
+  current.value = "";
+  current.textContent = accounts.length ? "请选择要分析的千川账号" : "当前账号（首次巡查后识别）";
+  select.append(current);
+  accounts.forEach((account) => {
+    const option = document.createElement("option");
+    option.value = account.key;
+    option.textContent = account.label;
+    select.append(option);
+  });
+  if (selectedQianchuanAccount && accounts.some((account) => account.key === selectedQianchuanAccount)) {
+    select.value = selectedQianchuanAccount;
+  } else if (accounts.length === 1) {
+    selectedQianchuanAccount = accounts[0].key;
+    select.value = selectedQianchuanAccount;
+  }
+  accountSelectionRequired = accounts.length > 1 && !selectedQianchuanAccount;
+  document.getElementById("qianchuan-account-hint").textContent = accountSelectionRequired
+    ? "检测到多个账号，请先选择；巡查时千川后台当前账号必须与选择一致。"
+    : selectedQianchuanAccount ? "巡查只分析所选账号；如后台账号不一致会停止千川采集。" : "首次巡查后会自动识别并记住当前千川账号。";
+}
+
 async function loadDashboard() {
-  const [insights, actionCenter, settings, ops, extensionResponse, trends] = await Promise.all([
-    bridgeFetch("/insights"), bridgeFetch("/action-center"), bridgeFetch("/settings"), bridgeFetch("/ops-manager"), chrome.runtime.sendMessage({ type: "get-dashboard" }), bridgeFetch("/trends?days=7"),
+  const [insights, actionCenter, settings, ops, extensionResponse, trends, accounts] = await Promise.all([
+    bridgeFetch("/insights"), bridgeFetch("/action-center"), bridgeFetch("/settings"), bridgeFetch("/ops-manager"), chrome.runtime.sendMessage({ type: "get-dashboard" }), bridgeFetch("/trends?days=7"), bridgeFetch("/qianchuan-accounts"),
   ]);
   renderConnection(true, "本地 Agent 已连接", `已读取 ${insights.coverage?.length || 0} 类页面快照`);
   document.getElementById("headline").textContent = insights.headline || "经营数据已同步";
@@ -292,6 +321,7 @@ async function loadDashboard() {
   renderAlerts(insights.alerts || []);
   renderCoverage(insights.coverage || []);
   renderSettings(settings);
+  renderQianchuanAccounts(accounts);
   renderFullScan(extensionResponse?.dashboard?.fullScan || {});
   renderTrends(trends);
   latestBrief = [
@@ -332,7 +362,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
 document.getElementById("sync-diagnose").addEventListener("click", () => refreshAll(true));
 document.getElementById("full-scan-button").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ type: "start-full-scan" });
+  await chrome.runtime.sendMessage({ type: "start-full-scan", account_key: selectedQianchuanAccount });
+  await loadDashboard();
+});
+document.getElementById("qianchuan-account-select").addEventListener("change", async (event) => {
+  selectedQianchuanAccount = event.currentTarget.value;
+  accountSelectionRequired = false;
+  await bridgeFetch("/settings", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ qianchuan_account_key: selectedQianchuanAccount }) });
   await loadDashboard();
 });
 document.getElementById("cancel-scan-button").addEventListener("click", async () => {

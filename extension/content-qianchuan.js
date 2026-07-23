@@ -8,6 +8,45 @@
   let lastUrl = location.href;
   let routeTimer = null;
 
+  function accountHash(value) {
+    let hash = 2166136261;
+    for (const character of String(value || "")) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `acct_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  }
+
+  function detectAccountContext() {
+    const params = new URLSearchParams(location.search);
+    const accountId = ["advertiser_id", "aadvid", "account_id", "shop_id"]
+      .map((key) => params.get(key)).find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
+    const selectors = [
+      "[class*='account-name']", "[class*='advertiser-name']", "[class*='shop-name']",
+      "[class*='account'] [class*='name']", "[class*='header'] [class*='account']",
+    ];
+    let label = "";
+    for (const selector of selectors) {
+      const element = Array.from(document.querySelectorAll(selector)).find((item) => item.getClientRects().length > 0);
+      const value = (element?.innerText || "").replace(/\s+/g, " ").trim();
+      if (value.length >= 2 && value.length <= 80 && !/切换账号|账号管理|全部账号/.test(value)) {
+        label = value;
+        break;
+      }
+    }
+    if (!label) {
+      const text = (document.body?.innerText || "").slice(0, 5000);
+      const match = text.match(/(?:当前账号|账号名称|千川账号|店铺名称)\s*[:：]?\s*\n?\s*([^\n]{2,80})/);
+      if (match && !/切换账号|账号管理|全部账号/.test(match[1])) label = match[1].trim();
+    }
+    if (!accountId && !label) return null;
+    return {
+      key: accountHash(accountId || label),
+      label: label || `千川账号 · ${String(accountId).slice(-4)}`,
+      confidence: label && accountId ? "high" : "medium",
+    };
+  }
+
   function detectPageType() {
     const path = location.pathname.toLowerCase();
     const pageText = document.body?.innerText || "";
@@ -32,8 +71,9 @@
     const stored = await chrome.storage.local.get("settings");
     const privacyMode = stored.settings?.privacyMode !== false;
     const data = await globalThis.DianAgentExtractor.collect(SOURCE, detectPageType(), privacyMode, reason);
+    data.account = detectAccountContext();
     const response = await chrome.runtime.sendMessage({ type: "page-data", source: SOURCE, data });
-    return { ok: true, page_type: data.page_type, quality: data.quality, bridge: response };
+    return { ok: true, page_type: data.page_type, quality: data.quality, account: data.account, bridge: response };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

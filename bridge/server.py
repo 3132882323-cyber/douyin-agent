@@ -35,10 +35,12 @@ from http_receiver import (
     build_trends,
     generate_daily_report,
     list_snapshots,
+    list_qianchuan_accounts,
     load_agent_settings,
     load_data,
     load_latest_report,
     load_scan_status,
+    save_agent_settings,
     update_task_state,
 )
 
@@ -104,6 +106,16 @@ TOOLS = [
         name="get_qianchuan_creative_analysis",
         description="分析巨量千川视频库素材的消耗、ROI、成交、素材评估和测试覆盖，输出直播引流素材分层与优化建议",
         inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_qianchuan_accounts",
+        description="列出本机已经识别的巨量千川账号及当前选择的分析账号",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="select_qianchuan_account",
+        description="选择后续千川分析使用的账号；仅修改本地分析设置，不登录或切换官方后台账号",
+        inputSchema={"type": "object", "properties": {"account_key": {"type": "string"}}, "required": ["account_key"]},
     ),
     Tool(
         name="get_inventory_alerts",
@@ -223,6 +235,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     if name == "get_qianchuan_creative_analysis":
         return _text(build_qianchuan_creative_analysis())
+
+    if name == "get_qianchuan_accounts":
+        return _text({"accounts": list_qianchuan_accounts(), "selected_account_key": load_agent_settings().get("qianchuan_account_key", "")})
+
+    if name == "select_qianchuan_account":
+        key = str(arguments.get("account_key") or "")
+        if key not in {str(item.get("key")) for item in list_qianchuan_accounts()}:
+            return _text({"error": "未知千川账号，请先在该账号页面同步一次"})
+        return _text({"settings": save_agent_settings({"qianchuan_account_key": key})})
 
     if name == "get_inventory_alerts":
         return _text({"alerts": build_inventory_alerts(), "mode": "read_only"})

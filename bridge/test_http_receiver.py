@@ -150,6 +150,27 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(analysis["videos"][0]["name"], "低效素材 B")
         self.assertTrue(any("高消耗低转化" in item["title"] for item in analysis["recommendations"]))
 
+    def test_qianchuan_accounts_are_partitioned_and_selectable(self) -> None:
+        def snapshot(account_key: str, label: str, video: str) -> dict:
+            return {
+                "page_type": "video_library",
+                "account": {"key": account_key, "label": label, "confidence": "high"},
+                "quality": {"score": 90, "row_count": 1},
+                "tables": [{"headers": ["视频", "素材评估", "消耗(元)"], "rows": [[video, "优质", "100"]]}],
+            }
+
+        http_receiver.save_data("qianchuan", snapshot("acct_aaaa1111", "千川账号 A", "素材 A"))
+        http_receiver.save_data("qianchuan", snapshot("acct_bbbb2222", "千川账号 B", "素材 B"))
+        self.assertEqual(len(http_receiver.list_qianchuan_accounts()), 2)
+
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_aaaa1111"})
+        account_a = http_receiver.build_qianchuan_creative_analysis()
+        self.assertEqual([item["name"] for item in account_a["videos"]], ["素材 A"])
+
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_bbbb2222"})
+        account_b = http_receiver.build_qianchuan_creative_analysis()
+        self.assertEqual([item["name"] for item in account_b["videos"]], ["素材 B"])
+
     def test_settings_and_daily_report_are_local_and_configurable(self) -> None:
         settings = http_receiver.save_agent_settings(
             {"roi_target": 2.0, "low_inventory_threshold": 20, "daily_report_time": "08:30"}

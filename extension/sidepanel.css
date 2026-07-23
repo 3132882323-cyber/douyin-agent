@@ -55,6 +55,8 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .scan-schedule { display: flex; align-items: center; justify-content: space-between; margin-top: 9px; color: #475467; font-size: 9px; }
 .scan-schedule label { display: flex; align-items: center; gap: 5px; }
 .scan-schedule select { padding: 4px 6px; border: 1px solid #d0d5dd; border-radius: 7px; background: white; color: #344054; font-size: 9px; }
+.scan-schedule.account-choice label { width: 100%; justify-content: space-between; }
+.scan-schedule.account-choice select { max-width: 210px; min-width: 130px; }
 .scan-card > small { display: block; margin-top: 7px; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .progress-card { display: grid; grid-template-columns: repeat(4, 1fr); padding: 12px 6px; border: 1px solid var(--line); border-radius: 13px; background: white; }
 .progress-card div { text-align: center; border-right: 1px solid #f0f1f3; }
