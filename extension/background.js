@@ -233,6 +233,14 @@ async function scanOnePage(tabId, page, reason, accountKey = "") {
   return { id: page.id, label: page.label, ok: false, error: lastError?.message || String(lastError) };
 }
 
+function isMissingTabError(error) {
+  return /No tab with id|Invalid tab ID|tab.+(?:closed|not found)/i.test(String(error || ""));
+}
+
+async function createScanTab() {
+  return chrome.tabs.create({ url: "about:blank", active: false });
+}
+
 async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
   fullScanCancelled = false;
   const startedAt = Date.now();
@@ -241,14 +249,23 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
   const previousScan = (await chrome.storage.local.get("fullScan")).fullScan || {};
   const scanPages = targeted ? FULL_SCAN_PAGES.filter((page) => pageIds.includes(page.id)) : FULL_SCAN_PAGES;
   let scanTab;
-  await setFullScanState({ status: "running", reason, account_key: accountKey || "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, results: [] });
+  let scanSource = "";
+  await setFullScanState({ status: "running", reason, account_key: accountKey || "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
   try {
-    scanTab = await chrome.tabs.create({ url: "about:blank", active: false });
     for (let index = 0; index < scanPages.length; index += 1) {
       if (fullScanCancelled) break;
       const page = scanPages[index];
+      if (!scanTab?.id || page.source !== scanSource) {
+        if (scanTab?.id) await chrome.tabs.remove(scanTab.id).catch(() => undefined);
+        scanTab = await createScanTab();
+        scanSource = page.source;
+      }
       await setFullScanState({ current: page.label, index: index + 1 });
-      const result = await scanOnePage(scanTab.id, page, reason, accountKey);
+      let result = await scanOnePage(scanTab.id, page, reason, accountKey);
+      if (!result.ok && isMissingTabError(result.error)) {
+        scanTab = await createScanTab();
+        result = await scanOnePage(scanTab.id, page, `${reason}-tab-recovered`, accountKey);
+      }
       results.push(result);
       await setFullScanState({ results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
       // Give the browser UI and the platform page a short idle window between
@@ -263,7 +280,7 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
     }
     const incomplete = finalResults.length < FULL_SCAN_PAGES.length;
     const status = fullScanCancelled ? "cancelled" : finalResults.some((item) => !item.ok) || incomplete ? "partial" : "completed";
-    await setFullScanState({ status, current: "", finished_at: Date.now(), results: finalResults, index: targeted ? finalResults.length : scanPages.length, total: targeted ? FULL_SCAN_PAGES.length : scanPages.length, success: finalResults.filter((item) => item.ok).length, failed: finalResults.filter((item) => !item.ok).length, low_quality: finalResults.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
+    await setFullScanState({ status, current: "", finished_at: Date.now(), error: "", results: finalResults, index: targeted ? finalResults.length : scanPages.length, total: targeted ? FULL_SCAN_PAGES.length : scanPages.length, success: finalResults.filter((item) => item.ok).length, failed: finalResults.filter((item) => !item.ok).length, low_quality: finalResults.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
     await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
     if (!fullScanCancelled) {
       await fetch(`${BRIDGE_URL}/reports/generate`, {
