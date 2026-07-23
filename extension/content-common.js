@@ -54,19 +54,25 @@
   function extractTables(privacyMode) {
     const output = [];
     const candidates = document.querySelectorAll("table, [role='table'], [role='grid']");
-    candidates.forEach((table) => {
-      if (output.length >= MAX_TABLES || !visible(table)) return;
+    let inspectedTables = 0;
+    for (const table of candidates) {
+      inspectedTables += 1;
+      if (output.length >= MAX_TABLES || inspectedTables > 40) break;
+      if (!visible(table)) continue;
       const rows = [];
-      table.querySelectorAll("tr, [role='row']").forEach((row) => {
-        if (rows.length >= MAX_ROWS || !visible(row)) return;
+      let inspectedRows = 0;
+      for (const row of table.querySelectorAll("tr, [role='row']")) {
+        inspectedRows += 1;
+        if (rows.length >= MAX_ROWS || inspectedRows > 240) break;
+        if (!visible(row)) continue;
         const cells = Array.from(row.querySelectorAll("th, td, [role='columnheader'], [role='cell'], [role='gridcell']"))
           .slice(0, MAX_CELLS)
           .map((cell) => compact(cell.innerText))
           .filter(Boolean);
         const hasHeaderCells = row.querySelectorAll("th, [role='columnheader']").length > 0;
         if (cells.length) rows.push({ cells, hasHeaderCells });
-      });
-      if (!rows.length) return;
+      }
+      if (!rows.length) continue;
 
       const headerIndex = rows.findIndex((row) => row.hasHeaderCells);
       const headers = headerIndex >= 0 ? rows[headerIndex].cells.map((cell) => clean(cell, privacyMode)) : [];
@@ -80,7 +86,7 @@
         row.cells.map((cell, index) => sensitiveColumns.has(index) ? "[已隐藏]" : clean(cell, privacyMode)),
       );
       output.push({ headers, rows: dataRows });
-    });
+    }
     return output;
   }
 
@@ -119,7 +125,8 @@
     let truncated = false;
     const harvestCurrentPage = async () => {
       mergeTables(merged, extractTables(privacyMode));
-      const scrollables = Array.from(document.querySelectorAll("div, section, main"))
+      const scrollables = Array.from(document.querySelectorAll("[role='grid'], [class*='virtual'], [class*='scroll'], [class*='table'], main, section"))
+        .slice(0, 500)
         .filter((element) => visible(element) && element.clientHeight >= 120 && element.scrollHeight > element.clientHeight * 1.5)
         .sort((a, b) => b.scrollHeight - a.scrollHeight)
         .slice(0, 3);
@@ -157,17 +164,20 @@
       "[class*='overview']", "[class*='data-item']", "[class*='summary']",
       "[class*='indicator']", "[class*='index']",
     ];
-    document.querySelectorAll(selectors.join(",")).forEach((element) => {
-      if (Object.keys(metrics).length >= 80 || !visible(element)) return;
+    let inspected = 0;
+    for (const element of document.querySelectorAll(selectors.join(","))) {
+      inspected += 1;
+      if (Object.keys(metrics).length >= 80 || inspected > 1200) break;
+      if (!visible(element)) continue;
       const label = element.querySelector("[class*='label'], [class*='title'], [class*='name'], [class*='desc']");
       const value = element.querySelector("[class*='value'], [class*='number'], [class*='num'], [class*='amount']");
-      if (!label || !value) return;
+      if (!label || !value) continue;
       const key = clean(label.innerText, privacyMode).slice(0, 40);
       const metricValue = isSensitiveHeader(key) && privacyMode
         ? "[已隐藏]"
         : clean(value.innerText, privacyMode).slice(0, 80);
       if (key && metricValue && key !== metricValue) metrics[key] = metricValue;
-    });
+    }
     return metrics;
   }
 

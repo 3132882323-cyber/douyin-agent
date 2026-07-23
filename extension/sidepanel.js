@@ -12,6 +12,11 @@ let currentRole = "运营总管";
 let currentOps = null;
 let scanPoller = null;
 
+async function pollFullScan() {
+  const response = await chrome.runtime.sendMessage({ type: "get-dashboard" });
+  if (response?.ok) renderFullScan(response.dashboard?.fullScan || {});
+}
+
 async function bridgeFetch(path, options = {}) {
   const response = await fetch(`${BRIDGE_URL}${path}`, { cache: "no-store", ...options });
   if (!response.ok) throw new Error(`本地 Agent 返回 HTTP ${response.status}`);
@@ -28,9 +33,9 @@ function renderConnection(ok, title, detail) {
 function renderFullScan(scan = {}) {
   const running = scan.status === "running";
   const state = document.getElementById("scan-state");
-  const labels = { idle: "未运行", running: "巡检中", completed: "已完成", partial: "部分完成", cancelled: "已停止", error: "失败" };
+  const labels = { idle: "未运行", running: "巡检中", completed: "已完成", partial: "部分完成", cancelled: "已停止", interrupted: "已中断", error: "失败" };
   state.textContent = labels[scan.status] || "未运行";
-  state.className = `scan-tag ${running || scan.status === "completed" ? "ok" : scan.status === "partial" ? "warn" : scan.status === "error" ? "error" : "idle"}`;
+  state.className = `scan-tag ${running || scan.status === "completed" ? "ok" : ["partial", "interrupted"].includes(scan.status) ? "warn" : scan.status === "error" ? "error" : "idle"}`;
   const total = Number(scan.total || 16);
   const index = Number(scan.index || 0);
   document.getElementById("scan-progress-bar").style.width = `${Math.min(100, total ? index / total * 100 : 0)}%`;
@@ -42,7 +47,7 @@ function renderFullScan(scan = {}) {
   document.getElementById("full-scan-button").textContent = running ? "正在自动获取…" : "自动获取全店数据";
   document.getElementById("cancel-scan-button").hidden = !running;
   document.getElementById("retry-scan-button").hidden = running || !(scan.failed > 0);
-  if (running && !scanPoller) scanPoller = setInterval(() => loadDashboard().catch(() => undefined), 1500);
+  if (running && !scanPoller) scanPoller = setInterval(() => pollFullScan().catch(() => undefined), 1500);
   if (!running && scanPoller) { clearInterval(scanPoller); scanPoller = null; }
 }
 

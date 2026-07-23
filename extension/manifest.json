@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "店策 Agent - 抖店千川经营副驾",
-  "version": "2.5.2",
+  "version": "2.5.3",
   "description": "从已登录的抖店和巨量千川页面读取经营快照，在本机生成千川调整建议、库存预警和每日经营报告。无需开发者 API。",
   "minimum_chrome_version": "116",
   "permissions": [

@@ -20,8 +20,8 @@ const FULL_SCAN_PAGES = [
   { id: "reviews", label: "评价管理", source: "doudian", url: "https://fxg.jinritemai.com/ffa/maftersale/comment", waitMs: 6000, harvestList: true },
   { id: "shelf", label: "商城运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/growth-common/growth-shelf", waitMs: 7000 },
   { id: "live", label: "直播管理", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/shop-live", waitMs: 8000 },
-  { id: "short_video", label: "短视频运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/short-video", waitMs: 6500, harvestList: true },
-  { id: "image_text", label: "图文运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/image-text-operation", waitMs: 6500 },
+  { id: "short_video", label: "短视频运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/short-video", waitMs: 5000, harvestList: true, collectTimeoutMs: 24000 },
+  { id: "image_text", label: "图文运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/content-tool/image-text-operation", waitMs: 4000, collectTimeoutMs: 9000 },
   { id: "search", label: "搜索运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/mcompass/search", waitMs: 6500, harvestList: true },
   { id: "recommend_card", label: "推荐卡运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/recommend-card/home", waitMs: 6500, harvestList: true },
   { id: "funds", label: "账户中心", source: "doudian", url: "https://fxg.jinritemai.com/ffa/fund-control/account-center", waitMs: 5500 },
@@ -100,6 +100,14 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function withTimeout(promise, timeoutMs, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function setFullScanState(patch) {
   const updates = await mutateLocalStorage(["fullScan"], ({ fullScan }) => ({ fullScan: { ...(fullScan || {}), ...patch } }));
   if (updates.fullScan) {
@@ -124,14 +132,14 @@ function waitForTabReady(tabId, timeoutMs = 30000) {
     const listener = (updatedId, changeInfo) => {
       if (updatedId === tabId && changeInfo.status === "complete") finish();
     };
-    const timer = setTimeout(() => finish(new Error("页面加载超时")), timeoutMs);
+  const timer = setTimeout(() => finish(new Error("页面加载超时")), timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
   });
 }
 
 async function navigateScanTab(tabId, url) {
   const current = await chrome.tabs.get(tabId);
-  const ready = waitForTabReady(tabId, 45000);
+  const ready = waitForTabReady(tabId, 25000);
   if ((current.url || "").split("#")[0] === url.split("#")[0]) await chrome.tabs.reload(tabId);
   else await chrome.tabs.update(tabId, { url, active: false });
   try {
@@ -172,7 +180,12 @@ async function scanOnePage(tabId, page, reason) {
         await sleep(3500);
       }
       const scanMode = page.harvestList ? "full-scan-list" : "full-scan-page";
-      const response = await collectFromTab(page.source, { id: tabId }, `${scanMode}-${reason}-${page.id}`);
+      const collectTimeoutMs = Number(page.collectTimeoutMs || (page.harvestList ? 30000 : 12000));
+      const response = await withTimeout(
+        collectFromTab(page.source, { id: tabId }, `${scanMode}-${reason}-${page.id}`),
+        collectTimeoutMs,
+        `${page.label}采集超过 ${Math.round(collectTimeoutMs / 1000)} 秒，已跳过`,
+      );
       if (!response?.ok) throw new Error(response?.error || "采集失败");
       if (response.page_type === "unknown") throw new Error("页面类型未识别");
       if (response.page_type !== page.id) throw new Error(`页面识别为 ${response.page_type}，预期为 ${page.id}`);
@@ -203,6 +216,9 @@ async function runFullScan(reason = "manual", pageIds = null) {
       const result = await scanOnePage(scanTab.id, page, reason);
       results.push(result);
       await setFullScanState({ results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
+      // Give the browser UI and the platform page a short idle window between
+      // pages so a long scan does not monopolize the renderer.
+      await sleep(350);
     }
     let finalResults = results;
     if (targeted && !fullScanCancelled) {
@@ -374,12 +390,26 @@ async function getDashboard() {
     querySourceTabs("qianchuan"),
     checkBridge(),
   ]);
+  let fullScan = stored.fullScan || { status: "idle", total: FULL_SCAN_PAGES.length, index: 0, success: 0, failed: 0 };
+  // MV3 service workers can be restarted by Chrome. If no in-memory scan is
+  // running, a persisted "running" state is stale and must not leave the UI
+  // looking frozen forever.
+  if (fullScan.status === "running" && !fullScanPromise) {
+    fullScan = {
+      ...fullScan,
+      status: "interrupted",
+      current: "",
+      finished_at: Date.now(),
+      error: "上次巡检因扩展更新或浏览器休眠而中断，请重新点击巡检",
+    };
+    await setFullScanState(fullScan);
+  }
   return {
     status: stored.status || {},
     catalog: stored.catalog || {},
     settings: { ...DEFAULT_SETTINGS, ...(stored.settings || {}) },
     lastSyncAttempt: stored.lastSyncAttempt || null,
-    fullScan: stored.fullScan || { status: "idle", total: FULL_SCAN_PAGES.length, index: 0, success: 0, failed: 0 },
+    fullScan,
     tabs: { doudian: doudianTabs.length, qianchuan: qianchuanTabs.length },
     bridge,
   };
