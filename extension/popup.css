@@ -110,3 +110,11 @@ h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .secondary:hover { background: var(--soft); }
 
 footer { display: flex; justify-content: space-between; gap: 10px; margin-top: 12px; color: #98a2b3; font-size: 9px; }
+
+/* v2.8.2: quick metrics in popup */
+.quick-metrics { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.qm-headline { margin: 0 0 8px; color: var(--ink); font-size: 13px; font-weight: 700; line-height: 1.35; }
+.qm-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.qm-strip > div { padding: 8px; border-radius: 9px; background: #eef4ff; text-align: center; }
+.qm-strip strong { display: block; color: #1849a9; font-size: 16px; }
+.qm-strip small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }

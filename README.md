@@ -1,15 +1,15 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.7.0-2563eb)](extension/manifest.json)
-[![Chrome](https://img.shields.io/badge/Chrome-Manifest_V3-16a34a)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.8.2-2563eb)](extension/manifest.json)
+[![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge-MV3-16a34a)](extension/manifest.json)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
 
 **不申请开发者 API，也能把抖店和巨量千川网页数据变成运营每天真正能执行的任务。**
 
-店策 Agent 是一个本地优先、只读的 Chrome 扩展与 AI Agent 数据桥。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
+店策 Agent 是一个本地优先、只读的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome 和 Edge。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.7.0 Beta`。本地 Agent 可随 Windows 登录自动启动；数据巡查仍仅由用户点击触发，不会每 5 分钟后台自动运行，也不会自动修改预算、库存或计划状态。
+> 当前版本：`v2.8.2 Beta`。新增用户反馈机制、采集健康监控、任务导出、建议效果闭环和安装向导。本地 Agent 可随 Windows 登录自动启动；数据巡查仍仅由用户点击触发，不会每 5 分钟后台自动运行，也不会自动修改预算、库存或计划状态。
 
 ## 为什么做这个项目
 
@@ -135,17 +135,17 @@ cd douyin-agent
 
 也可以在 GitHub 页面点击 `Code → Download ZIP` 后解压。
 
-### 2. 安装 Chrome 扩展
+### 2. 安装浏览器扩展
 
-Chrome 不允许普通网页直接安装未上架扩展，开发版需要“加载已解压的扩展程序”：
+支持 Chrome 116+ 和新版 Edge。以 Chrome 为例，开发版需要“加载已解压的扩展程序”：
 
-1. 打开 `chrome://extensions/`。
+1. 打开 `chrome://extensions/`（Edge 用 `edge://extensions/`）。
 2. 开启右上角“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
 4. 选择项目中的 `extension` 文件夹，不要选择仓库根目录或 ZIP 文件。
 5. 将“店策 Agent”固定到工具栏。
 
-安装成功后，扩展详情应显示版本 `2.7.0`。
+安装成功后，首次安装会自动打开欢迎页引导你完成设置。扩展详情应显示版本 `2.8.2`。
 
 ### 3. 启用本地 Agent 自动启动
 
@@ -211,6 +211,11 @@ bridge/enable_autostart.bat
 | `get_daily_report` | 读取最近一份本地日报 |
 | `generate_daily_report` | 立即生成 Markdown 日报 |
 | `get_agent_settings` | 读取当前分析阈值和日报设置 |
+| `get_health_monitor` | 获取采集健康度和页面改版告警 |
+| `get_feedback_stats` | 获取用户反馈统计（有用率） |
+| `export_tasks` | 导出任务清单到剪贴板友好格式 |
+| `get_effectiveness` | 获取建议有效性评估报告 |
+| `track_suggestion` | 为任务保存指标快照用于效果追踪 |
 
 ## 项目结构
 
@@ -242,9 +247,24 @@ douyin-agent/
 - [x] 千川计划建议、库存预警、货架和直播漏斗分析
 - [x] 30 天本地历史、7 天趋势和运营任务闭环
 - [x] Markdown 每日经营报告与 MCP 接入
-- [ ] 字段适配健康检查和平台改版提醒
+- [x] 采集健康监控与页面改版提醒（v2.8.2）
+- [x] 建议效果闭环：任务快照 → 执行 → 自动对比评估（v2.8.2）
+- [x] 用户反馈机制：每条建议可标记有用/没用（v2.8.2）
+- [x] 任务一键导出到飞书/企微/钉钉格式（v2.8.2）
+- [x] Chromium 浏览器兼容：Chrome / Edge（v2.8.2）
+- [x] 安装向导与欢迎页（v2.8.2）
+- [x] 诊断置信度与误报修复：ROI 消耗门槛、质量分延迟判定、退款周期上下文（v2.8.2）
+- [x] 线程安全锁保护并发状态写入（v2.8.2）
+- [x] TTL 缓存优化高频分析接口性能（v2.8.2）
+- [x] 日报数据时间戳与过期警告（v2.8.2）
+- [x] Promise.allSettled 容错加载与骨架屏（v2.8.2）
+- [x] 无障碍改进：focus-visible、aria-live、aria-label（v2.8.2）
+- [x] 侧栏信息密度与键盘可用性优化（v2.8.2）
+- [x] 端口冲突检测与明确故障提示（v2.8.2）
+- [x] 磁盘空间监控与低空间预警（v2.8.2）
+- [x] Popup 弹窗快速经营指标摘要（v2.8.2）
+- [x] Bridge 健康状态监测（每 2 分钟检测）（v2.8.2）
 - [ ] 可配置的岗位工作台与任务模板
-- [ ] 调整前后自动复盘和建议效果评分
 - [ ] 在明确确认机制下提供半自动操作草稿，继续保持默认只读
 
 更完整的产品说明见 [PRODUCT.md](PRODUCT.md)。

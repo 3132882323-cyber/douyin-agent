@@ -1,9 +1,10 @@
-/** 店策 Agent - MV3 service worker */
+/** 店策 Agent - MV3 service worker (v2.8.2) */
 
 const BRIDGE_URL = "http://127.0.0.1:8765";
 const QIANCHUAN_ENTRY_URL = "https://qianchuan.jinritemai.com/";
 const ALARM_NAME = "dian-agent-sync";
 const FULL_SCAN_ALARM = "dian-agent-full-scan";
+const BRIDGE_HEALTH_ALARM = "dian-agent-bridge-health";
 const DEFAULT_SETTINGS = {
   autoSync: false,
   intervalMinutes: 5,
@@ -62,11 +63,15 @@ function mutateLocalStorage(keys, mutator) {
   return operation;
 }
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   const stored = await chrome.storage.local.get("settings");
   await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS, ...(stored.settings || {}), autoSync: false, autoFullScan: false } });
   await configureAlarm();
   await updateStatus("system", "扩展已就绪");
+  // Open welcome page on first install
+  if (details.reason === "install") {
+    chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
+  }
 });
 
 chrome.runtime.onStartup.addListener(configureAlarm);
@@ -74,6 +79,7 @@ chrome.runtime.onStartup.addListener(configureAlarm);
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) syncAll("scheduled");
   if (alarm.name === FULL_SCAN_ALARM) startFullScan("scheduled").catch(() => undefined);
+  if (alarm.name === BRIDGE_HEALTH_ALARM) checkBridge();
 });
 
 async function getSettings() {
@@ -85,6 +91,9 @@ async function configureAlarm() {
   const settings = await getSettings();
   await chrome.alarms.clear(ALARM_NAME);
   await chrome.alarms.clear(FULL_SCAN_ALARM);
+  // Always run bridge health check every 2 minutes for auto-recovery
+  await chrome.alarms.clear(BRIDGE_HEALTH_ALARM);
+  chrome.alarms.create(BRIDGE_HEALTH_ALARM, { delayInMinutes: 0.5, periodInMinutes: 2 });
   if (settings.autoSync) {
     chrome.alarms.create(ALARM_NAME, {
       delayInMinutes: 1,

@@ -46,6 +46,68 @@ DEFAULT_AGENT_SETTINGS = {
     "qianchuan_account_key": "",
 }
 
+# Thread-safe state mutation lock (prevents concurrent read-modify-write races)
+_state_lock = threading.Lock()
+
+# TTL cache for expensive analysis results (5-second window)
+_analysis_cache: dict[str, tuple[float, Any]] = {}
+_CACHE_TTL_SECONDS = 5
+
+
+def _cached(key: str, builder):
+    """Return cached result if fresh, else rebuild and cache."""
+    now = time.time()
+    entry = _analysis_cache.get(key)
+    if entry and (now - entry[0]) < _CACHE_TTL_SECONDS:
+        return entry[1]
+    result = builder()
+    _analysis_cache[key] = (now, result)
+    return result
+
+
+def _invalidate_cache() -> None:
+    """Clear all cached analysis results (call after data changes)."""
+    _analysis_cache.clear()
+
+
+def _schema_version_check() -> list[str]:
+    """Check if any on-disk snapshots have outdated schema versions."""
+    warnings: list[str] = []
+    current_version = 2
+    for source in ALLOWED_SOURCES:
+        source_dir = DATA_DIR / source
+        if not source_dir.exists():
+            continue
+        for path in source_dir.glob("*.json"):
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    inner = data.get("data", {})
+                    sv = int(inner.get("schema_version", 1) if isinstance(inner, dict) else 1)
+                    if sv < current_version:
+                        warnings.append(f"{source}/{path.stem} (schema v{sv})")
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+    return warnings[:10]
+
+
+def _disk_usage_check() -> dict[str, Any]:
+    """Check free disk space on the data directory's filesystem."""
+    import shutil
+    try:
+        usage = shutil.disk_usage(str(DATA_DIR))
+        free_mb = round(usage.free / (1024 * 1024), 1)
+        total_mb = round(usage.total / (1024 * 1024), 1)
+        return {
+            "free_mb": free_mb,
+            "total_mb": total_mb,
+            "used_percent": round((usage.used / usage.total) * 100, 1) if usage.total else 0,
+            "warning": free_mb < 100,  # warn if less than 100MB free
+        }
+    except OSError:
+        return {"free_mb": -1, "total_mb": 0, "used_percent": 0, "warning": False, "error": "无法读取磁盘信息"}
+
 
 def _now_label() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
@@ -99,9 +161,10 @@ def _remember_qianchuan_account(account: dict[str, Any]) -> None:
     if not SAFE_KEY.fullmatch(key):
         return
     label = str(account.get("label") or "千川账号").strip()[:80]
-    accounts = {str(item.get("key")): item for item in list_qianchuan_accounts() if isinstance(item, dict)}
-    accounts[key] = {"key": key, "label": label, "last_seen": _now_label()}
-    _atomic_json_write(_account_catalog_path(), {"accounts": sorted(accounts.values(), key=lambda item: item.get("last_seen", ""), reverse=True)})
+    with _state_lock:
+        accounts = {str(item.get("key")): item for item in list_qianchuan_accounts() if isinstance(item, dict)}
+        accounts[key] = {"key": key, "label": label, "last_seen": _now_label()}
+        _atomic_json_write(_account_catalog_path(), {"accounts": sorted(accounts.values(), key=lambda item: item.get("last_seen", ""), reverse=True)})
 
 
 def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -137,6 +200,13 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
     _atomic_json_write(DATA_DIR / f"{source}.json", payload)
     _save_history_point(payload)
     logger.info("已保存 %s/%s 快照（质量 %s）", source, page_type, normalized.get("quality", {}).get("score", "-"))
+    # Track selector health baseline for anomaly detection
+    quality = normalized.get("quality") or {}
+    if quality:
+        try:
+            update_health_baseline(source, page_type, quality)
+        except Exception:
+            logger.exception("更新健康基线失败: %s/%s", source, page_type)
     return payload
 
 
@@ -323,40 +393,60 @@ def build_insights() -> dict[str, Any]:
     catalog = list_snapshots()
     coverage = [{**item, "age_label": _age_label(item["age_seconds"])} for item in catalog]
     alerts: list[dict[str, Any]] = []
+    settings = load_agent_settings()
 
     for item in catalog:
         if not item["fresh"]:
             alerts.append(
                 {
                     "level": "warning",
+                    "confidence": "high",
                     "title": f"{item['source']}/{item['page_type']} 数据已过期",
                     "detail": f"最后更新于 {item['saved_at']}",
                     "action": "打开对应后台页面并点击“同步并诊断”。",
                     "evidence": item,
                 }
             )
+        # Quality < 25: skip if snapshot is very recent (< 2 min, page may still be loading)
         if item["quality_score"] < 25:
+            if item["age_seconds"] < 120:
+                continue  # likely still loading, suppress false positive
             alerts.append(
                 {
                     "level": "info",
+                    "confidence": "medium" if item["age_seconds"] < 300 else "high",
                     "title": f"{item['page_type']} 页面字段不足",
-                    "detail": "当前页面可能仍在加载，或页面结构已变化。",
+                    "detail": f"数据采于 {_age_label(item['age_seconds'])}，质量分 {item['quality_score']}。",
                     "action": "刷新页面后重新同步；若仍失败，请更新页面适配器。",
                     "evidence": item,
                 }
             )
 
     roi_metrics = _metric_matches("qianchuan", ("roi", "支付roi", "成交roi"))
+    min_spend = float(settings.get("min_spend_for_action", 100.0))
     for item, label, value in roi_metrics[:3]:
         roi = _parse_number(value)
         if roi is not None and roi < 1:
+            # Check if spend is above minimum threshold before alerting
+            snapshot = load_data("qianchuan", item["page_type"])
+            metrics = (snapshot or {}).get("data", {}).get("metrics", {})
+            best_spend = None
+            spend_label = ""
+            for spend_label, spend_val in (metrics or {}).items():
+                if any(keyword in str(spend_label) for keyword in ("消耗", "花费", "spend", "广告消耗")):
+                    best_spend = _parse_number(spend_val)
+                    if best_spend is not None:
+                        break
+            if best_spend is not None and best_spend < min_spend:
+                continue  # spend too low for ROI to be actionable
             alerts.append(
                 {
                     "level": "high",
+                    "confidence": "high" if (best_spend is not None and best_spend >= min_spend * 2) else "medium",
                     "title": f"千川 {label} 低于 1",
-                    "detail": f"当前页面显示 {label} = {value}。",
+                    "detail": f"当前 {label} = {value}" + (f"，消耗 {spend_label}" if best_spend is not None else "") + "。",
                     "action": "先核对统计周期和归因口径，再检查高消耗低成交计划；不要直接批量提价。",
-                    "evidence": {"source": "qianchuan", "page_type": item["page_type"], "label": label, "value": value},
+                    "evidence": {"source": "qianchuan", "page_type": item["page_type"], "label": label, "value": value, "spend": best_spend},
                 }
             )
 
@@ -364,11 +454,21 @@ def build_insights() -> dict[str, Any]:
     for item, label, value in refund_metrics[:3]:
         rate = _parse_number(value)
         if rate is not None and rate > 20:
+            # Include period context if available in snapshot
+            snapshot = load_data("doudian", item["page_type"])
+            period_info = ""
+            data = (snapshot or {}).get("data", {})
+            for key in ("date_range", "period", "stat_date", "time_range"):
+                period_val = data.get(key) or (data.get("safe_metrics") or {}).get(key)
+                if period_val:
+                    period_info = f"（统计周期: {period_val}）"
+                    break
             alerts.append(
                 {
                     "level": "warning",
+                    "confidence": "medium" if item["age_seconds"] > 3600 else "high",
                     "title": f"{label} 偏高",
-                    "detail": f"当前页面显示 {value}。",
+                    "detail": f"当前 {value}{period_info}。",
                     "action": "按商品和退款原因下钻，优先处理尺码、描述不符和质量类问题。",
                     "evidence": {"source": "doudian", "page_type": item["page_type"], "label": label, "value": value},
                 }
@@ -381,6 +481,7 @@ def build_insights() -> dict[str, Any]:
             alerts.append(
                 {
                     "level": "warning",
+                    "confidence": "high",
                     "title": "发现低库存指标",
                     "detail": f"{label} = {value}。",
                     "action": "核对在投商品库存，避免有消耗但无法持续成交。",
@@ -401,6 +502,7 @@ def build_insights() -> dict[str, Any]:
         alerts.append(
             {
                 "level": "info",
+                "confidence": "high",
                 "title": f"还有 {len(missing)} 类核心页面未同步",
                 "detail": "；".join(missing[:3]),
                 "action": "依次打开所需页面，每个页面只需同步一次即可进入本地目录。",
@@ -1042,10 +1144,327 @@ def update_task_state(task_id: str, status: str) -> dict[str, Any]:
         raise ValueError("invalid task_id")
     if status not in {"todo", "doing", "observing", "done"}:
         raise ValueError("invalid task status")
-    states = load_task_states()
-    states[task_id] = {"status": status, "updated_at": _now_label()}
-    _atomic_json_write(_task_states_path(), states)
+    with _state_lock:
+        states = load_task_states()
+        previous_status = states.get(task_id, {}).get("status")
+        states[task_id] = {"status": status, "updated_at": _now_label()}
+        _atomic_json_write(_task_states_path(), states)
+    # When task transitions to done, evaluate suggestion effectiveness
+    if status == "done" and previous_status != "done":
+        _evaluate_on_completion(task_id)
     return {"task_id": task_id, **states[task_id]}
+
+
+# ---------------------------------------------------------------------------
+# User feedback on suggestions (thumbs up / down)
+# ---------------------------------------------------------------------------
+
+def _feedback_path() -> Path:
+    return DATA_DIR / "feedback.json"
+
+
+def load_feedback() -> list[dict[str, Any]]:
+    path = _feedback_path()
+    if not path.exists():
+        return []
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def save_feedback(task_id: str, rating: str, comment: str = "", context: str = "") -> dict[str, Any]:
+    if rating not in {"up", "down"}:
+        raise ValueError("rating must be 'up' or 'down'")
+    with _state_lock:
+        feedback = load_feedback()
+        entry = {
+            "task_id": str(task_id or "")[:64],
+            "rating": rating,
+            "comment": str(comment or "")[:500],
+            "context": str(context or "")[:200],
+            "created_at": _now_label(),
+        }
+        feedback.append(entry)
+        _atomic_json_write(_feedback_path(), feedback[-2000:])
+    return entry
+
+
+def get_feedback_stats() -> dict[str, Any]:
+    feedback = load_feedback()
+    up = sum(1 for item in feedback if item.get("rating") == "up")
+    down = sum(1 for item in feedback if item.get("rating") == "down")
+    total = up + down
+    return {
+        "total": total,
+        "helpful": up,
+        "not_helpful": down,
+        "helpful_rate": round(up / total * 100, 1) if total else 0,
+        "recent": feedback[-10:],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Selector / collection health monitoring
+# ---------------------------------------------------------------------------
+
+def _health_baselines_path() -> Path:
+    return DATA_DIR / "health_baselines.json"
+
+
+def load_health_baselines() -> dict[str, Any]:
+    path = _health_baselines_path()
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def update_health_baseline(source: str, page_type: str, quality: dict[str, Any]) -> None:
+    key = f"{source}/{page_type}"
+    with _state_lock:
+        baselines = load_health_baselines()
+        current = baselines.get(key, {"samples": []})
+        samples = current.get("samples", [])
+        samples.append({
+            "quality_score": int(quality.get("score", 0) or 0),
+            "row_count": int(quality.get("row_count", 0) or 0),
+            "metric_count": int(quality.get("metric_count", 0) or 0),
+            "captured_at": int(time.time() * 1000),
+        })
+        # Keep last 30 samples per page
+        current["samples"] = samples[-30:]
+        if len(samples) >= 5:
+            avg_score = sum(s["quality_score"] for s in samples[-10:]) / min(len(samples), 10)
+            avg_rows = sum(s["row_count"] for s in samples[-10:]) / min(len(samples), 10)
+            avg_metrics = sum(s["metric_count"] for s in samples[-10:]) / min(len(samples), 10)
+            current["baseline"] = {
+                "avg_quality_score": round(avg_score, 1),
+                "avg_row_count": round(avg_rows, 1),
+                "avg_metric_count": round(avg_metrics, 1),
+                "sample_count": len(samples),
+            }
+        baselines[key] = current
+        _atomic_json_write(_health_baselines_path(), baselines)
+
+
+def check_selector_health() -> dict[str, Any]:
+    baselines = load_health_baselines()
+    alerts: list[dict[str, Any]] = []
+    snapshots = list_snapshots()
+    for item in snapshots:
+        key = f"{item['source']}/{item['page_type']}"
+        baseline = baselines.get(key, {}).get("baseline")
+        if not baseline or baseline.get("sample_count", 0) < 3:
+            continue
+        current_score = item.get("quality_score", 0)
+        avg_score = baseline.get("avg_quality_score", 0)
+        current_rows = item.get("quality_score", 0)  # Use quality score as proxy
+        avg_rows = baseline.get("avg_row_count", 0)
+        # Alert if quality dropped significantly
+        if avg_score > 30 and current_score < avg_score * 0.5:
+            alerts.append({
+                "level": "high",
+                "page": f"{item['source']}/{item['page_type']}",
+                "title": f"{item['page_type']} 采集质量异常下降",
+                "detail": f"当前质量分 {current_score}，历史均值 {avg_score:.0f}。页面结构可能已改版。",
+                "action": "请打开该页面检查字段是否正确识别，如需更新选择器请提交 Issue。",
+            })
+        elif avg_rows > 5 and item.get("row_count", 0) < avg_rows * 0.3:
+            alerts.append({
+                "level": "warning",
+                "page": f"{item['source']}/{item['page_type']}",
+                "title": f"{item['page_type']} 采集行数偏低",
+                "detail": f"当前 {item.get('row_count', 0)} 行，历史均值 {avg_rows:.0f} 行。可能是虚拟滚动未触发或列表缩短。",
+                "action": "刷新页面后重试；如仍偏低，平台可能调整了分页或列表结构。",
+            })
+    # Overall health score
+    total_pages = len(baselines)
+    healthy = sum(1 for key, value in baselines.items() if value.get("baseline", {}).get("sample_count", 0) >= 3)
+    return {
+        "generated_at": _now_label(),
+        "total_tracked_pages": total_pages,
+        "pages_with_baseline": healthy,
+        "alerts": alerts,
+        "baselines": {key: value.get("baseline", {}) for key, value in baselines.items()},
+        "mode": "read_only",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task export to clipboard-friendly formats
+# ---------------------------------------------------------------------------
+
+def export_tasks(fmt: str = "clipboard") -> dict[str, Any]:
+    ops = build_ops_manager()
+    tasks = ops.get("all_tasks", [])
+    today_label = time.strftime("%Y-%m-%d")
+    todo = [item for item in tasks if item.get("status") == "todo"]
+    doing = [item for item in tasks if item.get("status") == "doing"]
+    observing = [item for item in tasks if item.get("status") == "observing"]
+    done = [item for item in tasks if item.get("status") == "done"]
+    total = len(tasks)
+    completed = len(done)
+
+    if fmt == "markdown":
+        lines = [f"# 店策 Agent 任务清单 - {today_label}", "", f"共 {total} 项，已完成 {completed} 项", ""]
+        if todo:
+            lines.append("## 待处理")
+            lines.extend(f"- [{item['owner']}] {item['title']}：{item['action']}" for item in todo)
+        if doing:
+            lines.append("\n## 进行中")
+            lines.extend(f"- [{item['owner']}] {item['title']}：{item['action']}" for item in doing)
+        if observing:
+            lines.append("\n## 待观察")
+            lines.extend(f"- [{item['owner']}] {item['title']}" for item in observing)
+        if done:
+            lines.append("\n## 已完成")
+            lines.extend(f"- ~~[{item['owner']}] {item['title']}~~" for item in done)
+        return {"format": "markdown", "content": "\n".join(lines), "task_count": total}
+
+    # Default: plain text for clipboard (works in Feishu, WeChat Work, DingTalk)
+    lines = [f"店策 Agent 任务清单 {today_label}", f"共 {total} 项 | 已完成 {completed} 项", ""]
+    lines.append("【待处理】")
+    for item in todo:
+        lines.append(f"  [{item['owner']}] {item['title']}")
+        lines.append(f"    → {item['action']}")
+    lines.append("")
+    lines.append("【进行中】")
+    for item in doing:
+        lines.append(f"  [{item['owner']}] {item['title']}")
+    lines.append("")
+    lines.append("【待观察】")
+    for item in observing:
+        lines.append(f"  [{item['owner']}] {item['title']}")
+    lines.append("")
+    lines.append("【已完成】")
+    for item in done:
+        lines.append(f"  ✓ [{item['owner']}] {item['title']}")
+    return {"format": "clipboard", "content": "\n".join(lines), "task_count": total}
+
+
+# ---------------------------------------------------------------------------
+# Suggestion effectiveness tracking (close the loop)
+# ---------------------------------------------------------------------------
+
+def _suggestion_snapshots_path() -> Path:
+    return DATA_DIR / "suggestion_snapshots.json"
+
+
+def load_suggestion_snapshots() -> dict[str, Any]:
+    path = _suggestion_snapshots_path()
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_suggestion_snapshot(task_id: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    with _state_lock:
+        snapshots = load_suggestion_snapshots()
+        # Capture current metrics as baseline
+        metrics: dict[str, Any] = {}
+        for item in list_snapshots():
+            snapshot = load_data(item["source"], item["page_type"])
+            data = (snapshot or {}).get("data", {})
+            for key, value in (data.get("safe_metrics") or {}).items():
+                metrics[f"{item['source']}/{item['page_type']}/{key}"] = value
+        entry = {
+            "task_id": str(task_id or "")[:64],
+            "created_at": _now_label(),
+            "context": context or {},
+            "metrics_snapshot": metrics,
+            "evaluated": False,
+            "evaluation": None,
+        }
+        snapshots[str(task_id)] = entry
+        _atomic_json_write(_suggestion_snapshots_path(), snapshots)
+    return entry
+
+
+def _evaluate_on_completion(task_id: str) -> dict[str, Any] | None:
+    snapshots = load_suggestion_snapshots()
+    entry = snapshots.get(str(task_id))
+    if not entry or entry.get("evaluated"):
+        return None
+    old_metrics = entry.get("metrics_snapshot", {})
+    # Get current metrics
+    current_metrics: dict[str, Any] = {}
+    for item in list_snapshots():
+        snapshot = load_data(item["source"], item["page_type"])
+        data = (snapshot or {}).get("data", {})
+        for key, value in (data.get("safe_metrics") or {}).items():
+            current_metrics[f"{item['source']}/{item['page_type']}/{key}"] = value
+    # Compare key metrics
+    changes: list[dict[str, Any]] = []
+    for key, old_value in old_metrics.items():
+        new_value = current_metrics.get(key)
+        if new_value is None:
+            continue
+        old_num = _parse_number(old_value)
+        new_num = _parse_number(new_value)
+        if old_num is not None and new_num is not None and old_num != 0:
+            delta = new_num - old_num
+            delta_pct = delta / abs(old_num) * 100
+            changes.append({"metric": key.rsplit("/", 1)[-1], "old": old_num, "new": new_num, "delta": delta, "delta_percent": round(delta_pct, 1)})
+    # Judge each metric in its correct direction. Growth metrics improve when
+    # they rise; risk metrics such as refunds improve when they fall.
+    positive_metrics = ("成交", "roi", "ROI", "转化", "订单", "点击率", "gmv", "GMV")
+    negative_metrics = ("退款", "退货", "取消率", "投诉")
+    improvements = 0
+    degradations = 0
+    for change in changes:
+        metric = change["metric"]
+        delta = change["delta"]
+        if any(keyword in metric for keyword in positive_metrics):
+            improvements += int(delta > 0)
+            degradations += int(delta < 0)
+        elif any(keyword in metric for keyword in negative_metrics):
+            improvements += int(delta < 0)
+            degradations += int(delta > 0)
+    effective = improvements > degradations
+    entry["evaluated"] = True
+    entry["evaluation"] = {
+        "evaluated_at": _now_label(),
+        "effective": effective,
+        "improvements": improvements,
+        "degradations": degradations,
+        "changes": changes[:10],
+    }
+    snapshots[str(task_id)] = entry
+    _atomic_json_write(_suggestion_snapshots_path(), snapshots)
+    return entry
+
+
+def get_effectiveness_report() -> dict[str, Any]:
+    snapshots = load_suggestion_snapshots()
+    evaluated = [item for item in snapshots.values() if item.get("evaluated")]
+    effective = sum(1 for item in evaluated if item.get("evaluation", {}).get("effective"))
+    total = len(evaluated)
+    return {
+        "generated_at": _now_label(),
+        "total_tracked": len(snapshots),
+        "total_evaluated": total,
+        "effective_count": effective,
+        "effective_rate": round(effective / total * 100, 1) if total else 0,
+        "recent_evaluations": [
+            {
+                "task_id": item["task_id"],
+                "effective": item["evaluation"]["effective"],
+                "changes": item["evaluation"]["changes"][:5],
+                "evaluated_at": item["evaluation"]["evaluated_at"],
+            }
+            for item in evaluated[-10:]
+        ],
+        "mode": "read_only",
+    }
 
 
 def _scan_status_path() -> Path:
@@ -1127,12 +1546,43 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
     action_center = build_action_center()
     ops = build_ops_manager()
     scan = load_scan_status()
+    catalog = list_snapshots()
     report_path = _reports_dir() / f"{report_date}.md"
+
+    # Build staleness map: source/page_type -> saved_at and age
+    freshness_map: dict[str, dict[str, Any]] = {}
+    for item in catalog:
+        freshness_map[f"{item['source']}/{item['page_type']}"] = {
+            "saved_at": item.get("saved_at", ""),
+            "age_seconds": item.get("age_seconds", 0),
+            "fresh": item.get("fresh", False),
+        }
+
+    # Identify stale data sources (>1 hour)
+    stale_sources = [
+        f"{key} (更新于 {info['saved_at']})"
+        for key, info in freshness_map.items()
+        if info["age_seconds"] > 3600
+    ]
+
     lines = [
         f"# 店策 Agent 每日经营报告 - {report_date}",
         "",
         f"> 生成时间：{_now_label()}｜模式：只读建议",
         "",
+    ]
+
+    # Staleness warning section
+    if stale_sources:
+        lines.extend([
+            "⚠️ **数据时效提醒**：以下数据源超过 1 小时未更新，建议重新同步后再做决策：",
+            "",
+        ])
+        for src in stale_sources[:5]:
+            lines.append(f"- {src}")
+        lines.append("")
+
+    lines.extend([
         "## 今日结论",
         "",
         f"- {insights['headline']}",
@@ -1142,9 +1592,11 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
         "",
         "## 运营总管今日任务",
         "",
-    ]
+    ])
     for index, item in enumerate(ops["today_top_actions"][:8], 1):
-        lines.extend([f"{index}. **[{item['owner']}] {item['title']}**：{item['action']}", f"   - 依据：{item['evidence']}｜验收：{item['acceptance']}"])
+        source_key = item.get("source", "")
+        data_time = freshness_map.get(source_key, {}).get("saved_at", "未知")
+        lines.extend([f"{index}. **[{item['owner']}] {item['title']}**：{item['action']}", f"   - 依据：{item['evidence']}｜验收：{item['acceptance']}｜数据时间：{data_time}"])
     lines.extend(["", "## 货架运营", ""])
     for item in action_center["shelf_analysis"]["recommendations"]:
         lines.append(f"- **{item['title']}**：{item['action']}（{item['evidence']}）")
@@ -1162,8 +1614,9 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
     ])
     plans = action_center["plan_recommendations"]
     if plans:
+        qianchuan_time = freshness_map.get("qianchuan/report", freshness_map.get("qianchuan/campaigns", {})).get("saved_at", "未知")
         for index, item in enumerate(plans[:10], 1):
-            lines.extend([f"{index}. **{item['plan']}**：{item['suggestion']}", f"   - 依据：{item['reason']}"])
+            lines.extend([f"{index}. **{item['plan']}**：{item['suggestion']}", f"   - 依据：{item['reason']}｜数据时间：{qianchuan_time}"])
     else:
         lines.append("- 暂无可执行建议；请同步千川计划列表和报表页面。")
     lines.extend(["", "## 千川视频库与直播引流素材", ""])
@@ -1175,13 +1628,15 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
     lines.extend(["", "## 库存预警", ""])
     inventory = action_center["inventory_alerts"]
     if inventory:
+        doudian_time = freshness_map.get("doudian/products", {}).get("saved_at", "未知")
         for index, item in enumerate(inventory[:15], 1):
-            lines.append(f"{index}. **{item['product']}**：{item['title']}；{item['suggestion']}")
+            lines.append(f"{index}. **{item['product']}**：{item['title']}；{item['suggestion']}（数据时间：{doudian_time}）")
     else:
         lines.append("- 暂无库存预警，或尚未同步商品/库存页面。")
     lines.extend(["", "## 其他优先事项", ""])
     for index, item in enumerate(insights["alerts"][:8], 1):
-        lines.append(f"{index}. **{item['title']}**：{item.get('action') or item.get('detail') or ''}")
+        confidence_tag = f"[{item['confidence']}]" if item.get("confidence") else ""
+        lines.append(f"{index}. **{item['title']}** {confidence_tag}：{item.get('action') or item.get('detail') or ''}")
     lines.extend(
         [
             "",
@@ -1200,6 +1655,7 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
         "path": str(report_path),
         "headline": insights["headline"],
         "summary": action_center["summary"],
+        "stale_sources": stale_sources[:5],
         "content": "\n".join(lines),
     }
 
@@ -1250,14 +1706,14 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.7.0"
+    server_version = "DianAgent/2.8.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
 
     def _cors(self) -> None:
         origin = self.headers.get("Origin", "")
-        if origin.startswith("chrome-extension://"):
+        if origin.startswith("chrome-extension://") or origin.startswith("moz-extension://") or origin.startswith("safari-web-extension://"):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
 
@@ -1285,12 +1741,16 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed_url.query)
         if path == "/health":
             catalog = list_snapshots()
+            schema_warnings = _schema_version_check()
+            disk_info = _disk_usage_check()
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.7.0",
+                    "version": "2.8.2",
                     "mode": "read_only",
                     "snapshot_count": len(catalog),
+                    "schema_warnings": schema_warnings,
+                    "disk": disk_info,
                     "sources": {
                         source: {
                             "has_data": any(item["source"] == source for item in catalog),
@@ -1305,31 +1765,45 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"snapshots": list_snapshots()})
             return
         if path in {"/insights", "/brief"}:
-            self._json(build_insights())
+            self._json(_cached("insights", build_insights))
             return
         if path in {"/action-center", "/recommendations"}:
-            self._json(build_action_center())
+            self._json(_cached("action_center", build_action_center))
             return
         if path == "/shelf-analysis":
-            self._json(build_shelf_analysis())
+            self._json(_cached("shelf", build_shelf_analysis))
             return
         if path == "/live-analysis":
-            self._json(build_live_analysis())
+            self._json(_cached("live", build_live_analysis))
             return
         if path == "/qianchuan-creative-analysis":
-            self._json(build_qianchuan_creative_analysis())
+            self._json(_cached("creative", build_qianchuan_creative_analysis))
             return
         if path == "/qianchuan-accounts":
             self._json({"accounts": list_qianchuan_accounts(), "selected_account_key": load_agent_settings().get("qianchuan_account_key", "")})
             return
         if path == "/ops-manager":
-            self._json(build_ops_manager())
+            self._json(_cached("ops_manager", build_ops_manager))
             return
         if path == "/tasks":
-            self._json({"states": load_task_states(), "tasks": build_ops_manager()["all_tasks"]})
+            ops = _cached("ops_manager", build_ops_manager)
+            self._json({"states": load_task_states(), "tasks": ops["all_tasks"]})
             return
         if path == "/scan-status":
             self._json(load_scan_status())
+            return
+        if path == "/health-monitor":
+            self._json(check_selector_health())
+            return
+        if path == "/feedback":
+            self._json(get_feedback_stats())
+            return
+        if path.startswith("/tasks/export"):
+            fmt = query.get("format", ["clipboard"])[0]
+            self._json(export_tasks(fmt))
+            return
+        if path == "/effectiveness":
+            self._json(get_effectiveness_report())
             return
         if path == "/trends":
             self._json(build_trends(int(query.get("days", ["7"])[0]), query.get("source", [None])[0], query.get("page_type", [None])[0]))
@@ -1372,16 +1846,32 @@ class Handler(BaseHTTPRequestHandler):
                 source = payload.get("source")
                 data = payload.get("data")
                 saved = save_data(source, data)
+                _invalidate_cache()
                 self._json({"ok": True, "source": source, "page_type": saved["page_type"]})
                 return
             if path == "/settings":
-                self._json({"ok": True, "settings": save_agent_settings(payload)})
+                settings = save_agent_settings(payload)
+                _invalidate_cache()
+                self._json({"ok": True, "settings": settings})
                 return
             if path == "/reports/generate":
                 self._json({"ok": True, "report": generate_daily_report(payload.get("date"))})
                 return
             if path == "/tasks/update":
-                self._json({"ok": True, "task": update_task_state(str(payload.get("task_id") or ""), str(payload.get("status") or ""))})
+                task = update_task_state(str(payload.get("task_id") or ""), str(payload.get("status") or ""))
+                _invalidate_cache()
+                self._json({"ok": True, "task": task})
+                return
+            if path == "/tasks/track":
+                self._json({"ok": True, "snapshot": save_suggestion_snapshot(str(payload.get("task_id") or ""), payload.get("context"))})
+                return
+            if path == "/feedback":
+                self._json({"ok": True, "feedback": save_feedback(
+                    str(payload.get("task_id") or ""),
+                    str(payload.get("rating") or ""),
+                    str(payload.get("comment") or ""),
+                    str(payload.get("context") or ""),
+                )})
                 return
             if path == "/scan-status":
                 self._json({"ok": True, "scan": save_scan_status(payload)})
@@ -1392,7 +1882,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    # allow_reuse_address must be set before __init__ calls server_bind()
+    ThreadingHTTPServer.allow_reuse_address = True
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    except OSError as error:
+        logger.error(
+            "端口 %d 无法使用，扩展只能连接此端口。请关闭占用该端口的程序后重试：%s",
+            PORT,
+            error,
+        )
+        sys.exit(1)
     stop_event = threading.Event()
     scheduler = threading.Thread(target=_daily_report_scheduler, args=(stop_event,), daemon=True)
     scheduler.start()

@@ -1,3 +1,5 @@
+const BRIDGE_URL = "http://127.0.0.1:8765";
+
 const PAGE_LABELS = {
   overview: "经营概览",
   orders: "订单",
@@ -66,6 +68,40 @@ async function render() {
     ? `正在采集：${scan.current || "准备中"}`
     : scan.finished_at ? `上次成功 ${scan.success || 0} 页，失败 ${scan.failed || 0} 页` : "自动巡检核心经营页面，完成后生成诊断";
 
+  // Quick metrics from bridge
+  const qmSection = document.getElementById("quick-metrics");
+  if (dashboard.bridge?.ok) {
+    try {
+      const insights = await fetch(`${BRIDGE_URL}/insights`, { cache: "no-store" }).then((r) => r.json());
+      document.getElementById("qm-headline").textContent = insights.headline || "";
+      const strip = document.getElementById("qm-strip");
+      strip.innerHTML = "";
+      const coverageCount = insights.coverage?.length || 0;
+      const freshCount = (insights.coverage || []).filter((c) => c.fresh).length;
+      const alertCount = (insights.alerts || []).length;
+      const highAlerts = (insights.alerts || []).filter((a) => a.level === "high").length;
+      const cells = [
+        { label: "已同步", value: `${freshCount}/${coverageCount}` },
+        { label: "待处理", value: alertCount, highlight: highAlerts > 0 },
+      ];
+      cells.forEach(({ label, value, highlight }) => {
+        const div = document.createElement("div");
+        const strong = document.createElement("strong");
+        strong.textContent = String(value);
+        if (highlight) strong.style.color = "#b42318";
+        const small = document.createElement("small");
+        small.textContent = label;
+        div.append(strong, small);
+        strip.append(div);
+      });
+      qmSection.hidden = false;
+    } catch {
+      qmSection.hidden = true;
+    }
+  } else {
+    qmSection.hidden = true;
+  }
+
   const overall = document.getElementById("overall");
   const title = document.getElementById("overall-title");
   const detail = document.getElementById("overall-detail");
@@ -116,8 +152,13 @@ document.getElementById("full-scan-button").addEventListener("click", async (eve
 });
 
 document.getElementById("panel-button").addEventListener("click", async () => {
-  const currentWindow = await chrome.windows.getCurrent();
-  await chrome.sidePanel.open({ windowId: currentWindow.id });
+  try {
+    const currentWindow = await chrome.windows.getCurrent();
+    await chrome.sidePanel.open({ windowId: currentWindow.id });
+  } catch {
+    // Fallback for browsers without sidePanel: open in a new tab
+    chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel.html"), active: true });
+  }
   globalThis.close();
 });
 

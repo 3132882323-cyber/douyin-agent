@@ -11,6 +11,8 @@ let latestBrief = "";
 let currentRole = "运营总管";
 let currentOps = null;
 let scanPoller = null;
+let scanStartTime = 0;
+const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 let selectedQianchuanAccount = "";
 let accountSelectionRequired = false;
 
@@ -34,6 +36,15 @@ function renderConnection(ok, title, detail) {
 
 function renderFullScan(scan = {}) {
   const running = scan.status === "running";
+  // Track scan start time for timeout detection
+  if (running && !scanStartTime) scanStartTime = Date.now();
+  if (!running) scanStartTime = 0;
+  // Auto-cancel if scan exceeds timeout
+  if (running && scanStartTime && (Date.now() - scanStartTime > SCAN_TIMEOUT_MS)) {
+    chrome.runtime.sendMessage({ type: "cancel-full-scan" }).catch(() => undefined);
+    document.getElementById("scan-detail").textContent = `巡检超过 ${SCAN_TIMEOUT_MS / 60000} 分钟已自动停止，请检查页面状态后重试`;
+    return;
+  }
   const state = document.getElementById("scan-state");
   const labels = { idle: "未运行", running: "巡检中", completed: "已完成", partial: "部分完成", cancelled: "已停止", interrupted: "已中断", error: "失败" };
   state.textContent = labels[scan.status] || "未运行";
@@ -223,15 +234,41 @@ function taskCard(item) {
       : item.status === "observing" ? [["完成", "done"]] : [["重新打开", "todo"]];
     actions.append(statusLabel);
     transitions.forEach(([label, status]) => {
-      const button = document.createElement("button"); button.textContent = label;
+      const button = document.createElement("button"); button.textContent = label; button.setAttribute("aria-label", `${label}：${item.title || '任务'}`);
       button.addEventListener("click", async () => {
         button.disabled = true;
+        // When starting a task, save a suggestion snapshot for effectiveness tracking
+        if (status === "doing" && item.status === "todo") {
+          bridgeFetch("/tasks/track", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ task_id: item.id, context: { title: item.title, owner: item.owner } }) }).catch(() => undefined);
+        }
         await bridgeFetch("/tasks/update", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ task_id: item.id, status }) });
         await loadDashboard();
       });
       actions.append(button);
     });
     card.append(actions);
+    // Feedback buttons
+    const feedback = document.createElement("div"); feedback.className = "task-feedback";
+    const fbLabel = document.createElement("small"); fbLabel.textContent = "这条建议有用吗？";
+    const fbUp = document.createElement("button"); fbUp.className = "fb-btn"; fbUp.textContent = "\u{1F44D} \u6709\u7528"; fbUp.setAttribute("aria-label", `对"${item.title || '建议'}"点赞`);
+    const fbDown = document.createElement("button"); fbDown.className = "fb-btn"; fbDown.textContent = "\u{1F44E} \u6CA1\u7528"; fbDown.setAttribute("aria-label", `对"${item.title || '建议'}"点踩`);
+    const fbStatus = document.createElement("small"); fbStatus.className = "fb-status";
+    [fbUp, fbDown].forEach((btn, index) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await bridgeFetch("/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+            body: JSON.stringify({ task_id: item.id, rating: index === 0 ? "up" : "down", context: item.title || "" }),
+          });
+          fbStatus.textContent = "感谢反馈";
+          fbUp.disabled = true; fbDown.disabled = true;
+        } catch { fbStatus.textContent = "反馈失败"; btn.disabled = false; }
+      });
+    });
+    feedback.append(fbLabel, fbUp, fbDown, fbStatus);
+    card.append(feedback);
   }
   return card;
 }
@@ -364,10 +401,111 @@ function renderQianchuanAccounts(payload = {}) {
       : "当前页面模式不会校验账号；适合账号识别失败时直接读取。";
 }
 
+function renderHealthMonitor(health = {}) {
+  const alerts = health.alerts || [];
+  const container = document.getElementById("health-alerts");
+  const baselines = health.baselines || {};
+  const trackedCount = Object.keys(baselines).length;
+  document.getElementById("health-count").textContent = alerts.length ? `${alerts.length} 项异常` : `${trackedCount} 页已监测`;
+  if (!alerts.length) {
+    if (trackedCount > 0) {
+      container.className = "stack";
+      container.textContent = `已跟踪 ${trackedCount} 个页面采集质量，${health.pages_with_baseline || 0} 个已建立基线。当前无异常。`;
+    }
+    return;
+  }
+  container.className = "stack";
+  container.replaceChildren(...alerts.map((alert) => {
+    const card = document.createElement("article");
+    card.className = `alert-card ${alert.level || "info"}`;
+    const icon = document.createElement("div"); icon.className = "alert-icon";
+    icon.textContent = alert.level === "high" ? "!" : "△";
+    const body = document.createElement("div");
+    const title = document.createElement("strong"); title.textContent = alert.title;
+    const detail = document.createElement("p"); detail.textContent = alert.detail;
+    const action = document.createElement("small"); action.textContent = alert.action;
+    body.append(title, detail, action);
+    card.append(icon, body);
+    return card;
+  }));
+}
+
+function renderEffectiveness(report = {}) {
+  const rate = report.effective_rate;
+  const rateEl = document.getElementById("effectiveness-rate");
+  const container = document.getElementById("effectiveness-detail");
+  if (report.total_evaluated === 0) {
+    rateEl.textContent = "暂无数据";
+    container.className = "stack empty-state";
+    container.textContent = '完成任务（标记为“已完成”）后自动对比前后指标，评估建议有效性';
+    return;
+  }
+  rateEl.textContent = `${rate}% 有效`;
+  container.className = "stack";
+  const summary = document.createElement("p");
+  summary.textContent = `共评估 ${report.total_evaluated} 条已完成建议，其中 ${report.effective_count} 条有效（${rate}%）。`;
+  container.replaceChildren(summary);
+  const recent = report.recent_evaluations || [];
+  if (recent.length) {
+    const heading = document.createElement("small"); heading.textContent = "最近评估：";
+    container.append(heading);
+    recent.slice(0, 5).forEach((item) => {
+      const row = document.createElement("div"); row.className = "eval-row";
+      const tag = document.createElement("span");
+      tag.textContent = item.effective ? "有效" : "无效";
+      tag.className = `eval-tag ${item.effective ? "ok" : "warn"}`;
+      const detail = document.createElement("small");
+      const changes = (item.changes || []).slice(0, 2).map((change) => `${change.metric}: ${change.old}→${change.new}`).join(", ");
+      detail.textContent = changes || "指标变化不明显";
+      row.append(tag, detail);
+      container.append(row);
+    });
+  }
+}
+
 async function loadDashboard() {
-  const [insights, actionCenter, settings, ops, extensionResponse, trends, accounts] = await Promise.all([
-    bridgeFetch("/insights"), bridgeFetch("/action-center"), bridgeFetch("/settings"), bridgeFetch("/ops-manager"), chrome.runtime.sendMessage({ type: "get-dashboard" }), bridgeFetch("/trends?days=7"), bridgeFetch("/qianchuan-accounts"),
+  // Show loading skeleton
+  showLoadingSkeleton();
+  // Remember focus before re-render
+  const focusedEl = document.activeElement;
+  const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
+
+  const [
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR
+  ] = await Promise.allSettled([
+    bridgeFetch("/insights"),
+    bridgeFetch("/action-center"),
+    bridgeFetch("/settings"),
+    bridgeFetch("/ops-manager"),
+    chrome.runtime.sendMessage({ type: "get-dashboard" }),
+    bridgeFetch("/trends?days=7"),
+    bridgeFetch("/qianchuan-accounts"),
+    bridgeFetch("/health-monitor"),
+    bridgeFetch("/effectiveness"),
   ]);
+
+  const val = (r, fallback) => r.status === "fulfilled" ? r.value : fallback;
+  const insights = val(insightsR, { coverage: [], alerts: [], headline: "数据加载异常", summary: "部分模块连接失败，请稍后重试" });
+  const actionCenter = val(actionCenterR, { plan_recommendations: [], inventory_alerts: [], shelf_analysis: {}, live_analysis: {}, creative_analysis: {} });
+  const settings = val(settingsR, { roi_target: 1.5, min_spend_for_action: 100, low_inventory_threshold: 10, daily_report_time: "09:00", daily_report_enabled: true });
+  const ops = val(opsR, { all_tasks: [], today_top_actions: [] });
+  const extensionResponse = val(extensionR, {});
+  const trends = val(trendsR, {});
+  const accounts = val(accountsR, { accounts: [], selected_account_key: "" });
+  const health = val(healthR, {});
+  const effectiveness = val(effectivenessR, {});
+
+  // Hide loading skeleton
+  hideLoadingSkeleton();
+
+  // Check for total failure (insights failed = bridge likely down)
+  if (insightsR.status === "rejected") {
+    renderConnection(false, "本地 Agent 未启动", "首次使用请双击 bridge/enable_autostart.bat");
+    document.getElementById("headline").textContent = "暂时无法连接";
+    document.getElementById("summary").textContent = insightsR.reason?.message || "请确认本地服务已启动";
+    return;
+  }
+
   renderConnection(true, "本地 Agent 已连接", `已读取 ${insights.coverage?.length || 0} 类页面快照`);
   document.getElementById("headline").textContent = insights.headline || "经营数据已同步";
   document.getElementById("summary").textContent = insights.summary || "请查看下方建议。";
@@ -380,6 +518,15 @@ async function loadDashboard() {
   renderQianchuanAccounts(accounts);
   renderFullScan(extensionResponse?.dashboard?.fullScan || {});
   renderTrends(trends);
+  renderHealthMonitor(health);
+  renderEffectiveness(effectiveness);
+
+  // Restore focus if the focused element still exists
+  if (focusId) {
+    const restored = document.getElementById(focusId);
+    if (restored) restored.focus();
+  }
+
   latestBrief = [
     insights.headline, insights.summary,
     ...(ops.today_top_actions || []).slice(0, 8).map((item, index) => `总管 ${index + 1}. [${item.owner}] ${item.title}：${item.action}`),
@@ -387,6 +534,20 @@ async function loadDashboard() {
     ...(actionCenter.creative_analysis?.recommendations || []).slice(0, 5).map((item, index) => `素材 ${index + 1}. ${item.title}：${item.action}`),
     ...(actionCenter.inventory_alerts || []).slice(0, 5).map((item, index) => `库存 ${index + 1}. ${item.product}：${item.suggestion}`),
   ].filter(Boolean).join("\n");
+}
+
+function showLoadingSkeleton() {
+  const shell = document.querySelector(".panel-shell");
+  if (!shell || shell.querySelector(".loading-skeleton")) return;
+  const skeleton = document.createElement("div");
+  skeleton.className = "loading-skeleton";
+  skeleton.setAttribute("aria-label", "正在加载数据");
+  skeleton.innerHTML = '<div class="sk-bar"></div><div class="sk-bar short"></div><div class="sk-bar"></div>';
+  shell.insertBefore(skeleton, shell.children[2]);
+}
+
+function hideLoadingSkeleton() {
+  document.querySelectorAll(".loading-skeleton").forEach((el) => el.remove());
 }
 
 async function refreshAll(syncFirst = false) {
@@ -469,10 +630,37 @@ document.getElementById("role-nav").addEventListener("click", (event) => {
   if (currentOps) loadDashboard();
 });
 document.getElementById("copy-brief").addEventListener("click", async (event) => {
-  if (!latestBrief) return;
-  await navigator.clipboard.writeText(latestBrief);
-  event.currentTarget.textContent = "已复制";
-  setTimeout(() => { event.currentTarget.textContent = "复制简报"; }, 1200);
+  const button = event.currentTarget;
+  if (!latestBrief) {
+    button.textContent = "暂无简报内容";
+    setTimeout(() => { button.textContent = "复制简报"; }, 1500);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(latestBrief);
+    button.textContent = "已复制";
+  } catch {
+    button.textContent = "复制失败";
+  }
+  setTimeout(() => { button.textContent = "复制简报"; }, 1200);
+});
+document.getElementById("export-tasks").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "正在生成…";
+  try {
+    const result = await bridgeFetch("/tasks/export?format=clipboard");
+    if (result.content) {
+      await navigator.clipboard.writeText(result.content);
+      button.textContent = "已复制任务清单";
+    } else {
+      button.textContent = "无任务可导出";
+    }
+  } catch (error) {
+    button.textContent = "导出失败";
+  } finally {
+    setTimeout(() => { button.disabled = false; button.textContent = "导出任务"; }, 1500);
+  }
 });
 document.getElementById("save-settings").addEventListener("click", async () => {
   const status = document.getElementById("settings-status");
