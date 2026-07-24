@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>欢迎使用店策 Agent</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #17202f; line-height: 1.6; }
+      .container { max-width: 680px; margin: 0 auto; padding: 40px 24px; }
+      .hero { text-align: center; padding: 48px 24px; background: linear-gradient(145deg, #172554, #1d4ed8); border-radius: 20px; color: white; margin-bottom: 32px; }
+      .hero .brand { display: inline-grid; place-items: center; width: 72px; height: 72px; border-radius: 20px; background: rgba(255,255,255,.15); font-size: 32px; font-weight: 800; margin-bottom: 16px; }
+      .hero h1 { font-size: 28px; margin-bottom: 8px; }
+      .hero p { color: #bfdbfe; font-size: 14px; max-width: 480px; margin: 0 auto; }
+      .step { display: grid; grid-template-columns: 48px 1fr; gap: 16px; padding: 24px; margin-bottom: 16px; background: white; border: 1px solid #e4e7ec; border-radius: 16px; }
+      .step-num { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: #eef4ff; color: #2563eb; font-size: 20px; font-weight: 800; }
+      .step h3 { font-size: 16px; margin-bottom: 6px; }
+      .step p { color: #667085; font-size: 13px; }
+      .step code { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #f2f4f7; font-size: 12px; color: #344054; }
+      .step .action { margin-top: 10px; }
+      .step .action button { padding: 10px 20px; border: 0; border-radius: 10px; background: #2563eb; color: white; font-size: 13px; font-weight: 700; cursor: pointer; }
+      .step .action button:disabled { opacity: .5; cursor: wait; }
+      .step .action .status { margin-left: 12px; font-size: 12px; }
+      .check-list { margin-top: 12px; padding: 12px; border-radius: 10px; background: #f8fafc; }
+      .check-list li { list-style: none; padding: 4px 0; color: #475467; font-size: 12px; }
+      .check-list li::before { content: "¹3 "; color: #12b76a; font-weight: 700; }
+      .footer { text-align: center; padding: 32px; color: #98a2b3; font-size: 12px; }
+      .footer a { color: #2563eb; text-decoration: none; }
+      .browsers { display: flex; gap: 12px; justify-content: center; margin-top: 16px; }
+      .browsers span { padding: 6px 14px; border-radius: 999px; background: rgba(255,255,255,.12); font-size: 11px; color: #dbeafe; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="hero">
+        <div class="brand">策</div>
+        <h1>欢迎使用店策 Agent</h1>
+        <p>你的抖店和巨量千川经营副驾已安装成功。按照以下 3 步完成设置，即可开始使用。</p>
+        <div class="browsers">
+          <span>Chrome 116+</span><span>Edge</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <h3>启动本地 Agent</h3>
+          <p>本地 Agent 负责接收脱敏数据、生成建议和报告。首次使用需手动启动一次，之后会随系统自动启动。</p>
+          <div class="action">
+            <button id="check-bridge">检测本地 Agent</button>
+            <span id="bridge-status" class="status"></span>
+          </div>
+          <ul class="check-list" id="bridge-help" hidden>
+            <li>双击项目目录下的 bridge/enable_autostart.bat</li>
+            <li>启动后访问 http://127.0.0.1:8765/health 确认正常</li>
+          </ul>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <h3>登录抖店和千川</h3>
+          <p>在浏览器中打开并登录抖店和巨量千川后台。扩展只读取已登录页面的可见数据，不会保存账号密码。</p>
+          <div class="action">
+            <button id="open-doudian">打开抖店</button>
+            <button id="open-qianchuan" style="margin-left:8px;background:#475467;">打开千川</button>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <h3>固定扩展并首次巡查</h3>
+          <p>将店策 Agent 固定到工具栏，点击扩展图标 → 自动获取全店数据。系统会依次打开 18 个核心页面采集数据。</p>
+          <ul class="check-list">
+            <li>点击浏览器工具栏的拼图图标找到店策 Agent</li>
+            <li>点击图钉按钮将其固定在工具栏</li>
+            <li>点击扩展图标，点击自动获取全店数据</li>
+            <li>巡检完成后打开经营副驾侧边栏查看建议</li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer">
+        <p>店策 Agent v2.8.2 | 本地优先 | 默认只读 | MIT License</p>
+      </div>
+    </div>
+    <script src="welcome.js"></script>
+  </body>
+</html>

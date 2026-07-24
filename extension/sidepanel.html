@@ -11,11 +11,11 @@
       <header>
         <div class="brand-mark">策</div>
         <div><h1>店策 Agent</h1><p>运营总管 · 货架 · 直播 · 千川 · 库存</p></div>
-        <button id="refresh-button" class="icon-button" title="刷新">↻</button>
+        <button id="refresh-button" class="icon-button" title="刷新" aria-label="刷新数据">↻</button>
       </header>
 
-      <section id="connection" class="connection pending">
-        <span></span><div><strong>正在连接本地 Agent</strong><p>读取抖店与千川脱敏快照</p></div>
+      <section id="connection" class="connection pending" aria-live="polite">
+        <span aria-hidden="true"></span><div><strong>正在连接本地 Agent</strong><p>读取抖店与千川脱敏快照</p></div>
       </section>
 
       <section class="hero">
@@ -25,6 +25,7 @@
         <div class="hero-actions">
           <button id="sync-diagnose" class="primary">同步并诊断</button>
           <button id="copy-brief" class="secondary">复制简报</button>
+          <button id="export-tasks" class="secondary">导出任务</button>
         </div>
       </section>
 
@@ -36,12 +37,12 @@
         <button data-role="商品运营">商品</button>
       </nav>
 
-      <section class="scan-card">
+      <section class="scan-card" aria-label="全店自动巡检">
         <div class="scan-head">
           <div><strong>全店自动巡检</strong><p id="scan-detail">按清单自动打开页面并采集，不需要 API</p></div>
-          <span id="scan-state" class="scan-tag idle">未运行</span>
+          <span id="scan-state" class="scan-tag idle" aria-live="polite">未运行</span>
         </div>
-        <div class="scan-progress"><span id="scan-progress-bar"></span></div>
+        <div class="scan-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="scan-progress-bar"></span></div>
         <div class="scan-actions">
           <button id="full-scan-button">自动获取全店数据</button>
           <button id="retry-scan-button" hidden>重试失败页</button>
@@ -114,6 +115,20 @@
         <div class="section-heading"><h3>库存预警</h3><span id="inventory-count">0 项</span></div>
         <div id="inventory" class="stack empty-state">请先同步商品或库存页面</div>
       </section>
+
+      <details class="fold-card">
+        <summary>采集健康度 <span id="health-count">检测中</span></summary>
+        <section>
+        <div id="health-alerts" class="stack empty-state">积累足够数据后开始监测（至少 5 次巡查）</div>
+        </section>
+      </details>
+
+      <details class="fold-card">
+        <summary>建议有效性 <span id="effectiveness-rate">--</span></summary>
+        <section>
+        <div id="effectiveness-detail" class="stack empty-state">完成任务并开始积累效果评估</div>
+        </section>
+      </details>
 
       <details class="fold-card">
         <summary>其他提醒 <span id="alert-count">0 项</span></summary>
