@@ -1,15 +1,15 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.8.2-2563eb)](extension/manifest.json)
-[![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge-MV3-16a34a)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.9.0-2563eb)](extension/manifest.json)
+[![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
 
 **不申请开发者 API，也能把抖店和巨量千川网页数据变成运营每天真正能执行的任务。**
 
-店策 Agent 是一个本地优先、只读的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome 和 Edge。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
+店策 Agent 是一个本地优先、只读的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.8.2 Beta`。新增用户反馈机制、采集健康监控、任务导出、建议效果闭环和安装向导。本地 Agent 可随 Windows 登录自动启动；数据巡查仍仅由用户点击触发，不会每 5 分钟后台自动运行，也不会自动修改预算、库存或计划状态。
+> 当前版本：`v2.9.0 Beta`。新增现代浏览器版与多浏览器兼容版，支持侧栏能力检测和新标签页自动降级。本地 Agent 可随 Windows 登录自动启动；数据巡查仍仅由用户点击触发，不会每 5 分钟后台自动运行，也不会自动修改预算、库存或计划状态。
 
 ## 为什么做这个项目
 
@@ -115,12 +115,12 @@
 抖店 / 巨量千川 / 精选联盟已登录网页
                     │
                     ▼
-Chrome 扩展（手动巡查、采集、脱敏、状态、侧边栏）
+Chromium 扩展（手动巡查、采集、脱敏、状态、侧边栏/标签页）
                     │  仅 http://127.0.0.1:8765
                     ▼
 本地 Companion Service（快照、历史、任务、诊断、报告）
                     │
-                    ├── Chrome 经营副驾侧边栏
+                    ├── 经营副驾侧边栏或兼容模式标签页
                     └── MCP stdio（Codex / Claude Desktop / Cherry Studio 等）
 ```
 
@@ -137,15 +137,22 @@ cd douyin-agent
 
 ### 2. 安装浏览器扩展
 
-支持 Chrome 116+ 和新版 Edge。以 Chrome 为例，开发版需要“加载已解压的扩展程序”：
+项目提供两个浏览器包：
 
-1. 打开 `chrome://extensions/`（Edge 用 `edge://extensions/`）。
-2. 开启右上角“开发者模式”。
+- 现代浏览器版：Chrome 116+、Edge、360 极速浏览器 X，以及支持 `sidePanel` 的 Chromium 浏览器。
+- 多浏览器兼容版：360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等；经营工作台会在新标签页打开。
+
+Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-modern` 和 `dist/dian-agent-compatible`。随后：
+
+1. 打开浏览器的扩展管理页面。
+2. 开启“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
-4. 选择项目中的 `extension` 文件夹，不要选择仓库根目录或 ZIP 文件。
+4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-安装成功后，首次安装会自动打开欢迎页引导你完成设置。扩展详情应显示版本 `2.8.2`。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.9.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+
+完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
 ### 3. 启用本地 Agent 自动启动
 
@@ -159,11 +166,11 @@ bridge/enable_autostart.bat
 
 随后访问 <http://127.0.0.1:8765/health>。看到 `"status": "ok"` 即表示本地服务正常。需要临时手动启动时仍可运行 `bridge/start_bridge.bat`；需要关闭自动启动时运行 `bridge/disable_autostart.bat`。
 
-> 抖店和千川账号登录由 Chrome 官方登录页面及浏览器登录状态管理。本项目不会保存账号密码，也不会绕过验证码或平台风控。
+> 抖店和千川账号登录由平台官方登录页面及当前浏览器登录状态管理。本项目不会保存账号密码，也不会绕过验证码或平台风控。
 
 ### 4. 开始第一次巡查
 
-1. 在 Chrome 中登录抖店和巨量千川。
+1. 在已安装扩展的浏览器中登录抖店和巨量千川。
 2. 点击扩展图标，确认网页数据源与本地 Agent 状态正常。
 3. 点击“全店巡查”获取多页面数据；如果千川巡查失败，切换到目标千川页面，在经营副驾中选择“当前千川页面（不校验账号）”，再点击“读取当前千川页面”。
 4. 打开“经营副驾”，查看今日三件事、千川建议、库存风险和直播/货架分析。
@@ -221,7 +228,9 @@ bridge/enable_autostart.bat
 
 ```text
 douyin-agent/
-├── extension/          # Chrome Manifest V3 扩展、采集脚本和经营副驾 UI
+├── extension/          # Chromium Manifest V3 扩展、兼容清单、采集脚本和经营副驾 UI
+├── tools/              # 多浏览器扩展包生成脚本
+├── BROWSER_SUPPORT.md  # 浏览器支持矩阵与双核浏览器注意事项
 ├── bridge/             # 本地服务、MCP、分析规则、测试和自动启动脚本
 ├── build_extension.ps1 # Windows 扩展打包脚本
 ├── PRODUCT.md          # 产品范围、角色设计和路线图
@@ -264,6 +273,9 @@ douyin-agent/
 - [x] 磁盘空间监控与低空间预警（v2.8.2）
 - [x] Popup 弹窗快速经营指标摘要（v2.8.2）
 - [x] Bridge 健康状态监测（每 2 分钟检测）（v2.8.2）
+- [x] 双扩展包：现代侧栏版与多浏览器兼容版（v2.9.0）
+- [x] 360、QQ、搜狗、联想及其他 Chromium 浏览器标签页降级（v2.9.0）
+- [x] 浏览器能力检测与安装页模式提示（v2.9.0）
 - [ ] 可配置的岗位工作台与任务模板
 - [ ] 在明确确认机制下提供半自动操作草稿，继续保持默认只读
 

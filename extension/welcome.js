@@ -1,5 +1,12 @@
 const BRIDGE_URL = "http://127.0.0.1:8765";
 
+function showBrowserMode() {
+  const supportsSidePanel = Boolean(globalThis.chrome?.sidePanel?.open);
+  document.getElementById("runtime-mode").textContent = supportsSidePanel
+    ? "当前浏览器支持侧栏，经营副驾将在右侧打开。"
+    : "已启用兼容模式，经营工作台将在新标签页打开。";
+}
+
 async function checkBridge() {
   const button = document.getElementById("check-bridge");
   const status = document.getElementById("bridge-status");
@@ -37,4 +44,5 @@ document.getElementById("open-qianchuan").addEventListener(
   "click",
   () => openUrl("https://qianchuan.jinritemai.com/"),
 );
+showBrowserMode();
 setTimeout(checkBridge, 500);

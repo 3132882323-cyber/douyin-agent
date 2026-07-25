@@ -23,7 +23,7 @@
       .step .action .status { margin-left: 12px; font-size: 12px; }
       .check-list { margin-top: 12px; padding: 12px; border-radius: 10px; background: #f8fafc; }
       .check-list li { list-style: none; padding: 4px 0; color: #475467; font-size: 12px; }
-      .check-list li::before { content: "¹3 "; color: #12b76a; font-weight: 700; }
+      .check-list li::before { content: "\2713  "; color: #12b76a; font-weight: 700; }
       .footer { text-align: center; padding: 32px; color: #98a2b3; font-size: 12px; }
       .footer a { color: #2563eb; text-decoration: none; }
       .browsers { display: flex; gap: 12px; justify-content: center; margin-top: 16px; }
@@ -37,8 +37,9 @@
         <h1>欢迎使用店策 Agent</h1>
         <p>你的抖店和巨量千川经营副驾已安装成功。按照以下 3 步完成设置，即可开始使用。</p>
         <div class="browsers">
-          <span>Chrome 116+</span><span>Edge</span>
+          <span>Chrome</span><span>Edge</span><span>360</span><span>QQ 浏览器</span><span>更多 Chromium</span>
         </div>
+        <p id="runtime-mode"></p>
       </div>
       <div class="step">
         <div class="step-num">1</div>
@@ -80,7 +81,7 @@
         </div>
       </div>
       <div class="footer">
-        <p>店策 Agent v2.8.2 | 本地优先 | 默认只读 | MIT License</p>
+        <p>店策 Agent v2.9.0 | 本地优先 | 默认只读 | MIT License</p>
       </div>
     </div>
     <script src="welcome.js"></script>

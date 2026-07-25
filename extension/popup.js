@@ -122,11 +122,21 @@ async function render() {
   document.getElementById("last-sync").textContent = relativeTime(dashboard.lastSyncAttempt);
 }
 
-document.addEventListener("DOMContentLoaded", () => render().catch((error) => {
-  document.getElementById("overall-title").textContent = "状态读取失败";
-  document.getElementById("overall-detail").textContent = error.message;
-  document.getElementById("overall").className = "overall error";
-}));
+function configureWorkbenchMode() {
+  const supportsSidePanel = Boolean(globalThis.chrome?.sidePanel?.open);
+  document.getElementById("panel-button").textContent = supportsSidePanel ? "打开经营副驾" : "打开经营工作台";
+  document.getElementById("browser-mode").textContent = supportsSidePanel ? "侧栏模式 · 仅本机" : "兼容模式 · 新标签页";
+  document.body.dataset.workbenchMode = supportsSidePanel ? "side-panel" : "browser-tab";
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  configureWorkbenchMode();
+  render().catch((error) => {
+    document.getElementById("overall-title").textContent = "状态读取失败";
+    document.getElementById("overall-detail").textContent = error.message;
+    document.getElementById("overall").className = "overall error";
+  });
+});
 
 document.getElementById("sync-button").addEventListener("click", async (event) => {
   const button = event.currentTarget;
@@ -152,13 +162,17 @@ document.getElementById("full-scan-button").addEventListener("click", async (eve
 });
 
 document.getElementById("panel-button").addEventListener("click", async () => {
-  try {
+  if (globalThis.chrome?.sidePanel?.open) {
     const currentWindow = await chrome.windows.getCurrent();
-    await chrome.sidePanel.open({ windowId: currentWindow.id });
-  } catch {
-    // Fallback for browsers without sidePanel: open in a new tab
-    chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel.html"), active: true });
+    try {
+      await chrome.sidePanel.open({ windowId: currentWindow.id });
+      globalThis.close();
+      return;
+    } catch (_error) {
+      // Some Chromium derivatives expose the API but block the side panel UI.
+    }
   }
+  await chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel.html"), active: true });
   globalThis.close();
 });
 
