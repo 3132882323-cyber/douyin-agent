@@ -13,6 +13,115 @@ let currentOps = null;
 let scanPoller = null;
 let scanStartTime = 0;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+function appendCopyAction(card, params) {
+  if (!params) return;
+  const wrap = document.createElement("div");
+  wrap.className = "action-params-wrap";
+  const isDraft = Number(params.schema_version || 0) >= 1;
+  const change = params.change || {};
+  const target = params.target_ref || {};
+  const field = change.field ?? params.field;
+  const currentValue = change.current_value ?? params.current_value;
+  const targetValue = change.target_value ?? params.target_value;
+  const blockedReasons = Array.isArray(params.blocked_reasons) ? params.blocked_reasons : [];
+  if (isDraft) {
+    wrap.classList.add(params.can_confirm ? "confirmable" : "blocked");
+    if (params.state === "confirmed") wrap.classList.add("confirmed");
+  }
+  if (params.operation_label) {
+    const label = document.createElement("span");
+    label.className = "action-label";
+    label.textContent = params.operation_label;
+    wrap.append(label);
+  }
+  if (field && (currentValue != null || targetValue != null)) {
+    const strip = document.createElement("span");
+    strip.className = "action-param-strip";
+    const cur = currentValue != null ? String(currentValue) : "--";
+    const tgt = targetValue != null ? String(targetValue) : "--";
+    strip.textContent = field + "  " + cur + " → " + tgt;
+    wrap.append(strip);
+  }
+  if (isDraft) {
+    const identity = document.createElement("small");
+    identity.className = "action-identity";
+    const account = target.account_label || target.account_key || "账号未锁定";
+    const planId = target.id ? `计划 ID ${target.id}` : "缺少计划 ID";
+    identity.textContent = `${account} · ${planId}`;
+    wrap.append(identity);
+
+    const hint = document.createElement("small");
+    hint.className = "action-state-hint";
+    if (params.state === "confirmed") {
+      hint.textContent = "已确认方案，尚未执行任何千川操作";
+    } else if (params.state === "cancelled") {
+      hint.textContent = "本次确认已撤销，未执行千川操作";
+    } else if (blockedReasons.length) {
+      hint.textContent = blockedReasons.map((item) => item.message).filter(Boolean).slice(0, 2).join("；");
+    } else {
+      hint.textContent = "确认只会写入本地记录，不会自动提交千川";
+    }
+    wrap.append(hint);
+  }
+
+  const buttons = document.createElement("div");
+  buttons.className = "action-buttons";
+  if (params.copy_text) {
+    const btn = document.createElement("button");
+    btn.className = "copy-action-btn";
+    btn.textContent = "复制操作";
+    btn.setAttribute("aria-label", "复制: " + params.copy_text);
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(params.copy_text);
+        const original = btn.textContent;
+        btn.textContent = "已复制";
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1500);
+      } catch {
+        btn.textContent = "复制失败";
+      }
+    });
+    buttons.append(btn);
+  }
+  if (isDraft) {
+    const confirmButton = document.createElement("button");
+    confirmButton.className = "confirm-action-btn";
+    const confirmed = params.state === "confirmed";
+    const cancelled = params.state === "cancelled";
+    confirmButton.textContent = confirmed ? "撤销确认" : cancelled ? "已撤销" : params.can_confirm ? "确认方案" : "需补齐数据";
+    confirmButton.disabled = cancelled || (!confirmed && !params.can_confirm);
+    confirmButton.addEventListener("click", async () => {
+      confirmButton.disabled = true;
+      const hint = wrap.querySelector(".action-state-hint");
+      const isConfirmedNow = params.state === "confirmed";
+      try {
+        const response = await bridgeFetch(isConfirmedNow ? "/actions/cancel" : "/actions/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+          body: JSON.stringify(isConfirmedNow ? { action_id: params.action_id } : { action: params }),
+        });
+        params.state = response.action?.state || (isConfirmedNow ? "cancelled" : "confirmed");
+        if (hint) {
+          hint.textContent = params.state === "confirmed"
+            ? "已确认方案，尚未执行任何千川操作"
+            : "本次确认已撤销，未执行千川操作";
+        }
+        confirmButton.textContent = params.state === "confirmed" ? "撤销确认" : "已撤销";
+        confirmButton.disabled = params.state !== "confirmed";
+        wrap.classList.toggle("confirmed", params.state === "confirmed");
+      } catch (error) {
+        if (hint) hint.textContent = `确认失败：${error.message}`;
+        confirmButton.disabled = false;
+      }
+    });
+    buttons.append(confirmButton);
+  }
+  if (buttons.childElementCount) wrap.append(buttons);
+  card.append(wrap);
+}
+
 let selectedQianchuanAccount = "";
 let accountSelectionRequired = false;
 
@@ -106,6 +215,7 @@ function recommendationCard(item, kind) {
   const reason = document.createElement("small");
   reason.textContent = kind === "plan" ? item.reason || "" : item.title || "";
   card.append(top, suggestion, reason);
+  appendCopyAction(card, item.action_params);
   return card;
 }
 
@@ -170,7 +280,9 @@ function planWorkbenchCard(item) {
     }
   });
   actions.append(state, button);
-  card.append(top, diagnosis, steps, guardrail, actions);
+  card.append(top, diagnosis, steps, guardrail);
+  appendCopyAction(card, item.action_params);
+  card.append(actions);
   return card;
 }
 
@@ -202,6 +314,7 @@ function renderCreativeAnalysis(creative = {}) {
     plan: item.name,
     level: item.level,
     suggestion: item.suggestion,
+    action_params: item.action_params,
     reason: `${item.status} · 消耗 ${item.evidence?.spend == null ? "--" : item.evidence.spend} · ROI ${item.evidence?.roi == null ? "--" : item.evidence.roi}`,
   }, "plan")));
 }
@@ -224,6 +337,7 @@ function taskCard(item) {
   const acceptance = document.createElement("small"); acceptance.textContent = `完成标准：${item.acceptance || "人工核对完成"}`;
   detail.append(detailSummary, evidence, acceptance);
   card.append(meta, title, action, chips, detail);
+  appendCopyAction(card, item.action_params);
   if (item.id) {
     const actions = document.createElement("div"); actions.className = "task-actions";
     const statusLabel = document.createElement("span");

@@ -24,6 +24,8 @@ if BRIDGE_DIR not in sys.path:
 
 from http_receiver import (
     STALE_SECONDS,
+    _cached,
+    _invalidate_cache,
     build_action_center,
     build_insights,
     build_inventory_alerts,
@@ -33,7 +35,12 @@ from http_receiver import (
     build_qianchuan_creative_analysis,
     build_shelf_analysis,
     build_trends,
+    check_selector_health,
+    export_tasks,
     generate_daily_report,
+    get_action_audit,
+    get_effectiveness_report,
+    get_feedback_stats,
     list_snapshots,
     list_qianchuan_accounts,
     load_agent_settings,
@@ -99,8 +106,13 @@ TOOLS = [
     ),
     Tool(
         name="get_qianchuan_adjustments",
-        description="按计划明细生成千川预算、止损、素材优化和谨慎放量建议；只返回建议，不执行投放变更",
+        description="按计划明细生成带账号、计划 ID、当前值、目标值和安全校验的千川操作草稿；不执行投放变更",
         inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_qianchuan_action_audit",
+        description="读取用户在扩展中确认或撤销的千川操作方案记录；只读，不确认也不执行操作",
+        inputSchema={"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}, "required": []},
     ),
     Tool(
         name="get_qianchuan_creative_analysis",
@@ -172,6 +184,26 @@ TOOLS = [
         description="读取千川 ROI 目标、消耗判断门槛、库存阈值和每日定时报告设置",
         inputSchema={"type": "object", "properties": {}, "required": []},
     ),
+    Tool(
+        name="get_health_monitor",
+        description="对比历史基线检测数据异常波动，包括指标偏移、数据过期和页面质量下降",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_effectiveness_report",
+        description="查看已完成建议的实际效果评估报告，包括有效率和改进统计",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_feedback_stats",
+        description="查看用户对建议的点赞/点踩统计，用于了解哪些建议类型更受欢迎",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="export_tasks",
+        description="将今日运营任务导出为结构化文本，支持 clipboard 和 markdown 格式",
+        inputSchema={"type": "object", "properties": {"format": {"type": "string", "enum": ["clipboard", "markdown"], "default": "clipboard"}}, "required": []},
+    ),
 ]
 
 
@@ -217,7 +249,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return _text(
             {
                 "status": "ok",
-                "mode": "read_only",
+                "mode": "proposal_only",
+                "execution_enabled": False,
                 "snapshot_count": len(snapshots),
                 "fresh_count": sum(1 for item in snapshots if item["fresh"]),
                 "sources": {
@@ -231,10 +264,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         )
 
     if name == "get_qianchuan_adjustments":
-        return _text({"recommendations": build_plan_recommendations(), "mode": "read_only"})
+        return _text({"recommendations": _cached("plan_recs", build_plan_recommendations), "mode": "proposal_only", "execution_enabled": False})
+
+    if name == "get_qianchuan_action_audit":
+        return _text(get_action_audit(int(arguments.get("limit") or 100)))
 
     if name == "get_qianchuan_creative_analysis":
-        return _text(build_qianchuan_creative_analysis())
+        return _text(_cached("creative_analysis", build_qianchuan_creative_analysis))
 
     if name == "get_qianchuan_accounts":
         return _text({"accounts": list_qianchuan_accounts(), "selected_account_key": load_agent_settings().get("qianchuan_account_key", "")})
@@ -246,7 +282,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return _text({"settings": save_agent_settings({"qianchuan_account_key": key})})
 
     if name == "get_inventory_alerts":
-        return _text({"alerts": build_inventory_alerts(), "mode": "read_only"})
+        return _text({"alerts": _cached("inv_alerts", build_inventory_alerts), "mode": "read_only"})
 
     if name == "get_action_center":
         return _text(build_action_center())
@@ -258,10 +294,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return _text(build_live_analysis())
 
     if name == "get_ops_manager":
-        return _text(build_ops_manager())
+        return _text(_cached("ops_manager", build_ops_manager))
 
     if name == "update_operation_task":
-        return _text(update_task_state(str(arguments.get("task_id") or ""), str(arguments.get("status") or "")))
+        result = update_task_state(str(arguments.get("task_id") or ""), str(arguments.get("status") or ""))
+        _invalidate_cache()
+        return _text(result)
 
     if name == "get_auto_scan_status":
         return _text(load_scan_status())
@@ -277,6 +315,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     if name == "get_agent_settings":
         return _text(load_agent_settings())
+
+    if name == "get_health_monitor":
+        return _text(check_selector_health())
+
+    if name == "get_effectiveness_report":
+        return _text(get_effectiveness_report())
+
+    if name == "get_feedback_stats":
+        return _text(get_feedback_stats())
+
+    if name == "export_tasks":
+        fmt = str(arguments.get("format") or "clipboard")
+        return _text(export_tasks(fmt))
 
     return _text({"error": f"未知工具: {name}"})
 

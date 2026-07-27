@@ -106,6 +106,64 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(plan_b["action_type"], "scale_cautiously")
         self.assertIn("10%–15%", plan_b["adjustment_range"])
 
+    def test_qianchuan_budget_draft_requires_identity_and_supports_local_audit(self) -> None:
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": int(time.time() * 1000),
+                "account": {"key": "acct_safe1234", "label": "主投放账号", "confidence": "high"},
+                "quality": {"score": 90, "metric_count": 0, "row_count": 1},
+                "tables": [
+                    {
+                        "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                        "rows": [["plan_987654", "夏季直播计划", "500", "300", "0.60", "2"]],
+                    }
+                ],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_safe1234"})
+        item = http_receiver.build_plan_recommendations()[0]
+        draft = item["action_params"]
+        self.assertTrue(draft["can_confirm"])
+        self.assertFalse(draft["can_execute"])
+        self.assertEqual(draft["target_ref"]["id"], "plan_987654")
+        self.assertEqual(draft["change"]["target_value"], 400)
+
+        confirmed = http_receiver.confirm_action_draft(draft)
+        self.assertEqual(confirmed["state"], "confirmed")
+        self.assertFalse(http_receiver.get_action_audit()["execution_enabled"])
+        self.assertEqual(http_receiver.get_action_audit()["summary"]["executed"], 0)
+        self.assertEqual(http_receiver.confirm_action_draft(draft)["action_id"], confirmed["action_id"])
+
+        cancelled = http_receiver.cancel_confirmed_action(confirmed["action_id"])
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertEqual(http_receiver.get_action_audit()["summary"]["cancelled"], 1)
+
+    def test_missing_budget_stays_blocked_and_never_falls_back_to_pause(self) -> None:
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": int(time.time() * 1000),
+                "account": {"key": "acct_safe1234", "label": "主投放账号"},
+                "quality": {"score": 90, "row_count": 1},
+                "tables": [
+                    {
+                        "headers": ["计划ID", "计划名称", "消耗", "支付 ROI", "成交订单"],
+                        "rows": [["plan_987654", "无预算字段计划", "300", "0", "0"]],
+                    }
+                ],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_safe1234"})
+        draft = http_receiver.build_plan_recommendations()[0]["action_params"]
+        self.assertEqual(draft["operation_type"], "adjust_budget")
+        self.assertFalse(draft["can_confirm"])
+        self.assertIn("CURRENT_VALUE_MISSING", {item["code"] for item in draft["blocked_reasons"]})
+
     def test_inventory_alert_uses_days_of_cover(self) -> None:
         http_receiver.save_data(
             "doudian",
@@ -281,6 +339,59 @@ class SnapshotStoreTests(unittest.TestCase):
 
             catalog = json.loads(urllib.request.urlopen(f"{base_url}/catalog").read())
             self.assertEqual(catalog["snapshots"][0]["page_type"], "overview")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_http_action_confirmation_records_but_never_executes(self) -> None:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), http_receiver.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        now_ms = int(time.time() * 1000)
+        draft = http_receiver.build_action_draft(
+            operation_type="adjust_budget",
+            operation_label="降低预算 20%",
+            target_kind="qianchuan_plan",
+            target_id="plan_123456",
+            target_name="接口测试计划",
+            account_key="acct_safe1234",
+            account_label="测试账号",
+            field="预算",
+            current_value=500,
+            target_value=400,
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=now_ms,
+            quality_score=90,
+            confidence="high",
+            now_ms=now_ms,
+        )
+
+        def post(path: str, payload: dict) -> dict:
+            response = urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{base_url}{path}",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-Dian-Agent": "2"},
+                    method="POST",
+                )
+            )
+            return json.loads(response.read())
+
+        try:
+            confirmed = post("/actions/confirm", {"action": draft})
+            self.assertTrue(confirmed["ok"])
+            self.assertFalse(confirmed["executed"])
+            self.assertFalse(confirmed["execution_enabled"])
+            audit = json.loads(urllib.request.urlopen(f"{base_url}/actions/audit").read())
+            self.assertEqual(audit["summary"]["confirmed"], 1)
+            self.assertEqual(audit["summary"]["executed"], 0)
+
+            cancelled = post("/actions/cancel", {"action_id": draft["action_id"]})
+            self.assertEqual(cancelled["action"]["state"], "cancelled")
+            self.assertFalse(cancelled["executed"])
         finally:
             server.shutdown()
             server.server_close()

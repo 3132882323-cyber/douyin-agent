@@ -1,0 +1,91 @@
+import unittest
+
+from action_protocol import build_action_draft, transition_action, validate_action_draft
+
+
+class ActionProtocolTests(unittest.TestCase):
+    def _draft(self, **overrides):
+        values = {
+            "operation_type": "adjust_budget",
+            "operation_label": "降低预算 20%",
+            "target_kind": "qianchuan_plan",
+            "target_id": "plan-123",
+            "target_name": "测试计划",
+            "account_key": "account-1",
+            "account_label": "主账户",
+            "field": "预算",
+            "current_value": 500.0,
+            "target_value": 400.0,
+            "source": "qianchuan",
+            "page_type": "campaigns",
+            "captured_at_ms": 1_000_000,
+            "quality_score": 90,
+            "confidence": "high",
+            "evidence": {"spend": 200, "roi": 0.8},
+            "copy_text": "测试计划 | 预算 500 → 400",
+            "now_ms": 1_001_000,
+        }
+        values.update(overrides)
+        return build_action_draft(**values)
+
+    def test_valid_budget_reduction_can_be_confirmed_but_not_executed(self):
+        draft = self._draft()
+        self.assertTrue(draft["can_confirm"])
+        self.assertFalse(draft["can_execute"])
+        self.assertFalse(draft["policy"]["execution_enabled"])
+        self.assertEqual([], validate_action_draft(draft, now_ms=1_001_000))
+
+    def test_missing_budget_never_becomes_pause(self):
+        draft = self._draft(current_value=None, target_value=None)
+        self.assertEqual("adjust_budget", draft["operation_type"])
+        self.assertFalse(draft["can_confirm"])
+        self.assertIn("CURRENT_VALUE_MISSING", {item["code"] for item in draft["blocked_reasons"]})
+
+    def test_missing_account_or_plan_id_blocks_confirmation(self):
+        draft = self._draft(account_key="", target_id="")
+        codes = {item["code"] for item in draft["blocked_reasons"]}
+        self.assertIn("ACCOUNT_NOT_LOCKED", codes)
+        self.assertIn("TARGET_ID_MISSING", codes)
+        self.assertFalse(draft["can_confirm"])
+
+    def test_stale_or_low_quality_data_blocks_confirmation(self):
+        draft = self._draft(captured_at_ms=1, now_ms=700_000, quality_score=60)
+        codes = {item["code"] for item in draft["blocked_reasons"]}
+        self.assertIn("DATA_STALE", codes)
+        self.assertIn("DATA_QUALITY_LOW", codes)
+
+    def test_change_limits_are_enforced(self):
+        increase = self._draft(target_value=600)
+        decrease = self._draft(target_value=300)
+        self.assertIn("INCREASE_LIMIT_EXCEEDED", {item["code"] for item in increase["blocked_reasons"]})
+        self.assertIn("DECREASE_LIMIT_EXCEEDED", {item["code"] for item in decrease["blocked_reasons"]})
+
+    def test_integrity_change_is_detected(self):
+        draft = self._draft()
+        draft["change"]["target_value"] = 300
+        self.assertIn("INTEGRITY_CHECK_FAILED", {item["code"] for item in validate_action_draft(draft, now_ms=1_001_000)})
+
+    def test_safety_policy_tampering_is_detected(self):
+        draft = self._draft()
+        draft["policy"]["execution_enabled"] = True
+        draft["blocked_reasons"] = []
+        self.assertIn("INTEGRITY_CHECK_FAILED", {item["code"] for item in validate_action_draft(draft, now_ms=1_001_000)})
+
+    def test_same_snapshot_and_parameters_keep_stable_action_id(self):
+        first = self._draft(now_ms=1_001_000)
+        second = self._draft(now_ms=1_002_000)
+        self.assertEqual(first["action_id"], second["action_id"])
+
+    def test_action_id_tampering_is_detected(self):
+        draft = self._draft()
+        draft["action_id"] = "0" * 24
+        self.assertIn("ACTION_ID_MISMATCH", {item["code"] for item in validate_action_draft(draft, now_ms=1_001_000)})
+
+    def test_execution_transition_is_disabled(self):
+        confirmed = transition_action(self._draft(), "confirmed")
+        with self.assertRaisesRegex(ValueError, "execution is disabled"):
+            transition_action(confirmed, "executing")
+
+
+if __name__ == "__main__":
+    unittest.main()
