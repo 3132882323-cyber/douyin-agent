@@ -10,9 +10,136 @@ const LABELS = {
 let latestBrief = "";
 let currentRole = "运营总管";
 let currentOps = null;
+let currentOperationsContext = null;
 let scanPoller = null;
 let scanStartTime = 0;
+let workbenchScene = "daily";
+let templateChecks = {};
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+const ROLE_WORKBENCH = {
+  "运营总管": {
+    title: "运营总管工作台",
+    description: "跨岗位查看风险、待确认动作和今日验收结果",
+    tasks: [
+      ["assign_top_actions", "确认今日三件事", "每项任务明确负责人、截止时间和验收指标"],
+      ["review_pending_actions", "审核待确认投放方案", "账号、计划、当前值和目标值均已核对"],
+      ["close_daily_loop", "检查昨日任务结果", "已完成、待观察和无效建议都有结论"],
+    ],
+  },
+  "货架运营": {
+    title: "货架运营工作台",
+    description: "聚焦曝光、点击、成交和商品承接问题",
+    tasks: [
+      ["shelf_funnel", "核对货架漏斗", "定位曝光、点击或成交环节的最大损失"],
+      ["shelf_assets", "检查主图与标题", "高曝光低点击商品已建立优化任务"],
+      ["shelf_search", "检查搜索和推荐卡", "潜力商品的搜索词与推荐卡状态已核对"],
+    ],
+  },
+  "直播运营": {
+    title: "直播运营工作台",
+    description: "围绕进房、商品点击、成交和直播承接执行",
+    tasks: [
+      ["live_funnel", "核对直播漏斗", "进房、商品点击和成交瓶颈已定位"],
+      ["live_script", "检查话术和商品顺序", "开场钩子、主推品和利益点已经确认"],
+      ["live_review", "记录异常时间点", "流量或转化异常已关联到对应直播时段"],
+    ],
+  },
+  "投放运营": {
+    title: "千川投手工作台",
+    description: "只处理止损、观察、换素材和具备条件的放量计划",
+    tasks: [
+      ["ad_account", "锁定千川账号与日期", "账号、统计周期和归因口径已核对"],
+      ["ad_risk", "处理高消耗低转化计划", "每项调整都有依据、幅度和观察窗口"],
+      ["ad_creative", "检查计划与素材表现", "衰退素材和待测素材已进入测试清单"],
+    ],
+  },
+  "商品运营": {
+    title: "商品运营工作台",
+    description: "优先处理断货风险、可售天数和投放库存冲突",
+    tasks: [
+      ["stock_risk", "检查缺货与极低库存", "高风险 SKU 已补货或限制流量"],
+      ["stock_cover", "核对预计可售天数", "直播主推品和放量品库存满足计划"],
+      ["stock_sync", "同步投放与库存动作", "缺货商品没有继续扩大千川消耗"],
+    ],
+  },
+};
+
+const SCENE_WORKBENCH = {
+  daily: {
+    label: "日常经营",
+    intro: "完成固定检查，再处理系统诊断出的异常任务。",
+    task: ["scene_daily_data", "先确认数据体检单", "失败页已重试，低质量数据已经人工复核"],
+  },
+  pre_live: {
+    label: "开播前",
+    intro: "开播前先锁定商品、库存、素材和投放边界。",
+    task: ["scene_pre_live", "完成开播前联检", "主推品、库存、素材、预算和直播目标一致"],
+  },
+  live: {
+    label: "直播中",
+    intro: "直播中只看实时异常和已经授权的单步动作。",
+    task: ["scene_live", "检查实时漏斗异常", "异常时段、影响范围和下一次复查时间已记录"],
+  },
+  post_live: {
+    label: "下播复盘",
+    intro: "下播后同步最新数据，复盘调整效果并沉淀下一场任务。",
+    task: ["scene_post_live", "完成下播数据复盘", "流量、点击、成交、ROI 和库存变化已有结论"],
+  },
+};
+
+function localDateKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function workbenchTasks() {
+  const role = ROLE_WORKBENCH[currentRole] || ROLE_WORKBENCH["运营总管"];
+  const scene = SCENE_WORKBENCH[workbenchScene] || SCENE_WORKBENCH.daily;
+  return [scene.task, ...role.tasks.slice(0, 2)].map(([id, title, acceptance]) => ({ id, title, acceptance }));
+}
+
+function templateCheckKey(taskId) {
+  return `${localDateKey()}:${workbenchScene}:${currentRole}:${taskId}`;
+}
+
+function renderWorkbench() {
+  const role = ROLE_WORKBENCH[currentRole] || ROLE_WORKBENCH["运营总管"];
+  const scene = SCENE_WORKBENCH[workbenchScene] || SCENE_WORKBENCH.daily;
+  document.getElementById("workbench-title").textContent = role.title;
+  document.getElementById("workbench-description").textContent = role.description;
+  document.getElementById("workbench-scene").value = workbenchScene;
+  document.getElementById("template-heading").textContent = `${scene.label} · 标准动作`;
+  document.getElementById("template-intro").textContent = scene.intro;
+
+  const tasks = workbenchTasks();
+  const completed = tasks.filter((item) => templateChecks[templateCheckKey(item.id)]).length;
+  document.getElementById("template-progress").textContent = `${completed}/${tasks.length}`;
+  const container = document.getElementById("template-tasks");
+  container.replaceChildren(...tasks.map((item) => {
+    const done = Boolean(templateChecks[templateCheckKey(item.id)]);
+    const card = document.createElement("article");
+    card.className = `template-task${done ? " done" : ""}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = done ? "✓" : "○";
+    button.setAttribute("aria-label", done ? `重新打开：${item.title}` : `完成：${item.title}`);
+    const body = document.createElement("div");
+    const title = document.createElement("strong"); title.textContent = item.title;
+    const acceptance = document.createElement("p"); acceptance.textContent = `验收：${item.acceptance}`;
+    body.append(title, acceptance);
+    button.addEventListener("click", async () => {
+      const key = templateCheckKey(item.id);
+      templateChecks[key] = !templateChecks[key];
+      const today = `${localDateKey()}:`;
+      templateChecks = Object.fromEntries(Object.entries(templateChecks).filter(([storedKey]) => storedKey.startsWith(today)));
+      await chrome.storage.local.set({ templateChecks });
+      renderWorkbench();
+    });
+    card.append(button, body);
+    return card;
+  }));
+}
 
 function appendCopyAction(card, params) {
   if (!params) return;
@@ -143,6 +270,124 @@ function renderConnection(ok, title, detail) {
   element.querySelector("p").textContent = detail;
 }
 
+function scanReceiptFromStatus(scan = {}) {
+  const results = (scan.results || []).filter((item) => item && typeof item === "object").map((item) => {
+    const score = Math.max(0, Math.min(100, Number(item.quality?.score || 0)));
+    return {
+      ...item,
+      source: item.source || (String(item.id || "").startsWith("qianchuan") ? "qianchuan" : "doudian"),
+      quality_score: score,
+      metric_count: Number(item.quality?.metric_count || 0),
+      row_count: Number(item.quality?.row_count || 0),
+      needs_review: Boolean(item.ok) && score < 70,
+    };
+  });
+  const total = Math.max(Number(scan.total || 0), results.length);
+  const success = results.filter((item) => item.ok).length;
+  const failed = results.filter((item) => !item.ok).length;
+  const needsReview = results.filter((item) => item.needs_review).length;
+  const coverageRate = total ? Math.round(results.length / total * 100) : 0;
+  const running = scan.status === "running";
+  const ready = scan.status === "completed" && coverageRate === 100 && failed === 0 && needsReview === 0;
+  return {
+    scan_status: scan.status || "idle",
+    readiness: running ? "running" : ready ? "ready" : results.length ? "attention" : "empty",
+    readiness_label: running ? "正在采集" : ready ? "数据可用于分析" : results.length ? "需要补采或复核" : "等待巡查",
+    account_label: results.find((item) => item.account_label)?.account_label || "",
+    finished_at: Number(scan.finished_at || 0),
+    summary: {
+      total,
+      completed: results.length,
+      success,
+      failed,
+      needs_review: needsReview,
+      coverage_rate: coverageRate,
+      row_count: results.reduce((sum, item) => sum + item.row_count, 0),
+    },
+    warnings: [
+      failed ? `${failed} 个页面读取失败，可在下方单独重试。` : "",
+      needsReview ? `${needsReview} 个页面质量分低于 70，相关建议需要人工复核。` : "",
+      total && results.length < total && !running ? `巡查仅覆盖 ${results.length}/${total} 个页面。` : "",
+    ].filter(Boolean),
+    results,
+  };
+}
+
+function renderScanReceipt(receipt = {}) {
+  const state = document.getElementById("scan-receipt-state");
+  state.textContent = receipt.readiness_label || "等待巡查";
+  state.className = receipt.readiness || "";
+  const card = document.getElementById("scan-receipt-card");
+  if (receipt.readiness === "attention") card.open = true;
+
+  const summary = receipt.summary || {};
+  const metrics = [
+    ["覆盖率", `${summary.coverage_rate || 0}%`],
+    ["成功页面", `${summary.success || 0}/${summary.total || 0}`],
+    ["需复核", summary.needs_review || 0],
+    ["读取行数", summary.row_count || 0],
+  ];
+  const summaryContainer = document.getElementById("scan-receipt-summary");
+  summaryContainer.replaceChildren(...metrics.map(([label, value]) => {
+    const cell = document.createElement("div");
+    const strong = document.createElement("strong"); strong.textContent = String(value);
+    const small = document.createElement("small"); small.textContent = label;
+    cell.append(strong, small);
+    return cell;
+  }));
+
+  const warning = document.getElementById("scan-receipt-warning");
+  const account = receipt.account_label ? `千川账号：${receipt.account_label}。` : "";
+  const finished = receipt.finished_at ? `完成于 ${new Date(receipt.finished_at).toLocaleString()}。` : "";
+  warning.textContent = receipt.warnings?.length
+    ? `${account}${receipt.warnings.join(" ")}`
+    : receipt.readiness === "ready"
+      ? `${account}${finished}页面覆盖和质量检查均通过。`
+      : receipt.readiness === "running"
+        ? "正在生成体检单，巡查完成前不要依据不完整数据调整投放。"
+        : "巡查完成后会显示页面覆盖率、数据质量和失败原因。";
+  warning.className = `receipt-warning${receipt.readiness === "ready" ? " ready" : ""}`;
+
+  const container = document.getElementById("scan-receipt-pages");
+  const results = [...(receipt.results || [])].sort((a, b) => Number(a.ok) - Number(b.ok) || Number(b.needs_review) - Number(a.needs_review));
+  if (!results.length) return empty(container, "尚未生成数据体检单");
+  container.className = "receipt-pages";
+  container.replaceChildren(...results.map((item) => {
+    const cardRow = document.createElement("article");
+    cardRow.className = `receipt-page${!item.ok ? " failed" : item.needs_review ? " review" : ""}`;
+    const title = document.createElement("strong"); title.textContent = item.label || item.id || "未命名页面";
+    const tag = document.createElement("span"); tag.className = "receipt-status";
+    tag.textContent = !item.ok ? "失败" : item.needs_review ? "需复核" : "通过";
+    const detail = document.createElement("small");
+    detail.textContent = !item.ok
+      ? item.error || "页面读取失败"
+      : `${LABELS[item.source] || item.source} · 质量 ${item.quality_score || 0} · ${item.row_count || 0} 行 · ${item.metric_count || 0} 项指标`;
+    cardRow.append(title, tag, detail);
+    if (!item.ok && item.id) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "只重试这一页";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        retry.textContent = "正在重试…";
+        const response = await chrome.runtime.sendMessage({
+          type: "start-full-scan",
+          page_ids: [item.id],
+          account_key: selectedQianchuanAccount,
+        });
+        if (!response?.ok) {
+          retry.disabled = false;
+          retry.textContent = response?.error || "重试失败";
+          return;
+        }
+        await loadDashboard();
+      });
+      cardRow.append(retry);
+    }
+    return cardRow;
+  }));
+}
+
 function renderFullScan(scan = {}) {
   const running = scan.status === "running";
   // Track scan start time for timeout detection
@@ -169,6 +414,7 @@ function renderFullScan(scan = {}) {
   document.getElementById("full-scan-button").textContent = running ? "正在自动获取…" : accountSelectionRequired ? "请先选择千川账号" : "自动获取全店数据";
   document.getElementById("cancel-scan-button").hidden = !running;
   document.getElementById("retry-scan-button").hidden = running || !(scan.failed > 0);
+  renderScanReceipt(scanReceiptFromStatus(scan));
   if (running && !scanPoller) scanPoller = setInterval(() => pollFullScan().catch(() => undefined), 1500);
   if (!running && scanPoller) { clearInterval(scanPoller); scanPoller = null; }
 }
@@ -412,6 +658,7 @@ function roleTasks(ops, opportunity = false) {
 
 function renderOperations(ops, shelf, live, creative, coverage = []) {
   currentOps = ops;
+  currentOperationsContext = { ops, shelf, live, creative, coverage };
   const tasks = roleTasks(ops, false).slice(0, 3);
   const growth = roleTasks(ops, true).slice(0, 3);
   document.getElementById("task-heading").textContent = currentRole === "运营总管" ? "今日必须处理" : `${currentRole} · 今日必做`;
@@ -685,9 +932,16 @@ async function refreshAll(syncFirst = false) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get("preferredRole");
+  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks"]);
   if (stored.preferredRole) currentRole = stored.preferredRole;
+  if (SCENE_WORKBENCH[stored.workbenchScene]) workbenchScene = stored.workbenchScene;
+  if (stored.templateChecks && typeof stored.templateChecks === "object") {
+    const today = `${localDateKey()}:`;
+    templateChecks = Object.fromEntries(Object.entries(stored.templateChecks).filter(([key]) => key.startsWith(today)));
+    await chrome.storage.local.set({ templateChecks });
+  }
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item.dataset.role === currentRole));
+  renderWorkbench();
   refreshAll(false);
 });
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
@@ -741,7 +995,16 @@ document.getElementById("role-nav").addEventListener("click", (event) => {
   currentRole = button.dataset.role;
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item === button));
   chrome.storage.local.set({ preferredRole: currentRole });
-  if (currentOps) loadDashboard();
+  renderWorkbench();
+  if (currentOperationsContext) {
+    const { ops, shelf, live, creative, coverage } = currentOperationsContext;
+    renderOperations(ops, shelf, live, creative, coverage);
+  }
+});
+document.getElementById("workbench-scene").addEventListener("change", async (event) => {
+  workbenchScene = SCENE_WORKBENCH[event.currentTarget.value] ? event.currentTarget.value : "daily";
+  await chrome.storage.local.set({ workbenchScene });
+  renderWorkbench();
 });
 document.getElementById("copy-brief").addEventListener("click", async (event) => {
   const button = event.currentTarget;

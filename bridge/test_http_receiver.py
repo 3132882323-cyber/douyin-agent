@@ -289,6 +289,52 @@ class SnapshotStoreTests(unittest.TestCase):
         report = http_receiver.generate_daily_report("2026-07-22")
         self.assertIn("自动巡检：partial；成功 14 页，失败 2 页", Path(report["path"]).read_text(encoding="utf-8"))
 
+    def test_scan_receipt_explains_coverage_quality_and_single_page_retry_targets(self) -> None:
+        http_receiver.save_scan_status(
+            {
+                "status": "partial",
+                "account_key": "acct_safe1234",
+                "started_at": 1_785_200_000_000,
+                "finished_at": 1_785_200_060_000,
+                "total": 3,
+                "success": 2,
+                "failed": 1,
+                "results": [
+                    {
+                        "id": "orders",
+                        "label": "订单管理",
+                        "source": "doudian",
+                        "ok": True,
+                        "quality": {"score": 90, "metric_count": 4, "row_count": 12},
+                    },
+                    {
+                        "id": "qianchuan_campaigns",
+                        "label": "千川商品推广",
+                        "source": "qianchuan",
+                        "ok": True,
+                        "account_label": "主投放账号",
+                        "quality": {"score": 60, "metric_count": 2, "row_count": 1},
+                    },
+                    {
+                        "id": "qianchuan_video_library",
+                        "label": "千川视频库",
+                        "source": "qianchuan",
+                        "ok": False,
+                        "error": "页面类型未识别",
+                    },
+                ],
+            }
+        )
+        receipt = http_receiver.build_scan_receipt()
+        self.assertEqual(receipt["readiness"], "attention")
+        self.assertFalse(receipt["analysis_ready"])
+        self.assertEqual(receipt["account_label"], "主投放账号")
+        self.assertEqual(receipt["summary"]["coverage_rate"], 100)
+        self.assertEqual(receipt["summary"]["needs_review"], 1)
+        self.assertEqual(receipt["failed_page_ids"], ["qianchuan_video_library"])
+        self.assertEqual(receipt["sources"]["qianchuan"]["failed"], 1)
+        self.assertTrue(any("单独重试" in warning for warning in receipt["warnings"]))
+
     def test_history_snapshots_build_seven_day_trends(self) -> None:
         now_ms = int(time.time() * 1000)
         http_receiver.save_data("doudian", {"page_type": "shelf", "captured_at": now_ms - 60000, "quality": {"score": 70}, "safe_metrics": {"曝光人数": "20", "点击人数": "2"}})

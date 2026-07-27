@@ -37,6 +37,21 @@
         <button data-role="商品运营">商品</button>
       </nav>
 
+      <section class="workbench-switcher" aria-label="岗位工作台设置">
+        <div>
+          <strong id="workbench-title">运营总管工作台</strong>
+          <small id="workbench-description">跨岗位查看风险、待确认动作和今日验收结果</small>
+        </div>
+        <label>当前班次
+          <select id="workbench-scene">
+            <option value="daily">日常经营</option>
+            <option value="pre_live">开播前</option>
+            <option value="live">直播中</option>
+            <option value="post_live">下播复盘</option>
+          </select>
+        </label>
+      </section>
+
       <section class="scan-card" aria-label="全店自动巡检">
         <div class="scan-head">
           <div><strong>全店自动巡检</strong><p id="scan-detail">按清单自动打开页面并采集，不需要 API</p></div>
@@ -61,11 +76,29 @@
         <small id="scan-summary">覆盖经营、商品、订单、内容、直播、货架与千川核心页面</small>
       </section>
 
+      <details id="scan-receipt-card" class="fold-card scan-receipt-card">
+        <summary>数据体检单 <span id="scan-receipt-state">等待巡查</span></summary>
+        <section>
+          <div id="scan-receipt-summary" class="receipt-metrics"></div>
+          <p id="scan-receipt-warning" class="receipt-warning">巡查完成后会显示页面覆盖率、数据质量和失败原因。</p>
+          <div id="scan-receipt-pages" class="receipt-pages empty-state">尚未生成数据体检单</div>
+        </section>
+      </details>
+
       <section class="progress-card">
         <div><strong id="progress-rate">0%</strong><small>今日完成</small></div>
         <div><strong id="doing-count">0</strong><small>进行中</small></div>
         <div><strong id="observing-count">0</strong><small>待观察</small></div>
         <div><strong id="data-freshness">--</strong><small>数据状态</small></div>
+      </section>
+
+      <section class="template-card">
+        <div class="section-heading">
+          <h3 id="template-heading">本班次标准动作</h3>
+          <span id="template-progress">0/0</span>
+        </div>
+        <p id="template-intro" class="section-intro">完成固定检查，再处理系统诊断出的异常任务。</p>
+        <div id="template-tasks" class="template-tasks"></div>
       </section>
 
       <section class="trend-card">

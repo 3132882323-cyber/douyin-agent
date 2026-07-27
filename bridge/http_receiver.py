@@ -1730,6 +1730,106 @@ def load_scan_status() -> dict[str, Any]:
         return {"status": "error", "error": "巡检状态文件无法读取"}
 
 
+def build_scan_receipt() -> dict[str, Any]:
+    """Turn the last browser scan into an operator-readable data receipt."""
+    scan = load_scan_status()
+    raw_results = scan.get("results") if isinstance(scan.get("results"), list) else []
+    results: list[dict[str, Any]] = []
+    source_totals = {
+        "doudian": {"label": "抖店", "total": 0, "success": 0, "failed": 0, "needs_review": 0},
+        "qianchuan": {"label": "千川", "total": 0, "success": 0, "failed": 0, "needs_review": 0},
+    }
+    account_label = ""
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+        page_id = str(raw.get("id") or "unknown")[:64]
+        source = str(raw.get("source") or ("qianchuan" if page_id.startswith("qianchuan") else "doudian"))
+        if source not in source_totals:
+            source = "doudian"
+        quality = raw.get("quality") if isinstance(raw.get("quality"), dict) else {}
+        quality_score = max(0, min(100, int(quality.get("score", 0) or 0)))
+        ok = bool(raw.get("ok"))
+        needs_review = ok and quality_score < 70
+        source_totals[source]["total"] += 1
+        source_totals[source]["success" if ok else "failed"] += 1
+        if needs_review:
+            source_totals[source]["needs_review"] += 1
+        if source == "qianchuan" and raw.get("account_label") and not account_label:
+            account_label = str(raw.get("account_label"))[:80]
+        results.append(
+            {
+                "id": page_id,
+                "label": str(raw.get("label") or page_id)[:80],
+                "source": source,
+                "ok": ok,
+                "page_type": str(raw.get("page_type") or "")[:48],
+                "quality_score": quality_score,
+                "metric_count": max(0, int(quality.get("metric_count", 0) or 0)),
+                "row_count": max(0, int(quality.get("row_count", 0) or 0)),
+                "needs_review": needs_review,
+                "error": str(raw.get("error") or "")[:300],
+                "captured_at": int(raw.get("captured_at", 0) or 0),
+            }
+        )
+
+    total = max(int(scan.get("total", 0) or 0), len(results))
+    success = sum(1 for item in results if item["ok"])
+    failed = sum(1 for item in results if not item["ok"])
+    needs_review = sum(1 for item in results if item["needs_review"])
+    completed = len(results)
+    coverage_rate = round(completed / total * 100) if total else 0
+    status = str(scan.get("status") or "idle")
+    if status == "running":
+        readiness = "running"
+        readiness_label = "正在采集"
+    elif not results:
+        readiness = "empty"
+        readiness_label = "等待巡查"
+    elif status == "completed" and not failed and not needs_review and coverage_rate == 100:
+        readiness = "ready"
+        readiness_label = "数据可用于分析"
+    else:
+        readiness = "attention"
+        readiness_label = "需要补采或复核"
+
+    warnings: list[str] = []
+    if failed:
+        warnings.append(f"{failed} 个页面读取失败，可在体检单中单独重试。")
+    if needs_review:
+        warnings.append(f"{needs_review} 个页面质量分低于 70，相关建议需要人工复核。")
+    if total and completed < total:
+        warnings.append(f"巡查仅覆盖 {completed}/{total} 个页面，数据不完整。")
+    if status in {"cancelled", "error"} and scan.get("error"):
+        warnings.append(str(scan.get("error"))[:300])
+
+    return {
+        "generated_at": _now_label(),
+        "scan_status": status,
+        "readiness": readiness,
+        "readiness_label": readiness_label,
+        "analysis_ready": readiness == "ready",
+        "account_key": str(scan.get("account_key") or "")[:80],
+        "account_label": account_label,
+        "started_at": int(scan.get("started_at", 0) or 0),
+        "finished_at": int(scan.get("finished_at", 0) or 0),
+        "summary": {
+            "total": total,
+            "completed": completed,
+            "success": success,
+            "failed": failed,
+            "needs_review": needs_review,
+            "coverage_rate": coverage_rate,
+            "row_count": sum(item["row_count"] for item in results),
+        },
+        "sources": source_totals,
+        "results": results,
+        "failed_page_ids": [item["id"] for item in results if not item["ok"]],
+        "warnings": warnings,
+        "mode": "read_only",
+    }
+
+
 def build_action_center() -> dict[str, Any]:
     settings = load_agent_settings()
     plans = build_plan_recommendations(settings)
@@ -1780,6 +1880,7 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
     action_center = build_action_center()
     ops = build_ops_manager()
     scan = load_scan_status()
+    scan_receipt = build_scan_receipt()
     catalog = list_snapshots()
     report_path = _reports_dir() / f"{report_date}.md"
 
@@ -1823,6 +1924,7 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
         f"- {insights['summary']}",
         f"- 已同步页面：{len(insights['coverage'])}；千川调整项：{len(action_center['plan_recommendations'])}；库存预警：{len(action_center['inventory_alerts'])}",
         f"- 自动巡检：{scan.get('status', 'idle')}；成功 {scan.get('success', 0)} 页，失败 {scan.get('failed', 0)} 页，低质量 {scan.get('low_quality', 0)} 页。",
+        f"- 数据体检：{scan_receipt['readiness_label']}；覆盖率 {scan_receipt['summary']['coverage_rate']}%；需复核 {scan_receipt['summary']['needs_review']} 页。",
         "",
         "## 运营总管今日任务",
         "",
@@ -1940,7 +2042,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.10.0"
+    server_version = "DianAgent/2.11.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -1980,7 +2082,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.10.0",
+                    "version": "2.11.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -2026,6 +2128,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/scan-status":
             self._json(load_scan_status())
+            return
+        if path == "/scan-receipt":
+            self._json(build_scan_receipt())
             return
         if path == "/health-monitor":
             self._json(check_selector_health())
