@@ -24,6 +24,8 @@ foreach ($target in @($modernDir, $compatDir)) {
     }
     New-Item -ItemType Directory -Path $resolvedTarget -Force | Out-Null
     Copy-Item -Path (Join-Path $sourceDir "*") -Destination $resolvedTarget -Recurse -Force
+    Get-ChildItem -LiteralPath $resolvedTarget -Filter "test-*.js" -File |
+        Remove-Item -Force
 }
 
 Remove-Item -LiteralPath (Join-Path $modernDir "manifest.compat.json") -Force

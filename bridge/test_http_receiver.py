@@ -234,6 +234,44 @@ class SnapshotStoreTests(unittest.TestCase):
         account_b = http_receiver.build_qianchuan_creative_analysis()
         self.assertEqual([item["name"] for item in account_b["videos"]], ["素材 B"])
 
+    def test_qianchuan_account_catalog_filters_false_accounts_and_deduplicates_labels(self) -> None:
+        http_receiver._atomic_json_write(
+            http_receiver._account_catalog_path(),
+            {
+                "accounts": [
+                    {"key": "acct_real0001", "label": "真实旗舰店", "last_seen": "2026-07-27 10:00:00"},
+                    {"key": "acct_duplicate", "label": " 真实旗舰店 ", "last_seen": "2026-07-27 09:00:00"},
+                    {"key": "acct_store000", "label": "店铺", "last_seen": "2026-07-27 08:00:00"},
+                    {"key": "acct_funds000", "label": "我的资金 账户明细 账户余额 0.00 元 立即充值", "last_seen": "2026-07-27 07:00:00"},
+                    {"key": "acct_id000000", "label": "ID：", "last_seen": "2026-07-27 06:00:00"},
+                ]
+            },
+        )
+        accounts = http_receiver.list_qianchuan_accounts()
+        self.assertEqual([(item["key"], item["label"]) for item in accounts], [("acct_real0001", "真实旗舰店")])
+
+    def test_same_qianchuan_account_label_reuses_canonical_key_across_pages(self) -> None:
+        first = http_receiver.save_data(
+            "qianchuan",
+            {
+                "page_type": "overview",
+                "account": {"key": "acct_route001", "label": "跨页面旗舰店", "confidence": "medium"},
+                "quality": {"score": 80},
+            },
+        )
+        second = http_receiver.save_data(
+            "qianchuan",
+            {
+                "page_type": "campaigns",
+                "account": {"key": "acct_route002", "label": "跨页面旗舰店", "confidence": "high"},
+                "quality": {"score": 90},
+            },
+        )
+        self.assertEqual(first["data"]["account"]["key"], "acct_route001")
+        self.assertEqual(second["data"]["account"]["key"], "acct_route001")
+        self.assertTrue((http_receiver.DATA_DIR / "qianchuan_accounts" / "acct_route001" / "campaigns.json").exists())
+        self.assertEqual(len(http_receiver.list_qianchuan_accounts()), 1)
+
     def test_settings_and_daily_report_are_local_and_configurable(self) -> None:
         settings = http_receiver.save_agent_settings(
             {"roi_target": 2.0, "low_inventory_threshold": 20, "daily_report_time": "08:30"}

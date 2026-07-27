@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v2.11.0) */
+/** 店策 Agent - MV3 service worker (v2.11.1) */
 
 const BRIDGE_URL = "http://127.0.0.1:8765";
 const QIANCHUAN_ENTRY_URL = "https://qianchuan.jinritemai.com/";
@@ -112,6 +112,13 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function sameAccountLabel(left, right) {
+  const normalize = (value) => String(value || "").replace(/\s+/g, "").trim().toLocaleLowerCase();
+  const a = normalize(left);
+  const b = normalize(right);
+  return Boolean(a && b && a === b);
+}
+
 function withTimeout(promise, timeoutMs, message) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -129,6 +136,15 @@ async function setFullScanState(patch) {
       body: JSON.stringify(updates.fullScan),
     }).catch(() => undefined);
   }
+}
+
+async function selectAnalysisAccount(accountKey) {
+  if (!accountKey) return;
+  await fetch(`${BRIDGE_URL}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+    body: JSON.stringify({ qianchuan_account_key: accountKey }),
+  }).catch(() => undefined);
 }
 
 function waitForTabReady(tabId, timeoutMs = 30000) {
@@ -203,7 +219,7 @@ async function activatePageTab(tabId, texts) {
   return result;
 }
 
-async function scanOnePage(tabId, page, reason, accountKey = "") {
+async function scanOnePage(tabId, page, reason, accountKey = "", accountLabel = "") {
   let lastError;
   const candidateUrls = [page.url, ...(page.fallbackUrls || [])];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -226,9 +242,12 @@ async function scanOnePage(tabId, page, reason, accountKey = "") {
         `${page.label}采集超过 ${Math.round(collectTimeoutMs / 1000)} 秒，已跳过`,
       );
       if (!response?.ok) throw new Error(response?.error || "采集失败");
+      const capturedAccount = response.bridge?.account || response.account || null;
       if (page.source === "qianchuan" && accountKey) {
-        if (!response.account?.key) throw new Error("未识别当前千川账号，请先在千川后台确认账号后重试");
-        if (response.account.key !== accountKey) throw new Error(`当前千川账号为“${response.account.label || "其他账号"}”，与所选分析账号不一致`);
+        if (!capturedAccount?.key) throw new Error("未识别当前千川账号，请先在千川后台确认账号后重试");
+        if (capturedAccount.key !== accountKey && !sameAccountLabel(capturedAccount.label, accountLabel)) {
+          throw new Error(`当前千川账号为“${capturedAccount.label || "其他账号"}”，与所选巡查账号不一致`);
+        }
       }
       if (response.page_type === "unknown") throw new Error("页面类型未识别");
       const expectedPageType = page.expectedPageType || page.id;
@@ -241,8 +260,8 @@ async function scanOnePage(tabId, page, reason, accountKey = "") {
         page_type: response.page_type,
         quality: response.quality || null,
         captured_at: Date.now(),
-        account_key: response.account?.key || "",
-        account_label: response.account?.label || "",
+        account_key: capturedAccount?.key || "",
+        account_label: capturedAccount?.label || "",
       };
     } catch (error) {
       lastError = error;
@@ -274,9 +293,11 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
   const targeted = Array.isArray(pageIds) && pageIds.length > 0;
   const previousScan = (await chrome.storage.local.get("fullScan")).fullScan || {};
   const scanPages = targeted ? FULL_SCAN_PAGES.filter((page) => pageIds.includes(page.id)) : FULL_SCAN_PAGES;
+  let lockedAccountKey = String(accountKey || "");
+  let lockedAccountLabel = "";
   let scanTab;
   let scanSource = "";
-  await setFullScanState({ status: "running", reason, account_key: accountKey || "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
+  await setFullScanState({ status: "running", reason, account_key: lockedAccountKey, account_label: "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
   try {
     for (let index = 0; index < scanPages.length; index += 1) {
       if (fullScanCancelled) break;
@@ -287,10 +308,21 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
         scanSource = page.source;
       }
       await setFullScanState({ current: page.label, index: index + 1 });
-      let result = await scanOnePage(scanTab.id, page, reason, accountKey);
+      let result = await scanOnePage(scanTab.id, page, reason, lockedAccountKey, lockedAccountLabel);
       if (!result.ok && isMissingTabError(result.error)) {
         scanTab = await createScanTab();
-        result = await scanOnePage(scanTab.id, page, `${reason}-tab-recovered`, accountKey);
+        result = await scanOnePage(scanTab.id, page, `${reason}-tab-recovered`, lockedAccountKey, lockedAccountLabel);
+      }
+      if (page.source === "qianchuan" && result.ok && result.account_key) {
+        if (!lockedAccountKey) {
+          lockedAccountKey = result.account_key;
+          lockedAccountLabel = result.account_label || "";
+          await selectAnalysisAccount(lockedAccountKey);
+          await setFullScanState({ account_key: lockedAccountKey, account_label: lockedAccountLabel });
+        } else if (!lockedAccountLabel && result.account_key === lockedAccountKey) {
+          lockedAccountLabel = result.account_label || "";
+          await setFullScanState({ account_label: lockedAccountLabel });
+        }
       }
       results.push(result);
       await setFullScanState({ results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
@@ -423,7 +455,7 @@ async function storeAndPush(source, snapshot) {
       body: JSON.stringify({ source, data: snapshot }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    bridgeResult = { ok: true };
+    bridgeResult = { ok: true, ...(await response.json()) };
   } catch (error) {
     bridgeResult = { ok: false, error: error.message || String(error) };
   }

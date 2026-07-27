@@ -17,33 +17,55 @@
     return `acct_${(hash >>> 0).toString(16).padStart(8, "0")}`;
   }
 
+  function normalizeAccountLabel(value) {
+    const label = String(value || "")
+      .replace(/\u200b/g, "")
+      .replace(/\s+/g, " ")
+      .replace(/^(?:当前账号|账号名称|千川账号|店铺名称)\s*[:：]?\s*/i, "")
+      .trim();
+    if (label.length < 2 || label.length > 48) return "";
+    if (/^(?:店铺|账号|账户|广告主|千川|巨量千川|全部账号|切换账号|账号管理|ID|ID[:：])$/i.test(label)) return "";
+    if (/(?:我的资金|账户明细|账户余额|活动福利|福利明细|立即充值|消息中心|帮助中心|切换账号|账号管理|全部账号)/.test(label)) return "";
+    if (/^(?:ID|账号ID|账户ID|店铺ID)\s*[:：]?\s*$/i.test(label)) return "";
+    return label;
+  }
+
   function detectAccountContext() {
     const params = new URLSearchParams(location.search);
-    const accountId = ["advertiser_id", "aadvid", "account_id", "shop_id"]
+    const pageText = (document.body?.innerText || "").slice(0, 12000);
+    const queryAccountId = ["advertiser_id", "aadvid", "account_id", "shop_id"]
       .map((key) => params.get(key)).find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
+    const textAccountId = pageText.match(/(?:广告主|账户|账号|店铺)\s*(?:ID|id|编号)\s*[:：]?\s*([A-Za-z0-9_-]{4,64})/)?.[1] || "";
+    const accountId = queryAccountId || textAccountId;
     const selectors = [
+      "[data-testid*='account-name']", "[data-testid*='shop-name']", "[data-testid*='advertiser-name']",
+      "[class*='accountName']", "[class*='advertiserName']", "[class*='shopName']",
       "[class*='account-name']", "[class*='advertiser-name']", "[class*='shop-name']",
       "[class*='account'] [class*='name']", "[class*='header'] [class*='account']",
     ];
     let label = "";
     for (const selector of selectors) {
-      const element = Array.from(document.querySelectorAll(selector)).find((item) => item.getClientRects().length > 0);
-      const value = (element?.innerText || "").replace(/\s+/g, " ").trim();
-      if (value.length >= 2 && value.length <= 80 && !/切换账号|账号管理|全部账号/.test(value)) {
+      const elements = Array.from(document.querySelectorAll(selector)).filter((item) => item.getClientRects().length > 0);
+      const value = elements.map((element) => normalizeAccountLabel(element.innerText)).find(Boolean);
+      if (value) {
         label = value;
         break;
       }
     }
     if (!label) {
-      const text = (document.body?.innerText || "").slice(0, 5000);
-      const match = text.match(/(?:当前账号|账号名称|千川账号|店铺名称)\s*[:：]?\s*\n?\s*([^\n]{2,80})/);
-      if (match && !/切换账号|账号管理|全部账号/.test(match[1])) label = match[1].trim();
+      const match = pageText.match(/(?:当前账号|账号名称|千川账号|店铺名称)\s*[:：]?\s*\n?\s*([^\n]{2,80})/);
+      label = normalizeAccountLabel(match?.[1]);
     }
     if (!accountId && !label) return null;
+    // Prefer the visible account label when available. Some Qianchuan routes
+    // expose an account ID while others omit it; switching identity sources
+    // between pages would otherwise create a different key mid-scan.
+    const identity = label || accountId;
     return {
-      key: accountHash(accountId || label),
+      key: accountHash(identity),
       label: label || `千川账号 · ${String(accountId).slice(-4)}`,
       confidence: label && accountId ? "high" : "medium",
+      identity_source: label ? "account_label" : "platform_id",
     };
   }
 
