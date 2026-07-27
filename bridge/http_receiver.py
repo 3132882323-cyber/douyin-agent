@@ -146,6 +146,21 @@ def _account_catalog_path() -> Path:
     return DATA_DIR / "qianchuan_accounts.json"
 
 
+def _normalized_account_label(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:80]
+
+
+def _is_valid_qianchuan_account_label(value: Any) -> bool:
+    label = _normalized_account_label(value)
+    if len(label) < 2 or len(label) > 48:
+        return False
+    if re.fullmatch(r"(?:店铺|账号|账户|广告主|千川|巨量千川|全部账号|切换账号|账号管理|ID|ID[:：])", label, re.I):
+        return False
+    if re.search(r"我的资金|账户明细|账户余额|活动福利|福利明细|立即充值|消息中心|帮助中心|切换账号|账号管理|全部账号", label):
+        return False
+    return True
+
+
 def list_qianchuan_accounts() -> list[dict[str, Any]]:
     path = _account_catalog_path()
     if not path.exists():
@@ -153,7 +168,25 @@ def list_qianchuan_accounts() -> list[dict[str, Any]]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         accounts = value.get("accounts", []) if isinstance(value, dict) else []
-        return accounts if isinstance(accounts, list) else []
+        if not isinstance(accounts, list):
+            return []
+        cleaned: list[dict[str, Any]] = []
+        seen_labels: set[str] = set()
+        seen_keys: set[str] = set()
+        for account in accounts:
+            if not isinstance(account, dict):
+                continue
+            key = str(account.get("key") or "").lower()
+            label = _normalized_account_label(account.get("label"))
+            label_key = re.sub(r"\s+", "", label).casefold()
+            if not SAFE_KEY.fullmatch(key) or not _is_valid_qianchuan_account_label(label):
+                continue
+            if key in seen_keys or label_key in seen_labels:
+                continue
+            cleaned.append({**account, "key": key, "label": label})
+            seen_keys.add(key)
+            seen_labels.add(label_key)
+        return cleaned
     except (OSError, json.JSONDecodeError):
         return []
 
@@ -162,11 +195,34 @@ def _remember_qianchuan_account(account: dict[str, Any]) -> None:
     key = str(account.get("key") or "").lower()
     if not SAFE_KEY.fullmatch(key):
         return
-    label = str(account.get("label") or "千川账号").strip()[:80]
+    label = _normalized_account_label(account.get("label") or "千川账号")
+    if not _is_valid_qianchuan_account_label(label):
+        return
     with _state_lock:
         accounts = {str(item.get("key")): item for item in list_qianchuan_accounts() if isinstance(item, dict)}
-        accounts[key] = {"key": key, "label": label, "last_seen": _now_label()}
+        accounts[key] = {
+            "key": key,
+            "label": label,
+            "confidence": str(account.get("confidence") or "medium")[:16],
+            "identity_source": str(account.get("identity_source") or "legacy")[:32],
+            "last_seen": _now_label(),
+        }
         _atomic_json_write(_account_catalog_path(), {"accounts": sorted(accounts.values(), key=lambda item: item.get("last_seen", ""), reverse=True)})
+
+
+def _canonical_qianchuan_account_key(account: dict[str, Any]) -> str:
+    key = str(account.get("key") or "").lower()
+    if not SAFE_KEY.fullmatch(key):
+        return ""
+    label = _normalized_account_label(account.get("label"))
+    if not _is_valid_qianchuan_account_label(label):
+        return key
+    label_key = re.sub(r"\s+", "", label).casefold()
+    for known in list_qianchuan_accounts():
+        known_label_key = re.sub(r"\s+", "", _normalized_account_label(known.get("label"))).casefold()
+        if known_label_key == label_key and SAFE_KEY.fullmatch(str(known.get("key") or "")):
+            return str(known["key"]).lower()
+    return key
 
 
 def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -184,6 +240,12 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
         "page_type": page_type,
         "captured_at": captured_at_ms,
     }
+    if source == "qianchuan" and isinstance(normalized.get("account"), dict):
+        account = {**normalized["account"]}
+        canonical_key = _canonical_qianchuan_account_key(account)
+        if canonical_key:
+            account["key"] = canonical_key
+        normalized["account"] = account
     payload = {
         "source": source,
         "page_type": page_type,
@@ -1708,7 +1770,7 @@ def _scan_status_path() -> Path:
 def save_scan_status(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("scan status must be an object")
-    allowed = {"status", "reason", "account_key", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
+    allowed = {"status", "reason", "account_key", "account_label", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
     status = {key: value[key] for key in allowed if key in value}
     if status.get("status") not in {"idle", "running", "completed", "partial", "cancelled", "error"}:
         raise ValueError("invalid scan status")
@@ -1739,7 +1801,7 @@ def build_scan_receipt() -> dict[str, Any]:
         "doudian": {"label": "抖店", "total": 0, "success": 0, "failed": 0, "needs_review": 0},
         "qianchuan": {"label": "千川", "total": 0, "success": 0, "failed": 0, "needs_review": 0},
     }
-    account_label = ""
+    account_label = str(scan.get("account_label") or "")[:80]
     for raw in raw_results:
         if not isinstance(raw, dict):
             continue
@@ -2042,7 +2104,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.11.0"
+    server_version = "DianAgent/2.11.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2082,7 +2144,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.11.0",
+                    "version": "2.11.1",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -2190,7 +2252,8 @@ class Handler(BaseHTTPRequestHandler):
                 data = payload.get("data")
                 saved = save_data(source, data)
                 _invalidate_cache()
-                self._json({"ok": True, "source": source, "page_type": saved["page_type"]})
+                account = saved.get("data", {}).get("account") if isinstance(saved.get("data"), dict) else None
+                self._json({"ok": True, "source": source, "page_type": saved["page_type"], "account": account})
                 return
             if path == "/settings":
                 settings = save_agent_settings(payload)

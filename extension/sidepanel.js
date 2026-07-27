@@ -739,11 +739,12 @@ function renderSettings(settings) {
 function renderQianchuanAccounts(payload = {}) {
   const select = document.getElementById("qianchuan-account-select");
   const accounts = payload.accounts || [];
-  selectedQianchuanAccount = String(payload.selected_account_key || "");
+  const analysisAccountKey = String(payload.selected_account_key || "");
+  const analysisAccount = accounts.find((account) => account.key === analysisAccountKey);
   select.replaceChildren();
   const current = document.createElement("option");
   current.value = "";
-  current.textContent = "当前千川页面（不校验账号）";
+  current.textContent = "自动识别当前登录账号（推荐）";
   select.append(current);
   accounts.forEach((account) => {
     const option = document.createElement("option");
@@ -753,13 +754,17 @@ function renderQianchuanAccounts(payload = {}) {
   });
   if (selectedQianchuanAccount && accounts.some((account) => account.key === selectedQianchuanAccount)) {
     select.value = selectedQianchuanAccount;
+  } else {
+    selectedQianchuanAccount = "";
+    select.value = "";
+    chrome.storage.local.set({ scanAccountPreference: "" });
   }
-  accountSelectionRequired = accounts.length > 1 && !selectedQianchuanAccount;
+  accountSelectionRequired = false;
   document.getElementById("qianchuan-account-hint").textContent = selectedQianchuanAccount
-    ? "巡查只分析所选账号；如后台账号不一致会停止千川采集。"
-    : accountSelectionRequired
-      ? "当前页面可直接读取；如需全店巡查，请先选择一个千川账号。"
-      : "当前页面模式不会校验账号；适合账号识别失败时直接读取。";
+    ? "已固定本轮巡查账号；只有明确需要读取指定账号时才使用此模式。"
+    : analysisAccount
+      ? `本轮会自动锁定当前登录账号；最近分析账号：${analysisAccount.label}。`
+      : "本轮会在第一个千川页面自动识别并锁定当前登录账号，不需要提前选择。";
 }
 
 function renderHealthMonitor(health = {}) {
@@ -932,9 +937,10 @@ async function refreshAll(syncFirst = false) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks"]);
+  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference"]);
   if (stored.preferredRole) currentRole = stored.preferredRole;
   if (SCENE_WORKBENCH[stored.workbenchScene]) workbenchScene = stored.workbenchScene;
+  selectedQianchuanAccount = String(stored.scanAccountPreference || "");
   if (stored.templateChecks && typeof stored.templateChecks === "object") {
     const today = `${localDateKey()}:`;
     templateChecks = Object.fromEntries(Object.entries(stored.templateChecks).filter(([key]) => key.startsWith(today)));
@@ -953,6 +959,7 @@ document.getElementById("full-scan-button").addEventListener("click", async () =
 document.getElementById("qianchuan-account-select").addEventListener("change", async (event) => {
   selectedQianchuanAccount = event.currentTarget.value;
   accountSelectionRequired = false;
+  await chrome.storage.local.set({ scanAccountPreference: selectedQianchuanAccount });
   await bridgeFetch("/settings", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ qianchuan_account_key: selectedQianchuanAccount }) });
   await loadDashboard();
 });
@@ -963,6 +970,7 @@ document.getElementById("current-qianchuan-button").addEventListener("click", as
   button.textContent = "正在读取当前页面…";
   try {
     selectedQianchuanAccount = "";
+    await chrome.storage.local.set({ scanAccountPreference: "" });
     document.getElementById("qianchuan-account-select").value = "";
     await bridgeFetch("/settings", {
       method: "POST",
