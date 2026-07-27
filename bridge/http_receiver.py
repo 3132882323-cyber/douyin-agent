@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from action_protocol import build_action_draft, transition_action, validate_action_draft
+
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(message)s")
 logger = logging.getLogger("dian-agent-http")
 
@@ -591,9 +593,19 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
         if item["source"] != source or item["page_type"] not in page_types:
             continue
         snapshot = load_data(source, item["page_type"])
-        tables = (snapshot or {}).get("data", {}).get("tables", [])
+        snapshot_data = (snapshot or {}).get("data", {})
+        if not isinstance(snapshot_data, dict):
+            continue
+        tables = snapshot_data.get("tables", [])
         if not isinstance(tables, list):
             continue
+        account = snapshot_data.get("account") if isinstance(snapshot_data.get("account"), dict) else {}
+        quality = snapshot_data.get("quality") if isinstance(snapshot_data.get("quality"), dict) else {}
+        captured_at_ms = int(
+            snapshot_data.get("captured_at")
+            or (float((snapshot or {}).get("timestamp", 0)) * 1000)
+            or 0
+        )
         canonical_headers: list[str] = []
         for table_index, table in enumerate(tables):
             if not isinstance(table, dict):
@@ -623,7 +635,10 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
                     {
                         "source": source,
                         "page_type": item["page_type"],
-                        "quality_score": item["quality_score"],
+                        "quality_score": int(quality.get("score", item["quality_score"]) or 0),
+                        "captured_at_ms": captured_at_ms,
+                        "account_key": str(account.get("key") or "").lower(),
+                        "account_label": str(account.get("label") or ""),
                         "table_index": table_index,
                         "row_index": row_index,
                         "record": record,
@@ -652,6 +667,177 @@ def _extract_labeled_number(record: dict[str, Any], label: str) -> float | None:
         if match:
             return float(match.group(1))
     return None
+
+
+def _entity_identifier(record: dict[str, Any], keywords: tuple[str, ...]) -> str:
+    """Read a platform identifier without ever substituting a row index or name."""
+    for label, value in record.items():
+        normalized_label = str(label).lower().replace(" ", "")
+        if not any(keyword.lower().replace(" ", "") in normalized_label for keyword in keywords):
+            continue
+        text = str(value or "").strip()
+        match = re.search(r"(?:id\s*[:：]\s*)?([a-z0-9][a-z0-9_-]{3,63})", text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    for value in record.values():
+        text = str(value or "")
+        match = re.search(r"(?:计划|项目|广告组|单元)\s*ID\s*[:：]\s*([a-z0-9][a-z0-9_-]{3,63})", text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _action_params_for_plan(
+    plan: str,
+    action_type: str,
+    evidence: dict[str, Any],
+    entry: dict[str, Any],
+    confidence: str,
+) -> dict[str, Any]:
+    """Generate a policy-checked operation draft tied to a fresh account snapshot."""
+    record = evidence.get("_record") if isinstance(evidence.get("_record"), dict) else {}
+    budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
+    plan_id = _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id"))
+    operation_type = "replace_creative"
+    operation_label = "优化素材"
+    field = "素材"
+    target_value: Any = None
+
+    if action_type in {"stop_loss", "reduce_budget", "scale_cautiously"}:
+        operation_type = "adjust_budget"
+        field = "预算"
+        percent = -30 if action_type == "stop_loss" else -20 if action_type == "reduce_budget" else 10
+        operation_label = f"{'降低' if percent < 0 else '增加'}预算 {abs(percent)}%"
+        target_value = round(budget * (1 + percent / 100), 2) if budget and budget > 0 else None
+
+    current_label = f"{budget:g}" if budget and budget > 0 else "待重新读取"
+    target_label = f"{target_value:g}" if isinstance(target_value, (int, float)) else "待重新计算"
+    copy_text = (
+        f"{plan} | 预算 {current_label} → {target_label}"
+        if operation_type == "adjust_budget"
+        else f"{plan} | 优化前 3 秒表达与卖点"
+    )
+    compact_evidence = {
+        key: evidence.get(key)
+        for key in ("spend", "roi", "roi_target", "orders", "ctr")
+        if evidence.get(key) is not None
+    }
+    return build_action_draft(
+        operation_type=operation_type,
+        operation_label=operation_label,
+        target_kind="qianchuan_plan",
+        target_id=plan_id,
+        target_name=plan,
+        account_key=str(entry.get("account_key") or ""),
+        account_label=str(entry.get("account_label") or ""),
+        field=field,
+        current_value=budget,
+        target_value=target_value,
+        source=str(entry.get("source") or ""),
+        page_type=str(entry.get("page_type") or ""),
+        captured_at_ms=int(entry.get("captured_at_ms") or 0),
+        quality_score=int(entry.get("quality_score") or 0),
+        confidence=confidence,
+        evidence=compact_evidence,
+        copy_text=copy_text,
+    )
+
+
+def _action_audit_path() -> Path:
+    return DATA_DIR / "action_audit.json"
+
+
+def load_action_audit() -> dict[str, Any]:
+    path = _action_audit_path()
+    if not path.exists():
+        return {"schema_version": 1, "actions": [], "execution_enabled": False}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        actions = value.get("actions", []) if isinstance(value, dict) else []
+        if not isinstance(actions, list):
+            actions = []
+        return {
+            "schema_version": 1,
+            "updated_at": value.get("updated_at") if isinstance(value, dict) else None,
+            "actions": [item for item in actions if isinstance(item, dict)],
+            "execution_enabled": False,
+        }
+    except (OSError, json.JSONDecodeError):
+        logger.exception("读取操作审计记录失败: %s", path)
+        return {"schema_version": 1, "actions": [], "execution_enabled": False}
+
+
+def get_action_audit(limit: int = 100) -> dict[str, Any]:
+    audit = load_action_audit()
+    actions = sorted(
+        audit["actions"],
+        key=lambda item: int(item.get("state_updated_at_ms") or item.get("created_at_ms") or 0),
+        reverse=True,
+    )[: min(500, max(1, int(limit)))]
+    return {
+        **audit,
+        "actions": actions,
+        "summary": {
+            "total": len(audit["actions"]),
+            "confirmed": sum(item.get("state") == "confirmed" for item in audit["actions"]),
+            "cancelled": sum(item.get("state") == "cancelled" for item in audit["actions"]),
+            "executed": 0,
+        },
+    }
+
+
+def confirm_action_draft(action: dict[str, Any]) -> dict[str, Any]:
+    errors = validate_action_draft(action)
+    if errors:
+        messages = "；".join(dict.fromkeys(str(item.get("message") or "动作校验失败") for item in errors))
+        raise ValueError(messages)
+    action_id = str(action.get("action_id") or "")
+    if not re.fullmatch(r"[a-f0-9]{24}", action_id):
+        raise ValueError("动作编号无效，请重新生成方案。")
+    with _state_lock:
+        audit = load_action_audit()
+        existing = next((item for item in audit["actions"] if item.get("action_id") == action_id), None)
+        if existing and existing.get("state") == "confirmed":
+            return existing
+        if existing and existing.get("state") == "cancelled":
+            raise ValueError("该操作确认已撤销，请重新同步千川数据后生成新方案。")
+        confirmed = transition_action(action, "confirmed")
+        confirmed["confirmed_at_ms"] = int(time.time() * 1000)
+        confirmed["confirmed_by"] = "local_user"
+        confirmed["execution_note"] = "已确认方案，尚未执行任何千川页面操作。"
+        actions = [item for item in audit["actions"] if item.get("action_id") != action_id]
+        actions.append(confirmed)
+        actions = sorted(
+            actions,
+            key=lambda item: int(item.get("state_updated_at_ms") or item.get("created_at_ms") or 0),
+            reverse=True,
+        )[:500]
+        _atomic_json_write(
+            _action_audit_path(),
+            {"schema_version": 1, "updated_at": _now_label(), "execution_enabled": False, "actions": actions},
+        )
+    return confirmed
+
+
+def cancel_confirmed_action(action_id: str) -> dict[str, Any]:
+    action_id = str(action_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{24}", action_id):
+        raise ValueError("动作编号无效。")
+    with _state_lock:
+        audit = load_action_audit()
+        existing = next((item for item in audit["actions"] if item.get("action_id") == action_id), None)
+        if not existing:
+            raise ValueError("未找到对应的操作确认记录。")
+        if existing.get("state") == "cancelled":
+            return existing
+        cancelled = transition_action(existing, "cancelled")
+        cancelled["cancelled_at_ms"] = int(time.time() * 1000)
+        actions = [cancelled if item.get("action_id") == action_id else item for item in audit["actions"]]
+        _atomic_json_write(
+            _action_audit_path(),
+            {"schema_version": 1, "updated_at": _now_label(), "execution_enabled": False, "actions": actions},
+        )
+    return cancelled
 
 
 def _clean_entity_name(value: Any, fallback: str) -> str:
@@ -775,6 +961,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
             "orders": orders,
             "ctr": ctr,
             "page_type": entry["page_type"],
+            "_record": record,
         }
         confidence = "high" if entry["quality_score"] >= 70 and spend is not None and roi is not None else "medium"
         base = {
@@ -793,6 +980,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
                     "action_type": "stop_loss",
                     "suggestion": "先降预算 30% 或暂停新增消耗，检查素材、人群和商品承接后再恢复。",
                     "reason": f"消耗已达到 {spend:g}，但当前未观察到成交。",
+                    "action_params": _action_params_for_plan(plan, "stop_loss", evidence, entry, confidence),
                 }
             )
         elif roi is not None and spend is not None and spend >= min_spend and roi < effective_roi_target * 0.8:
@@ -803,6 +991,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
                     "action_type": "reduce_budget",
                     "suggestion": "建议先降预算 20%，保留观察窗口；优先替换低点击素材并核对商品转化。",
                     "reason": f"ROI {roi:g} 明显低于目标 {effective_roi_target:g}，且消耗已达到判断门槛。",
+                    "action_params": _action_params_for_plan(plan, "reduce_budget", evidence, entry, confidence),
                 }
             )
         elif roi is not None and roi < effective_roi_target:
@@ -811,7 +1000,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
             if ctr is not None and ctr < 1:
                 suggestion = "预算保持不变，优先更换前 3 秒表达、封面和卖点；不要先提高出价。"
                 reason += f" 当前点击率为 {ctr:g}。"
-            results.append({**base, "level": "warning", "action_type": "optimize", "suggestion": suggestion, "reason": reason})
+            results.append({**base, "level": "warning", "action_type": "optimize", "suggestion": suggestion, "reason": reason, "action_params": _action_params_for_plan(plan, "optimize", evidence, entry, confidence)})
         elif roi is not None and roi >= effective_roi_target and (orders or 0) >= 3:
             results.append(
                 {
@@ -820,6 +1009,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
                     "action_type": "scale_cautiously",
                     "suggestion": "可尝试增加预算 10%–15%，每次只调一次，并观察一个完整转化窗口。",
                     "reason": f"ROI {roi:g} 达到目标 {effective_roi_target:g}，且已有 {orders:g} 个成交。",
+                    "action_params": _action_params_for_plan(plan, "scale_cautiously", evidence, entry, confidence),
                 }
             )
 
@@ -851,7 +1041,29 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
     for item in ordered:
         unique.setdefault((item["plan"], item["action_type"]), item)
     task_states = load_task_states()
-    return [{**item, **_plan_workbench_fields(item, task_states)} for item in list(unique.values())[:20]]
+    audit_states = {
+        str(action.get("action_id") or ""): action
+        for action in load_action_audit().get("actions", [])
+        if isinstance(action, dict)
+    }
+    cleaned: list[dict[str, Any]] = []
+    for item in list(unique.values())[:20]:
+        ev = item.get("evidence")
+        if isinstance(ev, dict):
+            ev.pop("_record", None)
+        action_params = item.get("action_params")
+        if isinstance(action_params, dict):
+            saved_action = audit_states.get(str(action_params.get("action_id") or ""))
+            if saved_action:
+                action_params = {
+                    **action_params,
+                    "state": saved_action.get("state", action_params.get("state")),
+                    "confirmed_at_ms": saved_action.get("confirmed_at_ms"),
+                    "cancelled_at_ms": saved_action.get("cancelled_at_ms"),
+                }
+                item["action_params"] = action_params
+        cleaned.append({**item, **_plan_workbench_fields(item, task_states)})
+    return cleaned
 
 
 def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -907,6 +1119,17 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
         else:
             level, status = "info", "观察中"
             suggestion = "继续观察消耗、点击、进房和成交；数据不足时不要仅凭播放量判断素材。"
+        # Build structured action_params for this video
+        if level == "high":
+            _ap = {"operation_type": "pause_creative", "operation_label": "暂停复制该素材", "target": name, "field": "素材状态", "current_value": status, "target_value": "暂停复制", "copy_text": f"{name} | 暂停复制 | {status}"}
+        elif status == "可复制放量":
+            _ap = {"operation_type": "duplicate_creative", "operation_label": "创建素材变体", "target": name, "field": "素材", "current_value": status, "target_value": "变体扩量", "copy_text": f"{name} | 创建变体 | 同钩子换卖点"}
+        elif status == "高潜素材":
+            _ap = {"operation_type": "test_creative", "operation_label": "进入下轮测试", "target": name, "field": "素材", "current_value": status, "target_value": "直播引流测试", "copy_text": f"{name} | 进入直播引流测试"}
+        elif status == "尚未测试":
+            _ap = {"operation_type": "test_creative", "operation_label": "小预算测试", "target": name, "field": "预算", "current_value": "0", "target_value": "测试预算", "copy_text": f"{name} | 加入小预算测试组"}
+        else:
+            _ap = {"operation_type": "observe", "operation_label": "继续观察", "target": name, "field": None, "current_value": status, "target_value": None, "copy_text": f"{name} | 继续观察"}
         videos.append(
             {
                 "id": f"creative-{entry['table_index']}-{entry['row_index']}",
@@ -914,6 +1137,7 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
                 "level": level,
                 "status": status,
                 "suggestion": suggestion,
+                "action_params": _ap,
                 "evidence": evidence,
                 "confidence": "high" if entry["quality_score"] >= 70 and spend is not None else "medium",
                 "guardrail": "只生成素材建议，不上传、删除或修改千川视频。",
@@ -987,13 +1211,17 @@ def build_inventory_alerts(settings: dict[str, Any] | None = None) -> list[dict[
             "evidence": evidence,
         }
         if stock <= 0:
-            results.append({**base, "level": "high", "title": "已缺货", "suggestion": "立即暂停该商品继续放量，并核对补货时间。"})
+            results.append({**base, "level": "high", "title": "已缺货", "suggestion": "立即暂停该商品继续放量，并核对补货时间。",
+                            "action_params": {"operation_type": "pause_ad", "operation_label": "暂停该商品投放", "target": product, "field": "投放状态", "current_value": "投放中", "target_value": "暂停", "copy_text": f"{product} | 暂停千川投放 | 当前库存 0"}})
         elif stock <= critical:
-            results.append({**base, "level": "high", "title": "库存极低", "suggestion": f"库存仅 {stock:g}，优先补货；补货确认前不要扩大千川消耗。"})
+            results.append({**base, "level": "high", "title": "库存极低", "suggestion": f"库存仅 {stock:g}，优先补货；补货确认前不要扩大千川消耗。",
+                            "action_params": {"operation_type": "restock", "operation_label": "紧急补货", "target": product, "field": "库存", "current_value": stock, "target_value": None, "copy_text": f"{product} | 紧急补货 | 当前库存 {stock:g}"}})
         elif days_of_cover is not None and days_of_cover <= days_warning:
-            results.append({**base, "level": "warning", "title": "预计即将售罄", "suggestion": f"按当前销量约可售 {days_of_cover:.1f} 天，建议补货或降低投放强度。"})
+            results.append({**base, "level": "warning", "title": "预计即将售罄", "suggestion": f"按当前销量约可售 {days_of_cover:.1f} 天，建议补货或降低投放强度。",
+                            "action_params": {"operation_type": "review_inventory", "operation_label": f"可售仅 {days_of_cover:.1f} 天", "target": product, "field": "库存", "current_value": stock, "target_value": None, "copy_text": f"{product} | 可售 {days_of_cover:.1f} 天 | 库存 {stock:g}"}})
         elif stock <= low:
-            results.append({**base, "level": "warning", "title": "低库存", "suggestion": f"库存 {stock:g}，请核对在投计划和补货周期。"})
+            results.append({**base, "level": "warning", "title": "低库存", "suggestion": f"库存 {stock:g}，请核对在投计划和补货周期。",
+                            "action_params": {"operation_type": "review_inventory", "operation_label": "核对库存", "target": product, "field": "库存", "current_value": stock, "target_value": None, "copy_text": f"{product} | 库存 {stock:g}"}})
 
     priority = {"high": 0, "warning": 1, "info": 2}
     return sorted(results, key=lambda item: (priority.get(item["level"], 9), item["evidence"]["stock"]))[:30]
@@ -1080,7 +1308,7 @@ def build_ops_manager() -> dict[str, Any]:
     creative = build_qianchuan_creative_analysis()
     tasks = [*shelf["recommendations"], *live["recommendations"], *creative["recommendations"]]
     for item in plans[:5]:
-        tasks.append({
+        task_entry = {
             "level": item["level"],
             "owner": "投放运营",
             "title": item["workbench_title"],
@@ -1089,9 +1317,15 @@ def build_ops_manager() -> dict[str, Any]:
             "evidence": item["found"],
             "impact": item["adjustment_range"],
             "observation_window": item["observation_window"],
-        })
+        }
+        if "action_params" in item:
+            task_entry["action_params"] = item["action_params"]
+        tasks.append(task_entry)
     for item in inventory[:3]:
-        tasks.append({"level": item["level"], "owner": "商品运营", "title": f"{item['product']} · {item['title']}", "action": item["suggestion"], "acceptance": "补货或投放限制已人工确认。", "evidence": f"当前库存 {item['evidence']['stock']:g}。"})
+        inv_entry = {"level": item["level"], "owner": "商品运营", "title": f"{item['product']} · {item['title']}", "action": item["suggestion"], "acceptance": "补货或投放限制已人工确认。", "evidence": f"当前库存 {item['evidence']['stock']:g}。"}
+        if "action_params" in item:
+            inv_entry["action_params"] = item["action_params"]
+        tasks.append(inv_entry)
     priority = {"high": 0, "warning": 1, "opportunity": 2, "info": 3}
     tasks.sort(key=lambda item: (priority.get(item["level"], 9), 0 if "合规" in item["title"] or "主图" in item["title"] else 1))
     states = load_task_states()
@@ -1706,7 +1940,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.9.0"
+    server_version = "DianAgent/2.10.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -1746,8 +1980,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.9.0",
-                    "mode": "read_only",
+                    "version": "2.10.0",
+                    "mode": "proposal_only",
+                    "execution_enabled": False,
                     "snapshot_count": len(catalog),
                     "schema_warnings": schema_warnings,
                     "disk": disk_info,
@@ -1804,6 +2039,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/effectiveness":
             self._json(get_effectiveness_report())
+            return
+        if path == "/actions/audit":
+            self._json(get_action_audit(int(query.get("limit", ["100"])[0])))
             return
         if path == "/trends":
             self._json(build_trends(int(query.get("days", ["7"])[0]), query.get("source", [None])[0], query.get("page_type", [None])[0]))
@@ -1873,6 +2111,19 @@ class Handler(BaseHTTPRequestHandler):
                     str(payload.get("context") or ""),
                 )})
                 return
+            if path == "/actions/confirm":
+                action = payload.get("action")
+                if not isinstance(action, dict):
+                    raise ValueError("缺少有效的操作草稿。")
+                confirmed = confirm_action_draft(action)
+                _invalidate_cache()
+                self._json({"ok": True, "action": confirmed, "executed": False, "execution_enabled": False})
+                return
+            if path == "/actions/cancel":
+                cancelled = cancel_confirmed_action(str(payload.get("action_id") or ""))
+                _invalidate_cache()
+                self._json({"ok": True, "action": cancelled, "executed": False, "execution_enabled": False})
+                return
             if path == "/scan-status":
                 self._json({"ok": True, "scan": save_scan_status(payload)})
                 return
@@ -1897,7 +2148,7 @@ def main() -> None:
     scheduler = threading.Thread(target=_daily_report_scheduler, args=(stop_event,), daemon=True)
     scheduler.start()
     logger.info("店策 Agent 本地服务已启动: http://127.0.0.1:%d", PORT)
-    logger.info("只读模式；数据目录: %s", DATA_DIR)
+    logger.info("方案确认模式（不执行千川操作）；数据目录: %s", DATA_DIR)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

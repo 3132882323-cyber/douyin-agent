@@ -195,3 +195,23 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .connection.ok > span::after { content: "已连接"; font-size: 0; }
 .connection.error > span::after { content: "未连接"; font-size: 0; }
 .connection strong::before { content: ""; }
+
+/* v2.10.0: safe action draft and local confirmation UI */
+.action-params-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px 8px; padding: 9px; border: 1px solid #d0d5dd; border-radius: 9px; margin-top: 9px; background: #f8fafc; }
+.action-params-wrap.confirmable { border-color: #84adff; background: #f5f8ff; }
+.action-params-wrap.blocked { border-color: #fdb022; background: #fffaeb; }
+.action-params-wrap.confirmed { border-color: #6ce9a6; background: #ecfdf3; }
+.action-label { font-size: 10px; font-weight: 700; color: var(--brand, #4f46e5); }
+.action-param-strip { justify-self: end; font-size: 10px; color: #344054; font-family: ui-monospace, monospace; background: white; padding: 3px 6px; border-radius: 5px; white-space: nowrap; }
+.action-identity, .action-state-hint { grid-column: 1 / -1; margin: 0 !important; font-size: 10px !important; line-height: 1.45; }
+.action-identity { color: #475467 !important; }
+.action-state-hint { color: #667085 !important; }
+.action-params-wrap.blocked .action-state-hint { color: #b54708 !important; }
+.action-params-wrap.confirmed .action-state-hint { color: #027a48 !important; font-weight: 600; }
+.action-buttons { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 7px; padding-top: 2px; }
+.copy-action-btn, .confirm-action-btn { font-size: 10px; font-weight: 700; padding: 5px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s; }
+.copy-action-btn { border: 1px solid var(--brand, #4f46e5); color: var(--brand, #4f46e5); background: white; }
+.copy-action-btn:hover:not(:disabled) { background: var(--brand, #4f46e5); color: #fff; }
+.confirm-action-btn { border: 1px solid #2563eb; color: white; background: #2563eb; }
+.confirm-action-btn:hover:not(:disabled) { background: #1849a9; border-color: #1849a9; }
+.copy-action-btn:disabled, .confirm-action-btn:disabled { opacity: 0.55; cursor: default; }

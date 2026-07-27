@@ -12,5 +12,6 @@ Please open a GitHub security advisory for vulnerabilities involving data exposu
 
 ## Execution boundary
 
-The open-source version is read-only. Recommendations do not automatically change budgets, inventory, plan status, orders, refunds, or account funds.
+The open-source version may create and locally confirm Qianchuan operation drafts, but its execution layer is disabled. Confirmation only writes a local audit record. It does not click or submit Qianchuan pages, or change budgets, inventory, plan status, orders, refunds, or account funds.
 
+Budget drafts are blocked unless they bind a selected account, a platform plan ID, a fresh high-quality snapshot, a readable current value, and a policy-compliant target value. A missing budget must never fall back to a pause action.
