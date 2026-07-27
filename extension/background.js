@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v2.10.0) */
+/** 店策 Agent - MV3 service worker (v2.11.0) */
 
 const BRIDGE_URL = "http://127.0.0.1:8765";
 const QIANCHUAN_ENTRY_URL = "https://qianchuan.jinritemai.com/";
@@ -233,13 +233,30 @@ async function scanOnePage(tabId, page, reason, accountKey = "") {
       if (response.page_type === "unknown") throw new Error("页面类型未识别");
       const expectedPageType = page.expectedPageType || page.id;
       if (response.page_type !== expectedPageType) throw new Error(`页面识别为 ${response.page_type}，预期为 ${expectedPageType}`);
-      return { id: page.id, label: page.label, ok: true, page_type: response.page_type, quality: response.quality || null };
+      return {
+        id: page.id,
+        label: page.label,
+        source: page.source,
+        ok: true,
+        page_type: response.page_type,
+        quality: response.quality || null,
+        captured_at: Date.now(),
+        account_key: response.account?.key || "",
+        account_label: response.account?.label || "",
+      };
     } catch (error) {
       lastError = error;
       if (attempt < 2) await sleep(1200);
     }
   }
-  return { id: page.id, label: page.label, ok: false, error: lastError?.message || String(lastError) };
+  return {
+    id: page.id,
+    label: page.label,
+    source: page.source,
+    ok: false,
+    captured_at: Date.now(),
+    error: lastError?.message || String(lastError),
+  };
 }
 
 function isMissingTabError(error) {
@@ -522,7 +539,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const failedIds = (stored.fullScan?.results || []).filter((item) => !item.ok).map((item) => item.id);
       if (!failedIds.length) sendResponse({ ok: false, error: "没有需要重试的失败页面" });
       else {
-        startFullScan("retry-failed", failedIds).catch(() => undefined);
+        startFullScan("retry-failed", failedIds, String(stored.fullScan?.account_key || "")).catch(() => undefined);
         sendResponse({ ok: true, started: true, total: failedIds.length });
       }
       return;

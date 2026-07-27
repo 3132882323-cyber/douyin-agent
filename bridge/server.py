@@ -33,6 +33,7 @@ from http_receiver import (
     build_ops_manager,
     build_plan_recommendations,
     build_qianchuan_creative_analysis,
+    build_scan_receipt,
     build_shelf_analysis,
     build_trends,
     check_selector_health,
@@ -162,6 +163,11 @@ TOOLS = [
     Tool(
         name="get_auto_scan_status",
         description="读取扩展最近一次无 API 全店自动巡检的进度、成功页面和失败原因",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_scan_receipt",
+        description="读取最近一次巡查的数据体检单，包括页面覆盖率、质量分、失败原因、账号和单页重试目标",
         inputSchema={"type": "object", "properties": {}, "required": []},
     ),
     Tool(
@@ -303,6 +309,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     if name == "get_auto_scan_status":
         return _text(load_scan_status())
+
+    if name == "get_scan_receipt":
+        return _text(build_scan_receipt())
 
     if name == "get_operation_trends":
         return _text(build_trends(int(arguments.get("days") or 7), str(arguments.get("source") or "") or None, str(arguments.get("page_type") or "") or None))

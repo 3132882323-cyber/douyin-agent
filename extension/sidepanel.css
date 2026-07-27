@@ -215,3 +215,35 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .confirm-action-btn { border: 1px solid #2563eb; color: white; background: #2563eb; }
 .confirm-action-btn:hover:not(:disabled) { background: #1849a9; border-color: #1849a9; }
 .copy-action-btn:disabled, .confirm-action-btn:disabled { opacity: 0.55; cursor: default; }
+
+/* v2.11.0: operator workbench templates and scan data receipt */
+.workbench-switcher { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+.workbench-switcher strong { display: block; font-size: 11px; }
+.workbench-switcher small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.35; }
+.workbench-switcher label { color: var(--muted); font-size: 9px; }
+.workbench-switcher select { display: block; min-width: 92px; margin-top: 3px; padding: 6px 7px; border: 1px solid #d0d5dd; border-radius: 8px; background: white; color: #344054; font-size: 9px; }
+.template-card { padding: 13px; border: 1px solid #c7d7fe; border-radius: 14px; background: linear-gradient(145deg, #f8faff, #fff); }
+.template-tasks { display: grid; gap: 7px; }
+.template-task { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; align-items: start; padding: 9px; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.template-task.done { border-color: #abefc6; background: #f2fbf6; }
+.template-task button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid #b2ccff; border-radius: 7px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 12px; font-weight: 800; }
+.template-task.done button { border-color: #6ce9a6; background: #dcfae6; color: var(--green); }
+.template-task strong { display: block; font-size: 10px; line-height: 1.4; }
+.template-task p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.scan-receipt-card > summary span.ready { color: var(--green); font-weight: 700; }
+.scan-receipt-card > summary span.attention { color: var(--amber); font-weight: 700; }
+.scan-receipt-card > summary span.running { color: #175cd3; font-weight: 700; }
+.receipt-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 9px; }
+.receipt-metrics > div { min-width: 0; padding: 8px 4px; border-radius: 9px; background: #f8fafc; text-align: center; }
+.receipt-metrics strong { display: block; color: #1849a9; font-size: 12px; }
+.receipt-metrics small { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+.receipt-warning { margin: 0 0 8px; padding: 8px 9px; border-radius: 8px; background: #fffaeb; color: #93370d; font-size: 9px; line-height: 1.45; }
+.receipt-warning.ready { background: #ecfdf3; color: var(--green); }
+.receipt-pages { display: grid; gap: 6px; }
+.receipt-page { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: white; }
+.receipt-page strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-page small { color: var(--muted); font-size: 8px; line-height: 1.35; }
+.receipt-page .receipt-status { padding: 2px 6px; border-radius: 999px; background: #ecfdf3; color: var(--green); font-size: 8px; font-weight: 700; }
+.receipt-page.review .receipt-status { background: #fffaeb; color: var(--amber); }
+.receipt-page.failed .receipt-status { background: #fef3f2; color: var(--red); }
+.receipt-page button { grid-column: 1 / -1; justify-self: start; padding: 5px 8px; border: 1px solid #b2ccff; border-radius: 7px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 8px; font-weight: 700; }
