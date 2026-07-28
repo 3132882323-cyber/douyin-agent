@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from action_protocol import assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
+from oceanengine_oauth import OceanEngineOAuth
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(message)s")
 logger = logging.getLogger("dian-agent-http")
@@ -2915,7 +2916,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.24.0"
+    server_version = "DianAgent/2.25.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2932,6 +2933,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self._cors()
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _html(self, body: bytes, status: int = 200) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -2955,7 +2968,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.24.0",
+                    "version": "2.25.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -2970,6 +2983,52 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 }
             )
+            return
+        if path == "/oauth/oceanengine/status":
+            self._json(OceanEngineOAuth(DATA_DIR).status())
+            return
+        if path == "/oauth/oceanengine/callback":
+            oauth = OceanEngineOAuth(DATA_DIR)
+            platform_error = str(
+                query.get("error", query.get("error_code", [""]))[0] or ""
+            )
+            if platform_error:
+                self._html(
+                    oauth.result_page(
+                        success=False,
+                        title="千川授权未完成",
+                        message="平台返回了取消或失败结果，请回到店策重新点击授权。",
+                    ),
+                    400,
+                )
+                return
+            try:
+                result = oauth.complete_authorization(
+                    str(query.get("auth_code", query.get("code", [""]))[0] or ""),
+                    str(query.get("state", [""])[0] or ""),
+                )
+                warning = str(result.get("warning") or "")
+                message = "官方 API 已连接，店策可以读取本次授权的千川账号。"
+                if warning:
+                    message = f"{message} {warning}"
+                self._html(
+                    oauth.result_page(
+                        success=True,
+                        title="千川账号授权成功",
+                        message=message,
+                        account_count=int(result.get("account_count") or 0),
+                    )
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+                logger.warning("千川 OAuth 回调处理失败: %s", error)
+                self._html(
+                    oauth.result_page(
+                        success=False,
+                        title="千川授权未完成",
+                        message=str(error),
+                    ),
+                    400,
+                )
             return
         if path == "/catalog":
             self._json({"snapshots": list_snapshots()})
@@ -3082,6 +3141,13 @@ class Handler(BaseHTTPRequestHandler):
                 settings = save_agent_settings(payload)
                 _invalidate_cache()
                 self._json({"ok": True, "settings": settings})
+                return
+            if path == "/oauth/oceanengine/start":
+                result = OceanEngineOAuth(DATA_DIR).start_authorization(
+                    str(payload.get("app_id") or ""),
+                    str(payload.get("app_secret") or ""),
+                )
+                self._json({"ok": True, **result})
                 return
             if path == "/integrations/settings":
                 self._json({"ok": True, "integrations": save_integration_settings(payload)})

@@ -28,6 +28,33 @@
         <span aria-hidden="true"></span><div><strong>正在连接本地 Agent</strong><p>读取抖店与千川脱敏快照</p></div>
       </section>
 
+      <details id="oceanengine-oauth-card" class="fold-card oauth-card" open>
+        <summary>官方 API 授权 <span id="oceanengine-oauth-state">尚未连接</span></summary>
+        <section class="oauth-panel">
+          <div class="oauth-intro">
+            <div>
+              <strong>连接已审核通过的“店策千川运营助手”</strong>
+              <p>授权后可稳定识别多个千川账号；浏览器页面采集仍会保留，作为无 API 或异常时的备用通道。</p>
+            </div>
+            <span id="oceanengine-account-count">0 个账号</span>
+          </div>
+          <div class="oauth-fields">
+            <label>App ID
+              <input id="oceanengine-app-id" inputmode="numeric" autocomplete="off" value="1871942906223351">
+            </label>
+            <label>App Secret
+              <input id="oceanengine-app-secret" type="password" autocomplete="new-password" placeholder="从开放平台复制；仅加密保存在本机">
+            </label>
+          </div>
+          <div class="oauth-actions">
+            <button id="authorize-oceanengine" type="button">授权千川账号</button>
+            <button id="refresh-oceanengine-status" type="button">刷新授权状态</button>
+          </div>
+          <div id="oceanengine-accounts" class="oauth-accounts" hidden></div>
+          <small id="oceanengine-oauth-result">第一次填写 App Secret；以后新增账号直接点“授权千川账号”。密钥和 Token 不上传到 GitHub。</small>
+        </section>
+      </details>
+
       <details class="fold-card integrations-card">
         <summary>飞书 / 钉钉通知 <span id="integration-status">未连接</span></summary>
         <section class="integrations-panel">

@@ -25,6 +25,7 @@ let focusOnlyActionable = true;
 let managerQueueExpanded = false;
 let currentPreflightSession = null;
 let qianchuanSyncPromise = null;
+let oceanengineStatusPoller = null;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const ROLE_WORKBENCH = {
@@ -275,8 +276,9 @@ async function pollFullScan() {
 
 async function bridgeFetch(path, options = {}) {
   const response = await fetch(`${BRIDGE_URL}${path}`, { cache: "no-store", ...options });
-  if (!response.ok) throw new Error(`本地 Agent 返回 HTTP ${response.status}`);
-  return response.json();
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(value.error || `本地 Agent 返回 HTTP ${response.status}`);
+  return value;
 }
 
 function renderConnection(ok, title, detail) {
@@ -970,6 +972,82 @@ function renderIntegrations(payload = {}) {
   document.getElementById("integration-status").textContent = connected ? `已连接 ${connected} 个平台` : "未连接";
 }
 
+function renderOceanEngineOAuth(payload = {}) {
+  const state = document.getElementById("oceanengine-oauth-state");
+  const result = document.getElementById("oceanengine-oauth-result");
+  const appId = document.getElementById("oceanengine-app-id");
+  const secret = document.getElementById("oceanengine-app-secret");
+  const accountBox = document.getElementById("oceanengine-accounts");
+  const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  if (payload.app_id) appId.value = payload.app_id;
+  secret.value = "";
+  secret.placeholder = payload.secret_saved
+    ? "已用 Windows 本机加密保存；留空继续使用"
+    : "从开放平台复制；仅加密保存在本机";
+  state.className = payload.connected ? "connected" : payload.authorization_in_progress ? "waiting" : "";
+  state.textContent = payload.connected
+    ? "已连接"
+    : payload.authorization_in_progress
+      ? "等待授权完成"
+      : payload.secret_saved
+        ? "待授权账号"
+        : "尚未连接";
+  document.getElementById("oceanengine-account-count").textContent = `${Number(payload.account_count || 0)} 个账号`;
+  accountBox.replaceChildren(...accounts.map((account) => {
+    const chip = document.createElement("span");
+    chip.textContent = account.account_name || `千川账号 ${account.account_id || ""}`;
+    return chip;
+  }));
+  accountBox.hidden = !accounts.length;
+  if (payload.connected) {
+    result.textContent = accounts.length
+      ? `官方 API 已连接，已识别 ${accounts.length} 个授权账号。`
+      : "官方 API 已连接；账号名称会在首次 API 同步后补齐。";
+    result.className = "ok";
+  } else if (payload.last_error) {
+    result.textContent = payload.last_error;
+    result.className = "error";
+  } else if (payload.authorization_in_progress) {
+    result.textContent = "授权页面已打开，请选择要授权的千川账号并确认；完成后这里会自动更新。";
+    result.className = "";
+  } else {
+    result.textContent = payload.secret_saved
+      ? "App Secret 已安全保存在本机，现在可以授权千川账号。"
+      : "第一次填写 App Secret；以后新增账号直接点“授权千川账号”。密钥和 Token 不上传到 GitHub。";
+    result.className = "";
+  }
+}
+
+async function refreshOceanEngineStatus() {
+  const status = await bridgeFetch("/oauth/oceanengine/status");
+  renderOceanEngineOAuth(status);
+  if (status.connected && oceanengineStatusPoller) {
+    clearInterval(oceanengineStatusPoller);
+    oceanengineStatusPoller = null;
+  }
+  return status;
+}
+
+function startOceanEngineStatusPolling() {
+  if (oceanengineStatusPoller) clearInterval(oceanengineStatusPoller);
+  let attempts = 0;
+  oceanengineStatusPoller = setInterval(async () => {
+    attempts += 1;
+    try {
+      const status = await refreshOceanEngineStatus();
+      if (status.connected || !status.authorization_in_progress || attempts >= 90) {
+        clearInterval(oceanengineStatusPoller);
+        oceanengineStatusPoller = null;
+      }
+    } catch {
+      if (attempts >= 90) {
+        clearInterval(oceanengineStatusPoller);
+        oceanengineStatusPoller = null;
+      }
+    }
+  }, 2000);
+}
+
 function renderQianchuanAccounts(payload = {}) {
   const select = document.getElementById("qianchuan-account-select");
   const accounts = payload.accounts || [];
@@ -1299,7 +1377,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR, oceanengineR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1314,6 +1392,7 @@ async function loadDashboard() {
     bridgeFetch("/actions/preflight"),
     bridgeFetch("/actions/shadow"),
     bridgeFetch("/integrations"),
+    bridgeFetch("/oauth/oceanengine/status"),
   ]);
 
   const val = (r, fallback) => r.status === "fulfilled" ? r.value : fallback;
@@ -1330,6 +1409,7 @@ async function loadDashboard() {
   const preflight = val(preflightR, { state: "idle", session: null, checks: [] });
   const shadow = val(shadowR, { items: [], summary: {} });
   const integrations = val(integrationsR, { feishu: { configured: false }, dingtalk: { configured: false }, auto_send_reports: false });
+  const oceanengine = val(oceanengineR, { app_id: "1871942906223351", connected: false, secret_saved: false, accounts: [] });
 
   // Hide loading skeleton
   hideLoadingSkeleton();
@@ -1352,6 +1432,7 @@ async function loadDashboard() {
   renderCoverage(insights.coverage || []);
   renderSettings(settings);
   renderIntegrations(integrations);
+  renderOceanEngineOAuth(oceanengine);
   renderQianchuanAccounts(accounts);
   renderFullScan(extensionResponse?.dashboard?.fullScan || {});
   renderTrends(trends);
@@ -1508,6 +1589,50 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
 document.getElementById("sync-diagnose").addEventListener("click", () => refreshAll(true));
+document.getElementById("refresh-oceanengine-status").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const result = document.getElementById("oceanengine-oauth-result");
+  button.disabled = true;
+  button.textContent = "正在刷新…";
+  try {
+    await refreshOceanEngineStatus();
+  } catch (error) {
+    result.textContent = `刷新失败：${error.message}`;
+    result.className = "error";
+  } finally {
+    button.disabled = false;
+    button.textContent = "刷新授权状态";
+  }
+});
+document.getElementById("authorize-oceanengine").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const result = document.getElementById("oceanengine-oauth-result");
+  const appId = document.getElementById("oceanengine-app-id").value.trim();
+  const appSecret = document.getElementById("oceanengine-app-secret").value.trim();
+  button.disabled = true;
+  button.textContent = "正在打开授权页…";
+  result.textContent = "正在生成本次安全授权链接。";
+  result.className = "";
+  try {
+    const response = await bridgeFetch("/oauth/oceanengine/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    });
+    if (!response.authorize_url) throw new Error("本地 Agent 未生成授权链接");
+    await chrome.tabs.create({ url: response.authorize_url, active: true });
+    document.getElementById("oceanengine-app-secret").value = "";
+    result.textContent = "授权页面已打开：请选择要授权的千川账号并确认，完成后会自动回到本机 Agent。";
+    startOceanEngineStatusPolling();
+    await refreshOceanEngineStatus();
+  } catch (error) {
+    result.textContent = `无法开始授权：${error.message}`;
+    result.className = "error";
+  } finally {
+    button.disabled = false;
+    button.textContent = "授权千川账号";
+  }
+});
 document.getElementById("focus-toggle").addEventListener("click", async () => {
   focusOnlyActionable = !focusOnlyActionable;
   await chrome.storage.local.set({ focusOnlyActionable });
