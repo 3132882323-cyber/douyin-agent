@@ -319,6 +319,56 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertTrue(report_path.exists())
         self.assertIn("千川计划调整建议", report_path.read_text(encoding="utf-8"))
 
+    def test_report_templates_support_builtin_and_custom_layouts(self) -> None:
+        http_receiver.save_agent_settings({"report_template": "brief"})
+        brief = http_receiver.generate_daily_report("2026-07-22")
+        self.assertEqual(brief["template"], "brief")
+        self.assertIn("老板简报", brief["content"])
+
+        http_receiver.save_agent_settings(
+            {
+                "report_template": "custom",
+                "custom_report_template": "# 店策 Agent 自定义日志 {{date}}\n{{headline}}\n{{scan_status}}",
+            }
+        )
+        custom = http_receiver.generate_daily_report("2026-07-23")
+        self.assertEqual(custom["template"], "custom")
+        self.assertIn("自定义日志 2026-07-23", custom["content"])
+        self.assertNotIn("{{headline}}", custom["content"])
+
+    def test_notification_webhooks_are_local_masked_and_platform_specific(self) -> None:
+        public = http_receiver.save_integration_settings(
+            {
+                "feishu_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/test-hook-id",
+                "dingtalk_webhook": "https://oapi.dingtalk.com/robot/send?access_token=test-token",
+                "auto_send_reports": True,
+            }
+        )
+        self.assertTrue(public["feishu"]["configured"])
+        self.assertTrue(public["dingtalk"]["configured"])
+        self.assertNotIn("hook", json.dumps(public))
+        saved = json.loads((http_receiver.DATA_DIR / "integrations.json").read_text(encoding="utf-8"))
+        self.assertIn("test-hook-id", saved["feishu_webhook"])
+
+        sent: list[tuple[str, dict]] = []
+        original_post = http_receiver._post_json
+        try:
+            def fake_post(url: str, payload: dict, timeout: float = 8.0) -> dict:
+                sent.append((url, payload))
+                return {"code": 0} if "feishu" in url else {"errcode": 0}
+
+            http_receiver._post_json = fake_post
+            self.assertTrue(http_receiver.test_integration("feishu")["ok"])
+            self.assertTrue(http_receiver.test_integration("dingtalk")["ok"])
+        finally:
+            http_receiver._post_json = original_post
+        self.assertEqual(sent[0][1]["msg_type"], "text")
+        self.assertEqual(sent[1][1]["msgtype"], "text")
+        self.assertIn("店策 Agent", sent[0][1]["content"]["text"])
+
+        with self.assertRaises(ValueError):
+            http_receiver.save_integration_settings({"feishu_webhook": "https://example.com/hook/token"})
+
     def test_shelf_live_and_ops_manager_priorities(self) -> None:
         http_receiver.save_data("doudian", {"page_type": "shelf", "quality": {"score": 70}, "safe_metrics": {"曝光人数": "28", "点击人数": "4", "成交人数": "0", "订单量": "0", "用户支付金额": "¥0.00"}, "signals": ["商品主图存在不良暗示，请优化", "猜你喜欢未入选 1"]})
         http_receiver.save_data("doudian", {"page_type": "live", "quality": {"score": 70}, "safe_metrics": {"直播场次": "0", "成交金额": "¥0.00"}, "signals": ["当前待直播计划 0"]})

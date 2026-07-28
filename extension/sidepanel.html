@@ -19,10 +19,51 @@
         <span aria-hidden="true"></span><div><strong>正在连接本地 Agent</strong><p>读取抖店与千川脱敏快照</p></div>
       </section>
 
+      <details class="fold-card integrations-card">
+        <summary>飞书 / 钉钉通知 <span id="integration-status">未连接</span></summary>
+        <section class="integrations-panel">
+          <p class="settings-intro">无需申请开发者 API。在目标群添加“自定义机器人”，复制 Webhook 粘贴到下方即可。建议把安全关键词设为“店策 Agent”。</p>
+          <article class="integration-item">
+            <div class="integration-heading"><strong>飞书群机器人</strong><span id="feishu-state">未连接</span></div>
+            <ol>
+              <li>目标群右上角“设置” → “群机器人” → “添加机器人”。</li>
+              <li>选择“自定义机器人”，安全关键词填写“店策 Agent”。</li>
+              <li>复制 Webhook，粘贴并点击“保存并测试”。</li>
+            </ol>
+            <label>Webhook<input id="feishu-webhook" type="password" autocomplete="off" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."></label>
+            <div class="integration-actions">
+              <button type="button" data-integration-test="feishu">保存并测试</button>
+              <button type="button" data-integration-clear="feishu">清除</button>
+              <a href="https://open.feishu.cn/document/ukTMukTMukTM/ucTM5YjL3ETO24yNxkjN?lang=zh-CN" target="_blank" rel="noreferrer">官方说明</a>
+            </div>
+            <small id="feishu-result"></small>
+          </article>
+          <article class="integration-item">
+            <div class="integration-heading"><strong>钉钉群机器人</strong><span id="dingtalk-state">未连接</span></div>
+            <ol>
+              <li>目标群“设置” → “机器人/智能群助手” → “添加机器人”。</li>
+              <li>选择“自定义机器人”，安全关键词填写“店策 Agent”。</li>
+              <li>复制 Webhook，粘贴并点击“保存并测试”。</li>
+            </ol>
+            <label>Webhook<input id="dingtalk-webhook" type="password" autocomplete="off" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."></label>
+            <div class="integration-actions">
+              <button type="button" data-integration-test="dingtalk">保存并测试</button>
+              <button type="button" data-integration-clear="dingtalk">清除</button>
+              <a href="https://open.dingtalk.com/document/orgapp/custom-robot-access" target="_blank" rel="noreferrer">官方说明</a>
+            </div>
+            <small id="dingtalk-result"></small>
+          </article>
+          <label class="switch-row"><input id="auto-send-reports" type="checkbox"> 定时日志生成后自动发送到已连接群</label>
+          <button id="save-integration-settings" class="small-primary integration-save">保存发送设置</button>
+        </section>
+      </details>
+
       <section class="hero">
-        <div class="eyebrow">今日经营简报</div>
-        <h2 id="headline">等待首次同步</h2>
-        <p id="summary">打开后台页面后点击“同步并诊断”。</p>
+        <div class="hero-copy">
+          <div class="eyebrow">今日经营简报</div>
+          <h2 id="headline">等待首次同步</h2>
+          <p id="summary">打开后台页面后点击“同步并诊断”。</p>
+        </div>
         <div class="hero-actions">
           <button id="sync-diagnose" class="primary">同步并诊断</button>
           <button id="copy-brief" class="secondary">复制简报</button>
@@ -64,17 +105,20 @@
           <button id="retry-scan-button" hidden>重试失败页</button>
           <button id="cancel-scan-button" hidden>停止巡检</button>
         </div>
-        <div class="scan-schedule account-choice">
-          <label>分析千川账号
-            <select id="qianchuan-account-select">
-              <option value="">当前千川页面（不校验账号）</option>
-            </select>
-          </label>
+        <div class="scan-controls">
+          <div class="scan-schedule account-choice">
+            <label>分析千川账号
+              <select id="qianchuan-account-select">
+                <option value="">当前千川页面（不校验账号）</option>
+              </select>
+            </label>
+          </div>
+          <button id="current-qianchuan-button" class="current-page-button">读取当前千川页面</button>
         </div>
-        <button id="current-qianchuan-button" class="current-page-button">读取当前千川页面</button>
-        <small id="qianchuan-account-hint">多账号首次使用：先在巨量千川切换账号并同步一次，账号会加入列表。</small>
-        <div class="scan-schedule"><span>手动模式：只有点击按钮才会巡检</span></div>
-        <small id="scan-summary">覆盖经营、商品、订单、内容、直播、货架与千川核心页面</small>
+        <div class="scan-meta">
+          <small id="qianchuan-account-hint">多账号首次使用：先在巨量千川切换账号并同步一次，账号会加入列表。</small>
+          <small id="scan-summary">手动巡检 · 覆盖经营、商品、订单、内容、直播、货架与千川核心页面</small>
+        </div>
       </section>
 
       <details id="scan-receipt-card" class="fold-card scan-receipt-card">
@@ -118,43 +162,51 @@
       </section>
 
       <section class="module-section" data-owner="货架运营">
-        <div class="section-heading"><h3>货架运营</h3><span id="shelf-status">待同步</span></div>
+        <div class="section-heading"><h3>货架转化诊断</h3><span id="shelf-status">等待数据</span></div>
+        <p class="section-intro">按“曝光 → 点击 → 成交”查找流失环节，只展示今天需要处理的问题。</p>
         <div id="shelf-metrics" class="metric-strip"></div>
-        <div id="shelf-actions" class="stack empty-state">请打开商城运营概览同步</div>
+        <div id="shelf-actions" class="stack empty-state">同步商城经营页面后，这里会告诉你先改主图、标题还是商品承接。</div>
       </section>
 
       <section class="module-section" data-owner="直播运营">
-        <div class="section-heading"><h3>直播与内容运营</h3><span id="live-status">待同步</span></div>
+        <div class="section-heading"><h3>直播转化诊断</h3><span id="live-status">等待数据</span></div>
+        <p class="section-intro">按“进房 → 商品点击 → 下单”定位问题，给出下一场直播的具体调整动作。</p>
         <div id="live-metrics" class="metric-strip"></div>
-        <div id="live-actions" class="stack empty-state">请打开店铺直播或千川直播大屏同步</div>
+        <div id="live-actions" class="stack empty-state">同步店铺直播或千川直播大屏后，这里会生成直播调整清单。</div>
       </section>
 
-      <section class="module-section" data-owner="直播运营 投放运营">
-        <div class="section-heading"><h3>千川视频库与直播引流素材</h3><span id="creative-status">待同步</span></div>
+      <section class="module-section wide-module" data-owner="直播运营 投放运营">
+        <div class="section-heading"><h3>千川素材表现</h3><span id="creative-status">等待数据</span></div>
+        <p class="section-intro">先判断哪些素材在消耗、哪些值得复用、哪些应该停止测试，再查看单条视频。</p>
         <div id="creative-metrics" class="metric-strip"></div>
-        <div id="creative-actions" class="stack empty-state">请先同步巨量千川视频库</div>
+        <div id="creative-actions" class="stack empty-state">同步巨量千川视频库后，这里会给出停测、复用和补测建议。</div>
         <details class="inner-fold">
-          <summary>查看单条视频诊断 <span id="creative-count">0 条</span></summary>
-          <div id="creative-videos" class="stack empty-state">暂无视频数据</div>
+          <summary>展开单条视频明细 <span id="creative-count">0 条</span></summary>
+          <div id="creative-videos" class="stack empty-state">暂时没有可分析的视频数据。</div>
         </details>
       </section>
 
       <section class="module-section shadow-section" data-owner="投放运营">
-        <div class="section-heading"><h3>投放影子执行</h3><span id="shadow-count">0 项</span></div>
-        <p class="section-intro">记录人工执行声明，并用后续千川页面回读核验；插件不会自动修改投放。</p>
+        <div class="section-heading"><h3>人工操作核验</h3><span id="shadow-count">0 项</span></div>
+        <p class="section-intro">插件不会自动修改计划。你在千川人工操作后，再回来读取页面核对结果。</p>
         <div id="shadow-summary" class="metric-strip"></div>
-        <div id="shadow-actions" class="stack empty-state">确认千川操作方案后，会在这里进入人工执行与回读核验流程</div>
+        <div id="shadow-actions" class="stack empty-state">确认调整方案后，这里会提示人工操作步骤和核验结果。</div>
       </section>
 
       <section class="module-section" data-owner="投放运营">
-        <div class="section-heading"><h3>千川投手今日工作台</h3><span id="plan-count">0 项</span></div>
-        <p class="section-intro">只看今天必须处理、需要观察和具备放量条件的计划。</p>
-        <div id="plans" class="stack empty-state">请先同步千川计划和报表页面</div>
+        <div class="section-heading"><h3>今日投放调整</h3><span id="plan-count">0 项</span></div>
+        <p class="section-intro">按优先级逐项处理；每条建议都包含判断依据、调整范围和验收指标。</p>
+        <div id="plans" class="stack empty-state">同步千川计划和报表后，这里会生成今天的止损、观察和放量清单。</div>
       </section>
 
-      <section class="module-section" data-owner="商品运营">
-        <div class="section-heading"><h3>库存预警</h3><span id="inventory-count">0 项</span></div>
-        <div id="inventory" class="stack empty-state">请先同步商品或库存页面</div>
+      <section class="module-section inventory-section" data-owner="商品运营">
+        <div class="section-heading"><h3>库存风险与补货</h3><span id="inventory-count">0 项</span></div>
+        <p class="section-intro">默认显示最紧急的 4 项。先保障主推商品不断货，再决定是否继续放量。</p>
+        <div id="inventory" class="stack inventory-grid empty-state">同步商品或库存页面后，这里会按紧急程度排列补货任务。</div>
+        <details id="inventory-more-wrap" class="inner-fold" hidden>
+          <summary>查看剩余库存预警 <span id="inventory-more-count">0 项</span></summary>
+          <div id="inventory-more" class="stack inventory-grid"></div>
+        </details>
       </section>
 
       <details class="fold-card">
@@ -179,22 +231,47 @@
       </details>
 
       <details class="fold-card">
-        <summary>策略阈值与日报 <span>本机设置</span></summary>
+        <summary>策略阈值 <span>本机设置</span></summary>
       <section class="settings-card inner-card">
-        <div class="section-heading"><h3>策略阈值与日报</h3><span>本机设置</span></div>
+        <div class="section-heading"><h3>策略阈值</h3><span>本机设置</span></div>
         <div class="settings-grid">
           <label>ROI 目标<input id="roi-target" type="number" min="0.1" max="20" step="0.1"></label>
           <label>判断消耗门槛<input id="spend-threshold" type="number" min="0" step="10"></label>
           <label>低库存阈值<input id="stock-threshold" type="number" min="0" step="1"></label>
-          <label>日报时间<input id="report-time" type="time"></label>
         </div>
-        <label class="switch-row"><input id="report-enabled" type="checkbox"> 每日自动生成本地经营报告</label>
         <div class="settings-actions">
           <button id="save-settings" class="small-primary">保存设置</button>
-          <button id="generate-report" class="small-secondary">立即生成日报</button>
         </div>
         <p id="settings-status" class="settings-status"></p>
       </section>
+      </details>
+
+      <details class="fold-card">
+        <summary>日志生成 <span id="report-template-label">默认经营日报</span></summary>
+        <section class="report-settings">
+          <p class="settings-intro">直接使用默认模板，或选择一种现成模板后再生成。只有选择“自定义模板”时才需要填写内容。</p>
+          <div class="settings-grid">
+            <label>日志模板
+              <select id="report-template">
+                <option value="default">默认经营日报（推荐）</option>
+                <option value="brief">老板简报</option>
+                <option value="handover">运营交接日志</option>
+                <option value="custom">自定义模板</option>
+              </select>
+            </label>
+            <label>每日生成时间<input id="report-time" type="time"></label>
+          </div>
+          <label id="custom-template-wrap" class="custom-template-wrap" hidden>自定义模板
+            <textarea id="custom-report-template" rows="9" maxlength="12000" placeholder="可使用 {{date}}、{{headline}}、{{summary}}、{{top_tasks}}、{{plans}}、{{inventory}}、{{alerts}}、{{scan_status}}"></textarea>
+          </label>
+          <label class="switch-row"><input id="report-enabled" type="checkbox"> 每日按设定时间生成本地日志</label>
+          <div class="settings-actions report-actions">
+            <button id="save-report-settings" class="small-primary">保存日志设置</button>
+            <button id="generate-report" class="small-secondary">立即生成</button>
+            <button id="generate-send-report" class="small-secondary">生成并发送</button>
+          </div>
+          <p id="report-status" class="settings-status"></p>
+        </section>
       </details>
 
       <details class="fold-card">

@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.13.0-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.16.0-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.13.0 Beta`。经营副驾已改为独立标签页工作台：点击扩展图标直接打开，重复点击会聚焦已有工作台，不再占用浏览器侧栏。桌面宽屏采用分栏布局，窄屏仍自动适配。
+> 当前版本：`v2.16.0 Beta`。工作台下半区改为清晰的两列任务布局，素材与库存使用整行展示；库存默认只显示最紧急的 4 项，其余折叠收纳，任务文案统一为“下一步、判断依据、完成后检查”。
 
 ## 为什么做这个项目
 
@@ -103,7 +103,20 @@
 - 首页最多展示 3 个当日必做事项，降低信息负担。
 - 任务支持待处理、进行中、待观察和已完成状态。
 - 可立即生成 Markdown 日报，也可按设定时间使用最近一次缓存数据生成日报。
+- 日志可选“默认经营日报、老板简报、运营交接日志、自定义模板”；没有特殊要求时直接使用默认模板。
+- 自定义模板支持 `{{date}}`、`{{headline}}`、`{{summary}}`、`{{top_tasks}}`、`{{plans}}`、`{{inventory}}`、`{{scan_status}}` 占位符。
+- 可连接飞书或钉钉自定义机器人，先保存并测试，再选择“生成并发送”；也可开启定时日报自动发送。
 - **定时日报不会触发网页巡查**；需要最新数据时，运营先手动点击巡查。
+
+### 飞书 / 钉钉连接，只需 3 步
+
+不需要申请开发者 API。只要在群聊里添加“自定义机器人”，复制机器人 Webhook，粘贴到工作台并点击“保存并测试”。
+
+1. 在目标群聊中添加自定义机器人。
+2. 安全设置建议使用关键词 `店策 Agent`，然后复制 Webhook。
+3. 打开工作台的“飞书 / 钉钉通知”，粘贴 Webhook，点击“保存并测试”。
+
+飞书操作以[飞书自定义机器人使用指南](https://open.feishu.cn/document/ukTMukTMukTM/ucTM5YjL3ETO24yNxkjN?lang=zh-CN)为准；钉钉操作以[钉钉自定义机器人接入说明](https://open.dingtalk.com/document/orgapp/custom-robot-access)为准。Webhook 相当于群机器人的发送密码，只保存在本机 `bridge/data/integrations.json`，页面不会回显完整地址，也不要把它提交到 GitHub 或发给其他人。
 
 ## 产品原则与安全边界
 
@@ -160,7 +173,7 @@ Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-mode
 4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.13.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.16.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
 
 完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
@@ -297,6 +310,9 @@ douyin-agent/
 - [x] 多千川账号自动锁定、假账号过滤与跨页面账号合并（v2.11.1）
 - [x] 千川影子执行、人工操作声明与预算回读核验（v2.12.0）
 - [x] 独立标签页经营工作台、单实例聚焦与桌面响应式分栏（v2.13.0）
+- [x] 紧凑总览、异常优先体检单与无空白自适应布局（v2.14.0）
+- [x] 默认/老板/交接/自定义日志模板与飞书、钉钉机器人通知（v2.15.0）
+- [x] 专项模块两列重排、库存 Top 4 折叠和任务文案清晰化（v2.16.0）
 - [ ] 通过页面回读、操作前二次确认和操作后验收构建受控单步执行器
 
 更完整的产品说明见 [PRODUCT.md](PRODUCT.md)。
