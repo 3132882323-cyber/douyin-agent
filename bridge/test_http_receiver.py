@@ -164,6 +164,116 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertFalse(draft["can_confirm"])
         self.assertIn("CURRENT_VALUE_MISSING", {item["code"] for item in draft["blocked_reasons"]})
 
+    def test_automation_readiness_builds_candidate_queue_without_execution(self) -> None:
+        base = {
+            "operation_type": "adjust_budget",
+            "operation_label": "降低预算 20%",
+            "target_kind": "qianchuan_plan",
+            "target_id": "plan-ready-1",
+            "target_name": "准备度测试计划",
+            "account_key": "account-ready-1",
+            "account_label": "准备度测试账号",
+            "field": "预算",
+            "current_value": 500.0,
+            "target_value": 400.0,
+            "source": "qianchuan",
+            "page_type": "campaigns",
+            "captured_at_ms": 1_000_000,
+            "quality_score": 90,
+            "confidence": "high",
+            "now_ms": 1_001_000,
+        }
+        confirmable = http_receiver.build_action_draft(**base)
+        preflight = http_receiver.transition_action(confirmable, "confirmed")
+        blocked = http_receiver.build_action_draft(**{**base, "target_id": "", "account_key": ""})
+        report = http_receiver.build_automation_readiness(
+            [
+                {"plan": "待授权计划", "level": "high", "action_params": confirmable},
+                {"plan": "已授权计划", "level": "high", "action_params": preflight},
+                {"plan": "缺少身份计划", "level": "warning", "action_params": blocked},
+                {"plan": "人工建议", "level": "warning"},
+            ]
+        )
+        self.assertFalse(report["execution_enabled"])
+        self.assertEqual(4, report["summary"]["total"])
+        self.assertEqual(1, report["summary"]["preflight_ready"])
+        self.assertEqual(1, report["summary"]["confirmable"])
+        self.assertEqual(1, report["summary"]["blocked"])
+        self.assertEqual(1, report["summary"]["manual_only"])
+        self.assertEqual("preflight_ready", report["items"][0]["status"])
+
+    def test_supervised_preflight_requires_new_readback_and_can_be_stopped(self) -> None:
+        captured_at = int(time.time() * 1000)
+        snapshot = {
+            "schema_version": 2,
+            "page_type": "campaigns",
+            "captured_at": captured_at,
+            "account": {"key": "acct_preflight1", "label": "止损试运行账号"},
+            "quality": {"score": 90, "row_count": 1},
+            "tables": [
+                {
+                    "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_preflight1", "止损检查计划", "500", "300", "0.60", "2"]],
+                }
+            ],
+        }
+        http_receiver.save_data("qianchuan", snapshot)
+        draft = http_receiver.build_action_draft(
+            operation_type="adjust_budget",
+            operation_label="降低预算 20%",
+            target_kind="qianchuan_plan",
+            target_id="plan_preflight1",
+            target_name="止损检查计划",
+            account_key="acct_preflight1",
+            account_label="止损试运行账号",
+            field="预算",
+            current_value=500.0,
+            target_value=400.0,
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=captured_at,
+            quality_score=90,
+            confidence="high",
+        )
+        confirmed = http_receiver.confirm_action_draft(draft)
+        awaiting = http_receiver.start_execution_preflight(confirmed["action_id"])
+        self.assertEqual("awaiting_reread", awaiting["state"])
+        self.assertFalse(awaiting["execution_enabled"])
+
+        snapshot["captured_at"] = awaiting["session"]["started_at_ms"] + 1000
+        http_receiver.save_data("qianchuan", snapshot)
+        ready = http_receiver.build_execution_preflight_report()
+        self.assertEqual("ready_for_final_confirmation", ready["state"])
+        self.assertTrue(all(item["passed"] for item in ready["checks"]))
+        self.assertFalse(ready["write_enabled"])
+
+        stopped = http_receiver.stop_execution_preflight(ready["session"]["session_id"])
+        self.assertEqual("stopped", stopped["state"])
+        self.assertFalse(stopped["execution_enabled"])
+
+    def test_supervised_preflight_rejects_budget_increase(self) -> None:
+        now_ms = int(time.time() * 1000)
+        draft = http_receiver.build_action_draft(
+            operation_type="adjust_budget",
+            operation_label="增加预算 10%",
+            target_kind="qianchuan_plan",
+            target_id="plan_scale001",
+            target_name="放量计划",
+            account_key="acct_scale001",
+            account_label="放量账号",
+            field="预算",
+            current_value=500.0,
+            target_value=550.0,
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=now_ms,
+            quality_score=90,
+            confidence="high",
+        )
+        confirmed = http_receiver.confirm_action_draft(draft)
+        with self.assertRaisesRegex(ValueError, "不开放自动放量"):
+            http_receiver.start_execution_preflight(confirmed["action_id"])
+
     def test_shadow_execution_requires_manual_claim_and_matches_later_readback(self) -> None:
         captured_at = int(time.time() * 1000)
         snapshot = {

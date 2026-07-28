@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.17.0-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.20.0-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.17.0 Beta`。运营总管默认启用聚焦模式，只展示当前有任务的专项模块；无任务模块可一键全部显示，选择会保存在当前浏览器，减少日常巡检后的无效滚动。
+> 当前版本：`v2.20.0 Beta`。新增“受监督单步执行前检查”：首批只允许已确认的降低预算止损方案进入三分钟检查会话，必须重新读取当前千川页面并通过账号、计划 ID、当前预算、页面质量和降幅闸门，同时提供紧急停止。当前仍不写入千川。
 
 ## 为什么做这个项目
 
@@ -173,7 +173,7 @@ Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-mode
 4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.17.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.20.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
 
 完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
@@ -229,6 +229,8 @@ bridge/enable_autostart.bat
 | `get_qianchuan_adjustments` | 获取计划级止损、优化和放量建议 |
 | `get_qianchuan_action_audit` | 查看千川方案确认与撤销记录 |
 | `get_qianchuan_shadow_execution` | 对比人工操作声明与后续千川页面回读结果 |
+| `get_qianchuan_automation_readiness` | 将千川动作分为可进入检查、等待授权、暂时阻止或仅人工处理 |
+| `get_qianchuan_execution_preflight` | 读取当前短时执行前检查会话及各项安全闸门结果 |
 | `get_qianchuan_creative_analysis` | 分析千川视频库与直播引流素材，输出分层和测试建议 |
 | `get_qianchuan_accounts` | 列出本机已识别的千川账号和当前分析账号 |
 | `select_qianchuan_account` | 选择后续分析账号，不登录或切换官方后台 |
@@ -314,6 +316,9 @@ douyin-agent/
 - [x] 默认/老板/交接/自定义日志模板与飞书、钉钉机器人通知（v2.15.0）
 - [x] 专项模块两列重排、库存 Top 4 折叠和任务文案清晰化（v2.16.0）
 - [x] 运营总管聚焦模式、无任务模块自动收纳与显示偏好记忆（v2.17.0）
+- [x] 今日处置队列、优先级排序、真实待办总数与对应模块快捷定位（v2.18.0）
+- [x] 自动化投放候选队列、资格闸门、阻止原因与执行前检查状态（v2.19.0）
+- [x] 降低预算首批试运行、三分钟执行前检查会话、重新回读与紧急停止（v2.20.0）
 - [ ] 通过页面回读、操作前二次确认和操作后验收构建受控单步执行器
 
 更完整的产品说明见 [PRODUCT.md](PRODUCT.md)。

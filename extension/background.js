@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v2.17.0) */
+/** 店策 Agent - MV3 service worker (v2.20.0) */
 
 const BRIDGE_URL = "http://127.0.0.1:8765";
 const QIANCHUAN_ENTRY_URL = "https://qianchuan.jinritemai.com/";

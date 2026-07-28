@@ -87,6 +87,26 @@
         <button id="focus-toggle" type="button" aria-pressed="true">显示全部模块</button>
       </section>
 
+      <section class="manager-card" aria-label="今日处置队列">
+        <div class="section-heading manager-heading">
+          <div>
+            <h3 id="task-heading">今日处置队列</h3>
+            <small id="manager-queue-caption">按紧急程度排列，处理后再进入观察。</small>
+          </div>
+          <div class="queue-heading-actions">
+            <span id="manager-count">0 项待处理</span>
+            <button id="manager-expand" type="button" hidden>查看全部</button>
+          </div>
+        </div>
+        <div id="manager-queue-stats" class="queue-stats" aria-label="处置队列状态"></div>
+        <div id="manager-tasks" class="stack empty-state">正在汇总各岗位任务</div>
+      </section>
+
+      <section id="growth-section" class="growth-card">
+        <div class="section-heading"><h3>今日增长机会</h3><span id="growth-count">0 项</span></div>
+        <div id="growth-tasks" class="stack empty-state">暂无稳定增长机会</div>
+      </section>
+
       <section class="workbench-switcher" aria-label="岗位工作台设置">
         <div>
           <strong id="workbench-title">运营总管工作台</strong>
@@ -159,16 +179,6 @@
         <div id="trend-list" class="trend-list empty-state">历史数据正在积累，完成两次巡检后开始展示变化</div>
       </section>
 
-      <section class="manager-card">
-        <div class="section-heading"><h3 id="task-heading">今日必须处理</h3><span id="manager-count">最多 3 项</span></div>
-        <div id="manager-tasks" class="stack empty-state">正在汇总各岗位任务</div>
-      </section>
-
-      <section id="growth-section" class="growth-card">
-        <div class="section-heading"><h3>今日增长机会</h3><span id="growth-count">0 项</span></div>
-        <div id="growth-tasks" class="stack empty-state">暂无稳定增长机会</div>
-      </section>
-
       <section class="module-section" data-owner="货架运营">
         <div class="section-heading"><h3>货架转化诊断</h3><span id="shelf-status">等待数据</span></div>
         <p class="section-intro">按“曝光 → 点击 → 成交”查找流失环节，只展示今天需要处理的问题。</p>
@@ -192,6 +202,36 @@
           <summary>展开单条视频明细 <span id="creative-count">0 条</span></summary>
           <div id="creative-videos" class="stack empty-state">暂时没有可分析的视频数据。</div>
         </details>
+      </section>
+
+      <section class="module-section wide-module automation-section" data-owner="投放运营">
+        <div class="section-heading"><h3>自动化投放准备度</h3><span id="automation-status">影子模式</span></div>
+        <p class="section-intro">先筛出可进入自动执行器的计划，再完成账号、计划 ID、数据质量、人工授权和执行前回读。当前版本推进到执行前检查，不会自动修改千川。</p>
+        <div class="automation-path" aria-label="自动化投放演进路径">
+          <div class="done" data-automation-stage="diagnosis"><strong>1</strong><span>诊断建议</span></div>
+          <div class="current" data-automation-stage="qualification"><strong>2</strong><span>资格校验</span></div>
+          <div data-automation-stage="authorization"><strong>3</strong><span>人工授权</span></div>
+          <div data-automation-stage="preflight"><strong>4</strong><span>执行前检查</span></div>
+          <div data-automation-stage="execution"><strong>5</strong><span>执行回读</span></div>
+        </div>
+        <div id="automation-summary" class="metric-strip"></div>
+        <details class="inner-fold automation-criteria">
+          <summary>查看进入自动执行器的必要条件 <span>5 项闸门</span></summary>
+          <ul id="automation-criteria-list"></ul>
+        </details>
+        <article id="execution-preflight" class="execution-preflight" hidden>
+          <header>
+            <div><strong>受监督单步执行前检查</strong><small id="preflight-target">等待选择已授权的止损方案</small></div>
+            <span id="preflight-state">尚未启动</span>
+          </header>
+          <div id="preflight-checks" class="preflight-checks"></div>
+          <p id="preflight-next">首批只检查降低预算动作，不开放自动放量。</p>
+          <footer>
+            <button id="preflight-reread" type="button">读取当前千川页并复核</button>
+            <button id="preflight-stop" type="button" class="danger">紧急停止</button>
+          </footer>
+        </article>
+        <div id="automation-candidates" class="stack empty-state">同步千川计划后，这里会显示哪些动作可授权、哪些被阻止以及下一步怎么补齐。</div>
       </section>
 
       <section class="module-section shadow-section" data-owner="投放运营">
