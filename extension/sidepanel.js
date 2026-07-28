@@ -23,6 +23,7 @@ let workbenchScene = "daily";
 let templateChecks = {};
 let focusOnlyActionable = true;
 let managerQueueExpanded = false;
+let currentPreflightSession = null;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const ROLE_WORKBENCH = {
@@ -250,6 +251,7 @@ function appendCopyAction(card, params) {
         confirmButton.textContent = params.state === "confirmed" ? "撤销确认" : "已撤销";
         confirmButton.disabled = params.state !== "confirmed";
         wrap.classList.toggle("confirmed", params.state === "confirmed");
+        refreshAutomationReadiness().catch(() => undefined);
         refreshShadowExecution().catch(() => undefined);
       } catch (error) {
         if (hint) hint.textContent = `确认失败：${error.message}`;
@@ -694,20 +696,24 @@ function taskModuleTarget(item = {}) {
   }[item.owner] || "";
 }
 
-function jumpToTaskModule(item, button) {
-  const targetId = taskModuleTarget(item);
+function revealModuleByChildId(targetId) {
   const target = targetId ? document.getElementById(targetId) : null;
   const section = target?.closest(".module-section");
-  if (!section) return;
+  if (!section) return false;
   section.hidden = false;
   section.classList.remove("module-highlight");
   requestAnimationFrame(() => {
     section.classList.add("module-highlight");
     section.scrollIntoView({ behavior: "smooth", block: "start" });
   });
+  setTimeout(() => section.classList.remove("module-highlight"), 1800);
+  return true;
+}
+
+function jumpToTaskModule(item, button) {
+  if (!revealModuleByChildId(taskModuleTarget(item))) return;
   button.textContent = "已定位到详情";
   setTimeout(() => {
-    section.classList.remove("module-highlight");
     button.textContent = "查看对应模块 ↓";
   }, 1800);
 }
@@ -1056,6 +1062,135 @@ function renderEffectiveness(report = {}) {
   }
 }
 
+function renderAutomationReadiness(report = {}) {
+  const summary = report.summary || {};
+  const items = report.items || [];
+  const totalActionable = Number(summary.preflight_ready || 0) + Number(summary.confirmable || 0) + Number(summary.blocked || 0);
+  setModuleActionCount("automation-candidates", items.length);
+  applyModuleVisibility();
+  document.getElementById("automation-status").textContent = summary.preflight_ready
+    ? `${summary.preflight_ready} 项可进入执行前检查`
+    : summary.confirmable
+      ? `${summary.confirmable} 项等待授权`
+      : items.length ? "条件待补齐" : "等待千川数据";
+  renderMetricStrip("automation-summary", {
+    可进入检查: summary.preflight_ready || 0,
+    等待授权: summary.confirmable || 0,
+    暂时阻止: summary.blocked || 0,
+    仅人工处理: summary.manual_only || 0,
+  });
+
+  const criteria = document.getElementById("automation-criteria-list");
+  criteria.replaceChildren(...(report.criteria || []).map((value) => {
+    const item = document.createElement("li");
+    item.textContent = value;
+    return item;
+  }));
+
+  const container = document.getElementById("automation-candidates");
+  if (!items.length) return empty(container, "同步千川计划后，这里会显示哪些动作可授权、哪些被阻止以及下一步怎么补齐。");
+  container.className = "stack";
+  container.replaceChildren(...items.slice(0, 10).map((item) => {
+    const card = document.createElement("article");
+    card.className = `automation-candidate ${item.status || "blocked"}`;
+    const header = document.createElement("header");
+    const title = document.createElement("strong"); title.textContent = item.plan || "千川计划";
+    const tag = document.createElement("span"); tag.className = "automation-ready-tag"; tag.textContent = item.status_label || "待检查";
+    header.append(title, tag);
+    const change = document.createElement("p"); change.className = "automation-change";
+    change.textContent = item.field
+      ? `${item.field}  ${item.current_value ?? "--"} → ${item.target_value ?? "--"}`
+      : item.operation_label || "人工运营建议";
+    const next = document.createElement("p"); next.className = "automation-next";
+    next.textContent = `下一步：${item.next_step || "返回千川计划核对数据。"}`;
+    card.append(header, change, next);
+
+    const blockedReasons = (item.blocked_reasons || []).map((reason) => reason.message).filter(Boolean);
+    if (blockedReasons.length) {
+      const blockers = document.createElement("div");
+      blockers.className = "automation-blockers";
+      blockers.textContent = blockedReasons.slice(0, 2).join("；");
+      card.append(blockers);
+    }
+
+    if (item.status !== "manual_only") {
+      const actions = document.createElement("div"); actions.className = "automation-card-actions";
+      const button = document.createElement("button"); button.type = "button";
+      const needsReread = (item.blocked_reasons || []).some((reason) => ["DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "CONFIDENCE_NOT_HIGH"].includes(reason.code));
+      button.textContent = needsReread ? "重新读取当前千川页" : item.status === "confirmable" ? "查看并确认方案" : item.status === "preflight_ready" ? "启动执行前检查" : "查看投放方案";
+      button.addEventListener("click", async () => {
+        if (needsReread) {
+          document.getElementById("current-qianchuan-button").click();
+          document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+        if (item.status === "preflight_ready" && item.action_id) {
+          button.disabled = true;
+          button.textContent = "正在启动检查…";
+          try {
+            const response = await bridgeFetch("/actions/preflight/start", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+              body: JSON.stringify({ action_id: item.action_id }),
+            });
+            renderExecutionPreflight(response.preflight || {});
+            document.getElementById("execution-preflight").scrollIntoView({ behavior: "smooth", block: "center" });
+          } catch (error) {
+            button.textContent = error.message || "启动失败";
+            button.disabled = false;
+          }
+          return;
+        }
+        revealModuleByChildId("plans");
+      });
+      actions.append(button);
+      card.append(actions);
+    }
+    return card;
+  }));
+  if (!totalActionable) document.getElementById("automation-status").textContent = "仅保留人工建议";
+}
+
+function renderExecutionPreflight(report = {}) {
+  const panel = document.getElementById("execution-preflight");
+  const state = report.state || "idle";
+  currentPreflightSession = report.session || null;
+  const stages = [...document.querySelectorAll("[data-automation-stage]")];
+  stages.forEach((stage) => stage.classList.remove("done", "current"));
+  const stageMap = Object.fromEntries(stages.map((stage) => [stage.dataset.automationStage, stage]));
+  stageMap.diagnosis?.classList.add("done");
+  if (state === "idle") {
+    stageMap.qualification?.classList.add("current");
+  } else {
+    stageMap.qualification?.classList.add("done");
+    stageMap.authorization?.classList.add("done");
+    stageMap.preflight?.classList.add("current");
+  }
+  panel.hidden = state === "idle";
+  panel.className = `execution-preflight${state === "ready_for_final_confirmation" ? " ready" : state === "blocked" || state === "expired" ? " blocked" : state === "stopped" ? " stopped" : ""}`;
+  document.getElementById("preflight-state").textContent = report.state_label || "尚未启动";
+  const action = report.action || {};
+  document.getElementById("preflight-target").textContent = action.plan_name
+    ? `${action.account_label || "千川账号"} · ${action.plan_name} · ${action.field || "预算"} ${action.current_value ?? "--"} → ${action.target_value ?? "--"}`
+    : "等待选择已授权的止损方案";
+  const checks = document.getElementById("preflight-checks");
+  checks.replaceChildren(...(report.checks || []).map((item) => {
+    const row = document.createElement("div"); row.className = `preflight-check${item.passed ? " passed" : ""}`;
+    const mark = document.createElement("span"); mark.textContent = item.passed ? "✓" : "!";
+    const body = document.createElement("div");
+    const title = document.createElement("strong"); title.textContent = item.label;
+    const detail = document.createElement("small"); detail.textContent = item.detail || "";
+    body.append(title, detail); row.append(mark, body);
+    return row;
+  }));
+  document.getElementById("preflight-next").textContent = report.next_step || "首批只检查降低预算动作，不开放自动放量。";
+  const reread = document.getElementById("preflight-reread");
+  const stop = document.getElementById("preflight-stop");
+  reread.hidden = ["ready_for_final_confirmation", "stopped"].includes(state);
+  reread.disabled = state === "expired";
+  stop.disabled = !currentPreflightSession || ["stopped", "expired"].includes(state);
+}
+
 function renderShadowExecution(report = {}) {
   const items = report.items || [];
   const summary = report.summary || {};
@@ -1138,6 +1273,16 @@ async function refreshShadowExecution() {
   renderShadowExecution(report);
 }
 
+async function refreshAutomationReadiness() {
+  const report = await bridgeFetch("/actions/readiness");
+  renderAutomationReadiness(report);
+}
+
+async function refreshExecutionPreflight() {
+  const report = await bridgeFetch("/actions/preflight");
+  renderExecutionPreflight(report);
+}
+
 async function loadDashboard() {
   // Show loading skeleton
   showLoadingSkeleton();
@@ -1146,7 +1291,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, shadowR, integrationsR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1157,6 +1302,8 @@ async function loadDashboard() {
     bridgeFetch("/qianchuan-accounts"),
     bridgeFetch("/health-monitor"),
     bridgeFetch("/effectiveness"),
+    bridgeFetch("/actions/readiness"),
+    bridgeFetch("/actions/preflight"),
     bridgeFetch("/actions/shadow"),
     bridgeFetch("/integrations"),
   ]);
@@ -1171,6 +1318,8 @@ async function loadDashboard() {
   const accounts = val(accountsR, { accounts: [], selected_account_key: "" });
   const health = val(healthR, {});
   const effectiveness = val(effectivenessR, {});
+  const readiness = val(readinessR, { items: [], summary: {}, criteria: [] });
+  const preflight = val(preflightR, { state: "idle", session: null, checks: [] });
   const shadow = val(shadowR, { items: [], summary: {} });
   const integrations = val(integrationsR, { feishu: { configured: false }, dingtalk: { configured: false }, auto_send_reports: false });
 
@@ -1200,6 +1349,8 @@ async function loadDashboard() {
   renderTrends(trends);
   renderHealthMonitor(health);
   renderEffectiveness(effectiveness);
+  renderAutomationReadiness(readiness);
+  renderExecutionPreflight(preflight);
   renderShadowExecution(shadow);
 
   // Restore focus if the focused element still exists
@@ -1280,6 +1431,41 @@ document.getElementById("manager-expand").addEventListener("click", () => {
   if (!currentOperationsContext) return;
   const { ops, shelf, live, creative, coverage } = currentOperationsContext;
   renderOperations(ops, shelf, live, creative, coverage);
+});
+document.getElementById("preflight-reread").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "正在读取并复核…";
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "sync-current-qianchuan" });
+    if (!response?.ok) throw new Error(response?.error || "读取失败");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await refreshExecutionPreflight();
+  } catch (error) {
+    document.getElementById("preflight-next").textContent = error.message || "读取失败，请先打开对应千川计划页面。";
+  } finally {
+    button.disabled = false;
+    button.textContent = "读取当前千川页并复核";
+  }
+});
+document.getElementById("preflight-stop").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  if (!currentPreflightSession?.session_id) return;
+  button.disabled = true;
+  button.textContent = "正在停止…";
+  try {
+    const response = await bridgeFetch("/actions/preflight/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+      body: JSON.stringify({ session_id: currentPreflightSession.session_id }),
+    });
+    renderExecutionPreflight(response.preflight || {});
+  } catch (error) {
+    document.getElementById("preflight-next").textContent = error.message || "停止失败";
+    button.disabled = false;
+  } finally {
+    button.textContent = "紧急停止";
+  }
 });
 document.getElementById("full-scan-button").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "start-full-scan", account_key: selectedQianchuanAccount });

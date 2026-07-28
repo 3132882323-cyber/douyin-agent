@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 
-from action_protocol import build_action_draft, transition_action, validate_action_draft
+from action_protocol import assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(message)s")
 logger = logging.getLogger("dian-agent-http")
@@ -1160,6 +1160,229 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _execution_preflight_path() -> Path:
+    return DATA_DIR / "execution_preflight.json"
+
+
+def load_execution_preflight() -> dict[str, Any]:
+    path = _execution_preflight_path()
+    if not path.exists():
+        return {"schema_version": 1, "session": None, "execution_enabled": False}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        session = value.get("session") if isinstance(value, dict) else None
+        return {
+            "schema_version": 1,
+            "updated_at": value.get("updated_at") if isinstance(value, dict) else None,
+            "session": session if isinstance(session, dict) else None,
+            "execution_enabled": False,
+        }
+    except (OSError, json.JSONDecodeError):
+        logger.exception("读取执行前检查会话失败: %s", path)
+        return {"schema_version": 1, "session": None, "execution_enabled": False}
+
+
+def _save_execution_preflight(session: dict[str, Any] | None) -> None:
+    _atomic_json_write(
+        _execution_preflight_path(),
+        {"schema_version": 1, "updated_at": _now_label(), "session": session, "execution_enabled": False},
+    )
+
+
+def start_execution_preflight(action_id: str) -> dict[str, Any]:
+    """Start a short-lived, read-only supervised-execution preflight."""
+
+    action_id = str(action_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{24}", action_id):
+        raise ValueError("动作编号无效。")
+    action = next(
+        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == action_id),
+        None,
+    )
+    if not action or action.get("state") != "confirmed":
+        raise ValueError("只有已确认且未撤销的方案可以启动执行前检查。")
+    errors = validate_action_draft(action)
+    if errors:
+        messages = "；".join(dict.fromkeys(str(item.get("message") or "动作校验失败") for item in errors))
+        raise ValueError(messages)
+    change = action.get("change") if isinstance(action.get("change"), dict) else {}
+    current_value = change.get("current_value")
+    target_value = change.get("target_value")
+    if action.get("operation_type") != "adjust_budget":
+        raise ValueError("首批受监督执行只开放降低预算，不支持其他动作。")
+    if not isinstance(current_value, (int, float)) or not isinstance(target_value, (int, float)) or float(target_value) >= float(current_value):
+        raise ValueError("首批受监督执行只开放降低预算，不开放自动放量。")
+
+    now_ms = int(time.time() * 1000)
+    session_seed = f"{action_id}:{now_ms}".encode("utf-8")
+    session = {
+        "session_id": hashlib.sha256(session_seed).hexdigest()[:24],
+        "action_id": action_id,
+        "state": "awaiting_reread",
+        "started_at_ms": now_ms,
+        "expires_at_ms": now_ms + 3 * 60 * 1000,
+        "pilot_scope": "reduce_budget_only",
+        "current_value": current_value,
+        "target_value": target_value,
+        "write_enabled": False,
+        "execution_enabled": False,
+    }
+    with _state_lock:
+        _save_execution_preflight(session)
+    return build_execution_preflight_report()
+
+
+def stop_execution_preflight(session_id: str) -> dict[str, Any]:
+    session_id = str(session_id or "").lower()
+    stored = load_execution_preflight().get("session")
+    if not stored or stored.get("session_id") != session_id:
+        raise ValueError("未找到对应的执行前检查会话。")
+    stopped = {
+        **stored,
+        "state": "stopped",
+        "stopped_at_ms": int(time.time() * 1000),
+        "write_enabled": False,
+        "execution_enabled": False,
+    }
+    with _state_lock:
+        _save_execution_preflight(stopped)
+    return build_execution_preflight_report()
+
+
+def build_execution_preflight_report() -> dict[str, Any]:
+    """Recheck a short-lived session against the latest Qianchuan page."""
+
+    stored = load_execution_preflight().get("session")
+    if not stored:
+        return {
+            "mode": "supervised_preflight",
+            "state": "idle",
+            "state_label": "尚未启动",
+            "execution_enabled": False,
+            "write_enabled": False,
+            "session": None,
+            "checks": [],
+        }
+
+    now_ms = int(time.time() * 1000)
+    state = str(stored.get("state") or "awaiting_reread")
+    if state not in {"stopped", "expired"} and int(stored.get("expires_at_ms") or 0) <= now_ms:
+        state = "expired"
+        stored = {**stored, "state": state, "write_enabled": False, "execution_enabled": False}
+        with _state_lock:
+            _save_execution_preflight(stored)
+
+    action = next(
+        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == stored.get("action_id")),
+        None,
+    )
+    readback = _find_plan_readback(action) if isinstance(action, dict) else None
+    target = action.get("target_ref") if isinstance(action, dict) and isinstance(action.get("target_ref"), dict) else {}
+    change = action.get("change") if isinstance(action, dict) and isinstance(action.get("change"), dict) else {}
+    started_at_ms = int(stored.get("started_at_ms") or 0)
+    current_value = change.get("current_value")
+    target_value = change.get("target_value")
+    observed = (readback or {}).get("current_value")
+    checks = [
+        {
+            "id": "fresh_reread",
+            "label": "确认后重新读取页面",
+            "passed": bool(readback and int(readback.get("captured_at_ms") or 0) > started_at_ms),
+            "detail": "必须使用本次检查启动后的新页面数据。",
+        },
+        {
+            "id": "account_match",
+            "label": "千川账号一致",
+            "passed": bool(readback and readback.get("account_key") == target.get("account_key")),
+            "detail": str((readback or {}).get("account_label") or target.get("account_label") or "账号未识别"),
+        },
+        {
+            "id": "plan_match",
+            "label": "计划唯一 ID 一致",
+            "passed": bool(readback and readback.get("plan_id") == target.get("id")),
+            "detail": str(target.get("id") or "缺少计划 ID"),
+        },
+        {
+            "id": "quality",
+            "label": "页面质量分不低于 70",
+            "passed": bool(readback and int(readback.get("quality_score") or 0) >= 70),
+            "detail": f"当前质量分 {int((readback or {}).get('quality_score') or 0)}",
+        },
+        {
+            "id": "current_value_match",
+            "label": "当前预算未被其他人修改",
+            "passed": bool(
+                isinstance(observed, (int, float))
+                and isinstance(current_value, (int, float))
+                and abs(float(observed) - float(current_value)) <= 0.01
+            ),
+            "detail": f"方案值 {current_value if current_value is not None else '--'}，页面值 {observed if observed is not None else '--'}",
+        },
+        {
+            "id": "pilot_scope",
+            "label": "符合首批止损范围",
+            "passed": bool(
+                isinstance(current_value, (int, float))
+                and isinstance(target_value, (int, float))
+                and float(current_value) > 0
+                and 0 < (float(current_value) - float(target_value)) / float(current_value) <= 0.30
+            ),
+            "detail": "仅允许单次降低预算，降幅不超过 30%。",
+        },
+    ]
+
+    if state == "stopped":
+        label = "已紧急停止"
+    elif state == "expired":
+        label = "检查会话已过期"
+    elif not checks[0]["passed"]:
+        state = "awaiting_reread"
+        label = "等待重新读取当前千川页"
+    elif all(item["passed"] for item in checks):
+        state = "ready_for_final_confirmation"
+        label = "执行前检查已通过"
+    else:
+        state = "blocked"
+        label = "执行前检查未通过"
+
+    report_session = {
+        **stored,
+        "state": state,
+        "write_enabled": False,
+        "execution_enabled": False,
+    }
+    if state != stored.get("state") and state not in {"awaiting_reread", "blocked"}:
+        with _state_lock:
+            _save_execution_preflight(report_session)
+    return {
+        "mode": "supervised_preflight",
+        "state": state,
+        "state_label": label,
+        "execution_enabled": False,
+        "write_enabled": False,
+        "session": report_session,
+        "action": {
+            "plan_name": str(target.get("name") or ""),
+            "account_label": str(target.get("account_label") or ""),
+            "plan_id": str(target.get("id") or ""),
+            "field": change.get("field"),
+            "current_value": current_value,
+            "target_value": target_value,
+        },
+        "readback": readback,
+        "checks": checks,
+        "next_step": (
+            "全部闸门已通过；当前版本仍不会写入千川，下一版本将在此处增加最终确认与受控页面操作。"
+            if state == "ready_for_final_confirmation"
+            else "重新读取当前千川页面，系统会自动复核账号、计划、预算和质量。"
+            if state == "awaiting_reread"
+            else "停止当前会话后重新生成方案。"
+            if state in {"blocked", "expired"}
+            else "会话已停止，未执行任何千川操作。"
+        ),
+    }
+
+
 def build_shadow_execution_report() -> dict[str, Any]:
     """Compare user-reported manual actions with a later Qianchuan readback."""
     actions = [
@@ -1469,6 +1692,97 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
                 item["action_params"] = action_params
         cleaned.append({**item, **_plan_workbench_fields(item, task_states)})
     return cleaned
+
+
+def build_automation_readiness(recommendations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Build the future executor candidate queue without enabling execution."""
+
+    recommendations = recommendations if recommendations is not None else build_plan_recommendations()
+    items: list[dict[str, Any]] = []
+    for recommendation in recommendations:
+        action = recommendation.get("action_params")
+        if not isinstance(action, dict):
+            items.append(
+                {
+                    "plan": str(recommendation.get("plan") or "千川计划"),
+                    "level": str(recommendation.get("level") or "info"),
+                    "operation_label": str(recommendation.get("suggestion") or "人工复核"),
+                    "status": "manual_only",
+                    "status_label": "仅人工处理",
+                    "stage": "proposal",
+                    "next_step": "缺少结构化动作参数，保留为人工运营建议。",
+                    "can_enter_preflight": False,
+                    "execution_enabled": False,
+                    "blocked_reasons": [],
+                }
+            )
+            continue
+
+        readiness = assess_automation_readiness(action)
+        change = action.get("change") if isinstance(action.get("change"), dict) else {}
+        target = action.get("target_ref") if isinstance(action.get("target_ref"), dict) else {}
+        current_value = change.get("current_value")
+        target_value = change.get("target_value")
+        pilot_eligible = (
+            action.get("operation_type") == "adjust_budget"
+            and isinstance(current_value, (int, float))
+            and isinstance(target_value, (int, float))
+            and float(target_value) < float(current_value)
+        )
+        if readiness["status"] in {"confirmable", "preflight_ready"} and not pilot_eligible:
+            readiness = {
+                **readiness,
+                "status": "blocked",
+                "status_label": "试运行暂不开放",
+                "stage": "qualification",
+                "next_step": "首批受监督执行只开放降低预算止损；放量和其他动作继续人工处理。",
+                "can_enter_preflight": False,
+                "blocked_reasons": [
+                    *readiness.get("blocked_reasons", []),
+                    {"code": "PILOT_SCOPE_RESTRICTED", "message": "首批只允许降低预算，不开放自动放量。"},
+                ],
+            }
+        items.append(
+            {
+                "action_id": str(action.get("action_id") or ""),
+                "plan": str(recommendation.get("plan") or target.get("name") or "千川计划"),
+                "level": str(recommendation.get("level") or "info"),
+                "operation_type": str(action.get("operation_type") or ""),
+                "operation_label": str(action.get("operation_label") or recommendation.get("suggestion") or "人工复核"),
+                "account_label": str(target.get("account_label") or target.get("account_key") or "账号未锁定"),
+                "plan_id": str(target.get("id") or ""),
+                "field": change.get("field"),
+                "current_value": current_value,
+                "target_value": target_value,
+                **readiness,
+            }
+        )
+
+    order = {"preflight_ready": 0, "confirmable": 1, "blocked": 2, "manual_only": 3}
+    items.sort(key=lambda item: (order.get(str(item.get("status")), 9), 0 if item.get("level") == "high" else 1))
+    summary = {
+        "total": len(items),
+        "preflight_ready": sum(item["status"] == "preflight_ready" for item in items),
+        "confirmable": sum(item["status"] == "confirmable" for item in items),
+        "blocked": sum(item["status"] == "blocked" for item in items),
+        "manual_only": sum(item["status"] == "manual_only" for item in items),
+    }
+    return {
+        "generated_at": _now_label(),
+        "mode": "readiness_only",
+        "current_stage": "supervised_preflight",
+        "next_stage": "supervised_execution",
+        "execution_enabled": False,
+        "criteria": [
+            "锁定千川账号与计划唯一 ID",
+            "页面数据不超过 10 分钟且质量分不低于 70",
+            "消耗、成交和 ROI 支持高置信度判断",
+            "单次预算增加不超过 15%，降低不超过 30%",
+            "执行前重新读取，执行后再次回读验收",
+        ],
+        "summary": summary,
+        "items": items,
+    }
 
 
 def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2569,7 +2883,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.18.0"
+    server_version = "DianAgent/2.20.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2609,7 +2923,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.18.0",
+                    "version": "2.20.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -2674,6 +2988,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/actions/audit":
             self._json(get_action_audit(int(query.get("limit", ["100"])[0])))
+            return
+        if path == "/actions/readiness":
+            self._json(build_automation_readiness())
+            return
+        if path == "/actions/preflight":
+            self._json(build_execution_preflight_report())
             return
         if path == "/actions/shadow":
             self._json(build_shadow_execution_report())
@@ -2775,6 +3095,14 @@ class Handler(BaseHTTPRequestHandler):
                 marker = mark_action_manually_applied(str(payload.get("action_id") or ""))
                 _invalidate_cache()
                 self._json({"ok": True, "marker": marker, "executed_by_plugin": False, "execution_enabled": False})
+                return
+            if path == "/actions/preflight/start":
+                report = start_execution_preflight(str(payload.get("action_id") or ""))
+                self._json({"ok": True, "preflight": report, "executed": False, "execution_enabled": False})
+                return
+            if path == "/actions/preflight/stop":
+                report = stop_execution_preflight(str(payload.get("session_id") or ""))
+                self._json({"ok": True, "preflight": report, "executed": False, "execution_enabled": False})
                 return
             if path == "/scan-status":
                 self._json({"ok": True, "scan": save_scan_status(payload)})

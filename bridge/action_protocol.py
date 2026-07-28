@@ -234,6 +234,66 @@ def validate_action_draft(action: dict[str, Any], *, now_ms: int | None = None) 
     return errors
 
 
+def assess_automation_readiness(action: dict[str, Any]) -> dict[str, Any]:
+    """Classify a proposal for the future supervised executor.
+
+    This is intentionally a readiness assessment, not an execution decision.
+    It gives the product and UI a stable way to explain what can move into
+    preflight, what still needs user confirmation and what must remain manual.
+    """
+
+    if not isinstance(action, dict):
+        return {
+            "status": "blocked",
+            "status_label": "暂时阻止",
+            "stage": "qualification",
+            "next_step": "重新生成投放建议。",
+            "can_enter_preflight": False,
+            "execution_enabled": False,
+            "blocked_reasons": [_block("INVALID_ACTION", "动作草稿格式无效。")],
+        }
+
+    blocked = [item for item in action.get("blocked_reasons", []) if isinstance(item, dict)]
+    codes = {str(item.get("code") or "") for item in blocked}
+    state = str(action.get("state") or "draft")
+
+    if "NON_EXECUTABLE_ACTION" in codes:
+        status = "manual_only"
+        label = "仅人工处理"
+        stage = "proposal"
+        next_step = "该建议不涉及受支持的千川资金动作，保留人工处理。"
+    elif blocked:
+        status = "blocked"
+        label = "暂时阻止"
+        stage = "qualification"
+        if codes & {"DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "CONFIDENCE_NOT_HIGH"}:
+            next_step = "重新读取当前千川页面，并补齐高质量消耗、成交和 ROI 数据。"
+        elif codes & {"ACCOUNT_NOT_LOCKED", "TARGET_ID_MISSING", "TARGET_NAME_MISSING"}:
+            next_step = "锁定正确千川账号，并补齐计划唯一 ID。"
+        else:
+            next_step = "按阻止原因补齐条件后重新生成方案。"
+    elif state == "confirmed":
+        status = "preflight_ready"
+        label = "可进入执行前检查"
+        stage = "preflight"
+        next_step = "执行前重新读取页面，核对账号、计划、当前值和授权额度。"
+    else:
+        status = "confirmable"
+        label = "等待人工授权"
+        stage = "authorization"
+        next_step = "投手确认动作范围后，进入执行前重新读取。"
+
+    return {
+        "status": status,
+        "status_label": label,
+        "stage": stage,
+        "next_step": next_step,
+        "can_enter_preflight": status == "preflight_ready",
+        "execution_enabled": False,
+        "blocked_reasons": blocked,
+    }
+
+
 def transition_action(action: dict[str, Any], next_state: str, *, allow_execution: bool = False) -> dict[str, Any]:
     current_state = str(action.get("state") or "")
     if current_state not in ACTION_STATES or next_state not in ACTION_STATES:

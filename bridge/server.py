@@ -27,6 +27,8 @@ from http_receiver import (
     _cached,
     _invalidate_cache,
     build_action_center,
+    build_automation_readiness,
+    build_execution_preflight_report,
     build_insights,
     build_inventory_alerts,
     build_live_analysis,
@@ -109,6 +111,16 @@ TOOLS = [
     Tool(
         name="get_qianchuan_adjustments",
         description="按计划明细生成带账号、计划 ID、当前值、目标值和安全校验的千川操作草稿；不执行投放变更",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_qianchuan_automation_readiness",
+        description="将千川建议分为可进入执行前检查、等待人工授权、暂时阻止和仅人工处理；用于自动化投放前置资格检查，不执行投放变更",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_qianchuan_execution_preflight",
+        description="读取当前受监督执行前检查会话及账号、计划、预算、时效和质量闸门结果；只读，不执行投放变更",
         inputSchema={"type": "object", "properties": {}, "required": []},
     ),
     Tool(
@@ -277,6 +289,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     if name == "get_qianchuan_adjustments":
         return _text({"recommendations": _cached("plan_recs", build_plan_recommendations), "mode": "proposal_only", "execution_enabled": False})
+
+    if name == "get_qianchuan_automation_readiness":
+        return _text(build_automation_readiness())
+
+    if name == "get_qianchuan_execution_preflight":
+        return _text(build_execution_preflight_report())
 
     if name == "get_qianchuan_action_audit":
         return _text(get_action_audit(int(arguments.get("limit") or 100)))

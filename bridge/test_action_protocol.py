@@ -1,6 +1,6 @@
 import unittest
 
-from action_protocol import build_action_draft, transition_action, validate_action_draft
+from action_protocol import assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
 
 
 class ActionProtocolTests(unittest.TestCase):
@@ -85,6 +85,26 @@ class ActionProtocolTests(unittest.TestCase):
         confirmed = transition_action(self._draft(), "confirmed")
         with self.assertRaisesRegex(ValueError, "execution is disabled"):
             transition_action(confirmed, "executing")
+
+    def test_readiness_separates_confirmation_preflight_and_blocked(self):
+        confirmable = assess_automation_readiness(self._draft())
+        self.assertEqual("confirmable", confirmable["status"])
+        self.assertFalse(confirmable["can_enter_preflight"])
+
+        confirmed = transition_action(self._draft(), "confirmed")
+        preflight = assess_automation_readiness(confirmed)
+        self.assertEqual("preflight_ready", preflight["status"])
+        self.assertTrue(preflight["can_enter_preflight"])
+        self.assertFalse(preflight["execution_enabled"])
+
+        blocked = assess_automation_readiness(self._draft(account_key="", target_id=""))
+        self.assertEqual("blocked", blocked["status"])
+        self.assertIn("账号", blocked["next_step"])
+
+    def test_non_executable_recommendation_stays_manual(self):
+        manual = assess_automation_readiness(self._draft(operation_type="replace_creative"))
+        self.assertEqual("manual_only", manual["status"])
+        self.assertFalse(manual["execution_enabled"])
 
 
 if __name__ == "__main__":
