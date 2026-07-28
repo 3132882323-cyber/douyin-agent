@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+from urllib.request import Request, urlopen
 
 from action_protocol import build_action_draft, transition_action, validate_action_draft
 
@@ -35,6 +36,25 @@ MAX_BODY_BYTES = int(os.environ.get("BRIDGE_MAX_BODY", str(2 * 1024 * 1024)))
 ALLOWED_SOURCES = {"doudian", "qianchuan"}
 SAFE_KEY = re.compile(r"^[a-z0-9_-]{1,48}$")
 STALE_SECONDS = 10 * 60
+REPORT_TEMPLATE_KEYS = {"default", "brief", "handover", "custom"}
+DEFAULT_CUSTOM_REPORT_TEMPLATE = """# 店策 Agent 经营日志 - {{date}}
+
+## 今日结论
+{{headline}}
+{{summary}}
+
+## 今日重点
+{{top_tasks}}
+
+## 千川计划
+{{plans}}
+
+## 库存风险
+{{inventory}}
+
+## 数据状态
+{{scan_status}}
+"""
 DEFAULT_AGENT_SETTINGS = {
     "roi_target": 1.5,
     "min_spend_for_action": 100.0,
@@ -44,6 +64,8 @@ DEFAULT_AGENT_SETTINGS = {
     "daily_report_enabled": True,
     "daily_report_time": "09:00",
     "report_retention_days": 30,
+    "report_template": "default",
+    "custom_report_template": DEFAULT_CUSTOM_REPORT_TEMPLATE,
     "history_retention_days": 30,
     "qianchuan_account_key": "",
 }
@@ -640,6 +662,14 @@ def save_agent_settings(values: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("daily_report_time must be HH:MM")
     next_settings["daily_report_time"] = report_time
     next_settings["report_retention_days"] = min(365, max(1, int(next_settings["report_retention_days"])))
+    report_template = str(next_settings.get("report_template") or "default")
+    if report_template not in REPORT_TEMPLATE_KEYS:
+        raise ValueError("report_template must be default, brief, handover or custom")
+    next_settings["report_template"] = report_template
+    custom_template = str(next_settings.get("custom_report_template") or "").strip()
+    if len(custom_template) > 12_000:
+        raise ValueError("custom_report_template is too long")
+    next_settings["custom_report_template"] = custom_template or DEFAULT_CUSTOM_REPORT_TEMPLATE
     next_settings["history_retention_days"] = min(365, max(1, int(next_settings["history_retention_days"])))
     account_key = str(next_settings.get("qianchuan_account_key") or "").lower()
     if account_key and not SAFE_KEY.fullmatch(account_key):
@@ -647,6 +677,129 @@ def save_agent_settings(values: dict[str, Any]) -> dict[str, Any]:
     next_settings["qianchuan_account_key"] = account_key
     _atomic_json_write(_settings_path(), next_settings)
     return next_settings
+
+
+def _integrations_path() -> Path:
+    return DATA_DIR / "integrations.json"
+
+
+def _validate_webhook(platform: str, value: str) -> str:
+    webhook = str(value or "").strip()
+    if not webhook:
+        return ""
+    parsed = urlparse(webhook)
+    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("Webhook 必须是平台提供的 HTTPS 地址。")
+    if platform == "feishu":
+        valid = parsed.hostname == "open.feishu.cn" and parsed.path.startswith("/open-apis/bot/v2/hook/")
+    elif platform == "dingtalk":
+        valid = parsed.hostname == "oapi.dingtalk.com" and parsed.path == "/robot/send" and bool(parse_qs(parsed.query).get("access_token"))
+    else:
+        raise ValueError("不支持的通知平台。")
+    if not valid:
+        raise ValueError(f"{platform} Webhook 地址格式不正确。")
+    return webhook
+
+
+def _load_integration_secrets() -> dict[str, Any]:
+    values = {"feishu_webhook": "", "dingtalk_webhook": "", "auto_send_reports": False}
+    path = _integrations_path()
+    if path.exists():
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                values.update({key: saved.get(key, values[key]) for key in values})
+        except (OSError, json.JSONDecodeError):
+            logger.exception("读取通知连接设置失败")
+    return values
+
+
+def get_integration_settings() -> dict[str, Any]:
+    values = _load_integration_secrets()
+    return {
+        "feishu": {"configured": bool(values["feishu_webhook"]), "label": "已连接" if values["feishu_webhook"] else "未连接"},
+        "dingtalk": {"configured": bool(values["dingtalk_webhook"]), "label": "已连接" if values["dingtalk_webhook"] else "未连接"},
+        "auto_send_reports": bool(values["auto_send_reports"]),
+        "secrets_exposed": False,
+    }
+
+
+def save_integration_settings(values: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(values, dict):
+        raise ValueError("integration settings must be an object")
+    allowed = {"feishu_webhook", "dingtalk_webhook", "auto_send_reports"}
+    unknown = set(values) - allowed
+    if unknown:
+        raise ValueError(f"unknown integration settings: {', '.join(sorted(unknown))}")
+    current = _load_integration_secrets()
+    for platform in ("feishu", "dingtalk"):
+        key = f"{platform}_webhook"
+        if key in values:
+            current[key] = _validate_webhook(platform, str(values.get(key) or ""))
+    if "auto_send_reports" in values:
+        current["auto_send_reports"] = bool(values["auto_send_reports"])
+    _atomic_json_write(_integrations_path(), current)
+    return get_integration_settings()
+
+
+def _post_json(url: str, payload: dict[str, Any], timeout: float = 8.0) -> dict[str, Any]:
+    request = Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "DianAgent/2"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - URL is allowlisted by _validate_webhook
+        raw = response.read(64 * 1024).decode("utf-8", errors="replace")
+    return json.loads(raw) if raw else {}
+
+
+def send_notification(platform: str, message: str) -> dict[str, Any]:
+    platform = str(platform or "").lower()
+    values = _load_integration_secrets()
+    key = f"{platform}_webhook"
+    if key not in values:
+        raise ValueError("不支持的通知平台。")
+    webhook = _validate_webhook(platform, str(values.get(key) or ""))
+    if not webhook:
+        raise ValueError(f"{platform} 尚未连接。")
+    text = str(message or "").strip()
+    if not text:
+        raise ValueError("通知内容不能为空。")
+    if "店策 Agent" not in text:
+        text = f"店策 Agent\n{text}"
+    text = text[:12_000]
+    payload = (
+        {"msg_type": "text", "content": {"text": text}}
+        if platform == "feishu"
+        else {"msgtype": "text", "text": {"content": text}}
+    )
+    result = _post_json(webhook, payload)
+    success = (
+        int(result.get("code", result.get("StatusCode", 0)) or 0) == 0
+        if platform == "feishu"
+        else int(result.get("errcode", 0) or 0) == 0
+    )
+    if not success:
+        raise ValueError(str(result.get("msg") or result.get("errmsg") or "平台拒绝了消息。"))
+    return {"platform": platform, "ok": True, "message": "测试消息已发送。"}
+
+
+def test_integration(platform: str) -> dict[str, Any]:
+    return send_notification(platform, f"店策 Agent 连接测试\n时间：{_now_label()}\n连接成功，后续可发送经营日志。")
+
+
+def send_report_notifications(report: dict[str, Any]) -> list[dict[str, Any]]:
+    values = _load_integration_secrets()
+    results: list[dict[str, Any]] = []
+    for platform in ("feishu", "dingtalk"):
+        if not values.get(f"{platform}_webhook"):
+            continue
+        try:
+            results.append(send_notification(platform, str(report.get("content") or "")))
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            results.append({"platform": platform, "ok": False, "message": str(error)})
+    return results
 
 
 def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
@@ -2124,6 +2277,112 @@ def _reports_dir() -> Path:
     return DATA_DIR / "reports"
 
 
+def _report_list(items: list[str], empty: str) -> str:
+    return "\n".join(f"{index}. {item}" for index, item in enumerate(items, 1)) if items else f"- {empty}"
+
+
+def _render_selected_report(
+    template_key: str,
+    custom_template: str,
+    report_date: str,
+    insights: dict[str, Any],
+    action_center: dict[str, Any],
+    ops: dict[str, Any],
+    scan: dict[str, Any],
+    scan_receipt: dict[str, Any],
+) -> list[str] | None:
+    if template_key == "default":
+        return None
+    top_tasks = [
+        f"[{item['owner']}] {item['title']}：{item['action']}（验收：{item['acceptance']}）"
+        for item in ops.get("today_top_actions", [])[:8]
+    ]
+    plans = [
+        f"{item['plan']}：{item['suggestion']}（{item['reason']}）"
+        for item in action_center.get("plan_recommendations", [])[:8]
+    ]
+    inventory = [
+        f"{item['product']}：{item['title']}；{item['suggestion']}"
+        for item in action_center.get("inventory_alerts", [])[:8]
+    ]
+    alerts = [
+        f"{item['title']}：{item.get('action') or item.get('detail') or ''}"
+        for item in insights.get("alerts", [])[:6]
+    ]
+    scan_status = (
+        f"巡检 {scan.get('status', 'idle')}，成功 {scan.get('success', 0)} 页，"
+        f"失败 {scan.get('failed', 0)} 页；体检覆盖率 {scan_receipt['summary']['coverage_rate']}%，"
+        f"需复核 {scan_receipt['summary']['needs_review']} 页。"
+    )
+    context = {
+        "date": report_date,
+        "generated_at": _now_label(),
+        "headline": str(insights.get("headline") or "暂无结论"),
+        "summary": str(insights.get("summary") or "暂无摘要"),
+        "top_tasks": _report_list(top_tasks, "暂无待办任务。"),
+        "plans": _report_list(plans, "暂无千川调整建议。"),
+        "inventory": _report_list(inventory, "暂无库存预警。"),
+        "alerts": _report_list(alerts, "暂无其他异常。"),
+        "scan_status": scan_status,
+    }
+    if template_key == "brief":
+        return [
+            f"# 店策 Agent 老板简报 - {report_date}",
+            "",
+            f"> 生成时间：{context['generated_at']}｜模式：只读建议",
+            "",
+            "## 一句话结论",
+            "",
+            f"- {context['headline']}",
+            f"- {context['summary']}",
+            "",
+            "## 今天先做",
+            "",
+            context["top_tasks"],
+            "",
+            "## 需要关注",
+            "",
+            context["alerts"],
+            "",
+            "## 数据状态",
+            "",
+            f"- {scan_status}",
+            "",
+        ]
+    if template_key == "handover":
+        return [
+            f"# 店策 Agent 运营交接日志 - {report_date}",
+            "",
+            f"> 交接生成时间：{context['generated_at']}｜所有执行动作需人工确认",
+            "",
+            "## 本班结论",
+            "",
+            f"- {context['headline']}",
+            f"- {context['summary']}",
+            "",
+            "## 下一班优先事项",
+            "",
+            context["top_tasks"],
+            "",
+            "## 千川待处理",
+            "",
+            context["plans"],
+            "",
+            "## 库存待处理",
+            "",
+            context["inventory"],
+            "",
+            "## 数据交接",
+            "",
+            f"- {scan_status}",
+            "",
+        ]
+    template = custom_template or DEFAULT_CUSTOM_REPORT_TEMPLATE
+    for key, value in context.items():
+        template = template.replace(f"{{{{{key}}}}}", str(value))
+    return template.splitlines()
+
+
 def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
     report_date = report_date or time.strftime("%Y-%m-%d")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", report_date):
@@ -2235,6 +2494,19 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
             "",
         ]
     )
+    template_key = str(action_center["settings"].get("report_template") or "default")
+    selected_lines = _render_selected_report(
+        template_key,
+        str(action_center["settings"].get("custom_report_template") or ""),
+        report_date,
+        insights,
+        action_center,
+        ops,
+        scan,
+        scan_receipt,
+    )
+    if selected_lines is not None:
+        lines = selected_lines
     _atomic_text_write(report_path, "\n".join(lines))
     _cleanup_old_reports(int(action_center["settings"]["report_retention_days"]))
     return {
@@ -2243,6 +2515,7 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
         "path": str(report_path),
         "headline": insights["headline"],
         "summary": action_center["summary"],
+        "template": template_key,
         "stale_sources": stale_sources[:5],
         "content": "\n".join(lines),
     }
@@ -2287,14 +2560,16 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
                 continue
             target = _reports_dir() / f"{now:%Y-%m-%d}.md"
             if not target.exists():
-                generate_daily_report(now.strftime("%Y-%m-%d"))
+                report = generate_daily_report(now.strftime("%Y-%m-%d"))
+                if _load_integration_secrets().get("auto_send_reports"):
+                    send_report_notifications(report)
                 logger.info("已生成每日经营报告: %s", target)
         except Exception:
             logger.exception("生成定时日报失败")
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.13.0"
+    server_version = "DianAgent/2.16.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2334,7 +2609,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.13.0",
+                    "version": "2.16.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -2409,6 +2684,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/settings":
             self._json(load_agent_settings())
             return
+        if path == "/integrations":
+            self._json(get_integration_settings())
+            return
         if path == "/reports/latest":
             report = load_latest_report()
             self._json(report or {"error": "report_not_found"}, 200 if report else 404)
@@ -2453,8 +2731,16 @@ class Handler(BaseHTTPRequestHandler):
                 _invalidate_cache()
                 self._json({"ok": True, "settings": settings})
                 return
+            if path == "/integrations/settings":
+                self._json({"ok": True, "integrations": save_integration_settings(payload)})
+                return
+            if path == "/integrations/test":
+                self._json({"ok": True, "result": test_integration(str(payload.get("platform") or ""))})
+                return
             if path == "/reports/generate":
-                self._json({"ok": True, "report": generate_daily_report(payload.get("date"))})
+                report = generate_daily_report(payload.get("date"))
+                deliveries = send_report_notifications(report) if payload.get("notify") else []
+                self._json({"ok": True, "report": report, "deliveries": deliveries})
                 return
             if path == "/tasks/update":
                 task = update_task_state(str(payload.get("task_id") or ""), str(payload.get("status") or ""))

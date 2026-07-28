@@ -6,6 +6,8 @@ Dian Agent reads visible data from pages the user is already signed in to. It do
 
 Never commit files under `bridge/data/`, generated reports, browser profiles, extension signing keys, or exported shop data. These paths are excluded by `.gitignore`.
 
+Feishu and DingTalk robot Webhooks are secrets. They are accepted only for the official HTTPS hosts, stored locally in `bridge/data/integrations.json`, and never returned in full by the local service. Do not paste a real Webhook into an issue, screenshot, test fixture, or committed configuration file. If a Webhook is exposed, delete or rotate the robot immediately in the corresponding group settings.
+
 ## Reporting a vulnerability
 
 Please open a GitHub security advisory for vulnerabilities involving data exposure, permission scope, local bridge access, or unsafe browser actions. Avoid including real shop, customer, order, account, or advertising data in reports.

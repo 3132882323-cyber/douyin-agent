@@ -6,6 +6,12 @@ const LABELS = {
   report: "报表", materials: "素材", video_library: "视频库", live_dashboard: "直播大屏", account: "账户", shelf: "货架",
   qianchuan_live: "直播推广", qianchuan_campaigns: "商品推广", qianchuan_live_dashboard: "直播大屏", qianchuan_video_library: "视频库", unknown: "其他",
 };
+const REPORT_TEMPLATE_LABELS = {
+  default: "默认经营日报",
+  brief: "老板简报",
+  handover: "运营交接日志",
+  custom: "自定义模板",
+};
 
 let latestBrief = "";
 let currentRole = "运营总管";
@@ -167,7 +173,11 @@ function appendCopyAction(card, params) {
     strip.className = "action-param-strip";
     const cur = currentValue != null ? String(currentValue) : "--";
     const tgt = targetValue != null ? String(targetValue) : "--";
-    strip.textContent = field + "  " + cur + " → " + tgt;
+    strip.textContent = currentValue != null && targetValue == null
+      ? `${field}当前值 ${cur} · 目标值待确认`
+      : currentValue == null && targetValue != null
+        ? `${field}目标值 ${tgt}`
+        : `${field} ${cur} → ${tgt}`;
     wrap.append(strip);
   }
   if (isDraft) {
@@ -197,7 +207,7 @@ function appendCopyAction(card, params) {
   if (params.copy_text) {
     const btn = document.createElement("button");
     btn.className = "copy-action-btn";
-    btn.textContent = "复制操作";
+    btn.textContent = "复制处理建议";
     btn.setAttribute("aria-label", "复制: " + params.copy_text);
     btn.addEventListener("click", async () => {
       try {
@@ -316,12 +326,17 @@ function scanReceiptFromStatus(scan = {}) {
 
 function renderScanReceipt(receipt = {}) {
   const state = document.getElementById("scan-receipt-state");
-  state.textContent = receipt.readiness_label || "等待巡查";
   state.className = receipt.readiness || "";
-  const card = document.getElementById("scan-receipt-card");
-  if (receipt.readiness === "attention") card.open = true;
 
   const summary = receipt.summary || {};
+  const results = [...(receipt.results || [])].sort((a, b) => Number(a.ok) - Number(b.ok) || Number(b.needs_review) - Number(a.needs_review));
+  const issues = results.filter((item) => !item.ok || item.needs_review);
+  const passed = results.filter((item) => item.ok && !item.needs_review);
+  state.textContent = receipt.readiness === "running"
+    ? receipt.readiness_label || "巡查中"
+    : results.length
+      ? issues.length ? `${issues.length} 项需处理` : `${passed.length} 项通过`
+      : receipt.readiness_label || "等待巡查";
   const metrics = [
     ["覆盖率", `${summary.coverage_rate || 0}%`],
     ["成功页面", `${summary.success || 0}/${summary.total || 0}`],
@@ -350,10 +365,9 @@ function renderScanReceipt(receipt = {}) {
   warning.className = `receipt-warning${receipt.readiness === "ready" ? " ready" : ""}`;
 
   const container = document.getElementById("scan-receipt-pages");
-  const results = [...(receipt.results || [])].sort((a, b) => Number(a.ok) - Number(b.ok) || Number(b.needs_review) - Number(a.needs_review));
   if (!results.length) return empty(container, "尚未生成数据体检单");
   container.className = "receipt-pages";
-  container.replaceChildren(...results.map((item) => {
+  const pageRow = (item) => {
     const cardRow = document.createElement("article");
     cardRow.className = `receipt-page${!item.ok ? " failed" : item.needs_review ? " review" : ""}`;
     const title = document.createElement("strong"); title.textContent = item.label || item.id || "未命名页面";
@@ -386,7 +400,26 @@ function renderScanReceipt(receipt = {}) {
       cardRow.append(retry);
     }
     return cardRow;
-  }));
+  };
+  const rows = issues.map(pageRow);
+  if (!issues.length) {
+    const success = document.createElement("p");
+    success.className = "receipt-success-note";
+    success.textContent = `${passed.length} 个页面均已通过，本轮数据可以用于经营判断。`;
+    rows.push(success);
+  }
+  if (passed.length) {
+    const fold = document.createElement("details");
+    fold.className = "passed-pages-fold";
+    const foldSummary = document.createElement("summary");
+    foldSummary.textContent = `查看 ${passed.length} 个已通过页面`;
+    const passedList = document.createElement("div");
+    passedList.className = "passed-pages-list";
+    passedList.replaceChildren(...passed.map(pageRow));
+    fold.append(foldSummary, passedList);
+    rows.push(fold);
+  }
+  container.replaceChildren(...rows);
 }
 
 function renderFullScan(scan = {}) {
@@ -454,13 +487,18 @@ function recommendationCard(item, kind) {
   top.className = "recommendation-top";
   const title = document.createElement("strong");
   title.textContent = kind === "plan" ? item.plan : item.product;
+  title.title = title.textContent || "";
   const tag = document.createElement("span");
-  tag.textContent = item.level === "high" ? "高优先" : item.level === "opportunity" ? "可放量" : "需关注";
+  tag.textContent = kind === "inventory"
+    ? item.level === "high" ? "立即补货" : "尽快处理"
+    : item.level === "high" ? "立即处理" : item.level === "opportunity" ? "具备放量条件" : "需要关注";
   top.append(title, tag);
   const suggestion = document.createElement("p");
-  suggestion.textContent = item.suggestion || "请回到后台核对。";
+  const suggestionLabel = document.createElement("b");
+  suggestionLabel.textContent = kind === "inventory" ? "怎么处理：" : "建议动作：";
+  suggestion.append(suggestionLabel, document.createTextNode(item.suggestion || "请回到后台核对后再处理。"));
   const reason = document.createElement("small");
-  reason.textContent = kind === "plan" ? item.reason || "" : item.title || "";
+  reason.textContent = `判断依据：${kind === "plan" ? item.reason || "当前投放数据" : item.title || "当前库存数据"}`;
   card.append(top, suggestion, reason);
   appendCopyAction(card, item.action_params);
   return card;
@@ -469,7 +507,7 @@ function recommendationCard(item, kind) {
 function renderPlans(items = []) {
   const container = document.getElementById("plans");
   document.getElementById("plan-count").textContent = `${items.length} 项`;
-  if (!items.length) return empty(container, "暂无计划级建议，请同步千川计划和报表页面");
+  if (!items.length) return empty(container, "当前没有投放调整建议；如果尚未巡检，请先同步千川计划和报表。");
   container.className = "stack";
   container.replaceChildren(...items.slice(0, 8).map(planWorkbenchCard));
 }
@@ -535,15 +573,39 @@ function planWorkbenchCard(item) {
 
 function renderInventory(items = []) {
   const container = document.getElementById("inventory");
+  const moreWrap = document.getElementById("inventory-more-wrap");
+  const moreContainer = document.getElementById("inventory-more");
+  const moreCount = document.getElementById("inventory-more-count");
   document.getElementById("inventory-count").textContent = `${items.length} 项`;
-  if (!items.length) return empty(container, "暂无库存预警，或尚未同步商品/库存页面");
-  container.className = "stack";
-  container.replaceChildren(...items.slice(0, 8).map((item) => recommendationCard(item, "inventory")));
+  if (!items.length) {
+    moreWrap.hidden = true;
+    moreWrap.open = false;
+    moreWrap.ontoggle = null;
+    moreContainer.replaceChildren();
+    return empty(container, "当前没有库存风险；如果刚安装，请先同步商品或库存页面。");
+  }
+  const priority = { high: 0, warning: 1, info: 2, opportunity: 3 };
+  const sorted = [...items].sort((a, b) => (priority[a.level] ?? 9) - (priority[b.level] ?? 9));
+  const visible = sorted.slice(0, 4);
+  const remaining = sorted.slice(4);
+  container.className = "stack inventory-grid";
+  container.replaceChildren(...visible.map((item) => recommendationCard(item, "inventory")));
+  moreWrap.hidden = remaining.length === 0;
+  if (!remaining.length) moreWrap.open = false;
+  moreCount.textContent = `${remaining.length} 项`;
+  moreContainer.replaceChildren();
+  const renderRemaining = () => {
+    if (moreWrap.open && !moreContainer.childElementCount) {
+      moreContainer.replaceChildren(...remaining.map((item) => recommendationCard(item, "inventory")));
+    }
+  };
+  moreWrap.ontoggle = renderRemaining;
+  renderRemaining();
 }
 
 function renderCreativeAnalysis(creative = {}) {
   const summary = creative.summary || {};
-  document.getElementById("creative-status").textContent = creative.data_status === "ready" ? "数据已就绪" : "待同步";
+  document.getElementById("creative-status").textContent = creative.data_status === "ready" ? "分析完成" : "等待数据";
   document.getElementById("creative-count").textContent = `${summary.total_videos || 0} 条`;
   renderMetricStrip("creative-metrics", {
     视频数: summary.total_videos || 0,
@@ -555,7 +617,7 @@ function renderCreativeAnalysis(creative = {}) {
   renderTasks("creative-actions", creative.recommendations || []);
   const container = document.getElementById("creative-videos");
   const videos = creative.videos || [];
-  if (!videos.length) return empty(container, "暂无视频数据，请同步巨量千川视频库");
+  if (!videos.length) return empty(container, "暂时没有视频明细；请先同步巨量千川视频库。");
   container.className = "stack";
   container.replaceChildren(...videos.slice(0, 8).map((item) => recommendationCard({
     plan: item.name,
@@ -571,17 +633,20 @@ function taskCard(item) {
   card.className = `task-card ${item.level || "info"}`;
   const meta = document.createElement("div");
   meta.className = "task-meta";
-  meta.textContent = `${item.owner || "运营"} · ${item.level === "high" ? "立即处理" : item.level === "opportunity" ? "增长机会" : "今日处理"}`;
+  const owner = String(item.owner || "运营").replace("运营总管", "总管").replace("运营", "");
+  meta.textContent = `${item.level === "high" ? "立即处理" : item.level === "opportunity" ? "增长机会" : "今日处理"} · ${owner || "运营"}`;
   const title = document.createElement("strong"); title.textContent = item.title || "运营任务";
-  const action = document.createElement("p"); action.textContent = item.action || item.suggestion || "请核对后台。";
+  const action = document.createElement("p");
+  const actionLabel = document.createElement("b"); actionLabel.textContent = "下一步：";
+  action.append(actionLabel, document.createTextNode(item.action || item.suggestion || "请先回到后台核对数据。"));
   const chips = document.createElement("div"); chips.className = "task-chips";
-  [item.impact, item.confidence === "high" ? "高可信" : "需观察"].filter(Boolean).forEach((value) => {
+  [item.impact, item.confidence === "high" ? "数据较充分" : "数据需复核"].filter(Boolean).forEach((value) => {
     const chip = document.createElement("span"); chip.textContent = value; chips.append(chip);
   });
   const detail = document.createElement("details"); detail.className = "task-detail";
-  const detailSummary = document.createElement("summary"); detailSummary.textContent = "查看依据与完成标准";
-  const evidence = document.createElement("small"); evidence.textContent = `依据：${item.evidence || "当前页面数据"}`;
-  const acceptance = document.createElement("small"); acceptance.textContent = `完成标准：${item.acceptance || "人工核对完成"}`;
+  const detailSummary = document.createElement("summary"); detailSummary.textContent = "为什么这样建议？";
+  const evidence = document.createElement("small"); evidence.textContent = `数据依据：${item.evidence || "当前页面数据"}`;
+  const acceptance = document.createElement("small"); acceptance.textContent = `完成后检查：${item.acceptance || "确认后台数据已经更新"}`;
   detail.append(detailSummary, evidence, acceptance);
   card.append(meta, title, action, chips, detail);
   appendCopyAction(card, item.action_params);
@@ -636,7 +701,7 @@ function taskCard(item) {
 
 function renderTasks(id, items = []) {
   const container = document.getElementById(id);
-  if (!items.length) return empty(container, "暂无专项任务，或尚未同步对应页面");
+  if (!items.length) return empty(container, "当前没有需要处理的任务；如果数据未同步，请先完成一次巡检。");
   container.className = "stack";
   container.replaceChildren(...items.slice(0, 8).map(taskCard));
 }
@@ -675,10 +740,10 @@ function renderOperations(ops, shelf, live, creative, coverage = []) {
   const fresh = coverage.filter((item) => item.fresh).length;
   document.getElementById("data-freshness").textContent = coverage.length ? `${fresh}/${coverage.length}` : "--";
   document.querySelectorAll(".module-section").forEach((section) => { section.hidden = currentRole !== "运营总管" && !String(section.dataset.owner || "").split(/\s+/).includes(currentRole); });
-  document.getElementById("shelf-status").textContent = shelf.data_status === "ready" ? "数据已就绪" : "待同步";
+  document.getElementById("shelf-status").textContent = shelf.data_status === "ready" ? "分析完成" : "等待数据";
   renderMetricStrip("shelf-metrics", { 曝光: shelf.funnel?.exposure, 点击: shelf.funnel?.clicks, 成交人数: shelf.funnel?.buyers, 点击率: shelf.funnel?.click_rate == null ? null : `${shelf.funnel.click_rate.toFixed(1)}%` });
   renderTasks("shelf-actions", shelf.recommendations || []);
-  document.getElementById("live-status").textContent = live.data_status === "ready" ? "数据已就绪" : "待同步";
+  document.getElementById("live-status").textContent = live.data_status === "ready" ? "分析完成" : "等待数据";
   renderMetricStrip("live-metrics", { 进房: live.funnel?.views, 进房率: live.funnel?.enter_rate == null ? null : `${live.funnel.enter_rate.toFixed(1)}%`, 商品点击: live.funnel?.product_clicks, 订单: live.funnel?.orders, ROI: live.funnel?.roi });
   renderTasks("live-actions", live.recommendations || []);
   renderCreativeAnalysis(creative || {});
@@ -735,6 +800,32 @@ function renderSettings(settings) {
   document.getElementById("stock-threshold").value = settings.low_inventory_threshold;
   document.getElementById("report-time").value = settings.daily_report_time;
   document.getElementById("report-enabled").checked = settings.daily_report_enabled;
+  const template = REPORT_TEMPLATE_LABELS[settings.report_template] ? settings.report_template : "default";
+  document.getElementById("report-template").value = template;
+  document.getElementById("custom-report-template").value = settings.custom_report_template || "";
+  document.getElementById("custom-template-wrap").hidden = template !== "custom";
+  document.getElementById("report-template-label").textContent = REPORT_TEMPLATE_LABELS[template];
+}
+
+function renderIntegrations(payload = {}) {
+  const platforms = ["feishu", "dingtalk"];
+  let connected = 0;
+  platforms.forEach((platform) => {
+    const item = payload[platform] || {};
+    const state = document.getElementById(`${platform}-state`);
+    state.textContent = item.configured ? "已连接" : "未连接";
+    state.className = item.configured ? "connected" : "";
+    const input = document.getElementById(`${platform}-webhook`);
+    input.value = "";
+    input.placeholder = item.configured
+      ? "已安全保存在本机；留空表示不修改"
+      : platform === "feishu"
+        ? "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+        : "https://oapi.dingtalk.com/robot/send?access_token=...";
+    if (item.configured) connected += 1;
+  });
+  document.getElementById("auto-send-reports").checked = Boolean(payload.auto_send_reports);
+  document.getElementById("integration-status").textContent = connected ? `已连接 ${connected} 个平台` : "未连接";
 }
 
 function renderQianchuanAccounts(payload = {}) {
@@ -841,7 +932,7 @@ function renderShadowExecution(report = {}) {
     需核对: summary.needs_attention || 0,
   });
   const container = document.getElementById("shadow-actions");
-  if (!items.length) return empty(container, "确认千川操作方案后，会在这里进入人工执行与回读核验流程");
+  if (!items.length) return empty(container, "当前没有待核验操作。确认调整方案后，这里会提示下一步。");
   container.className = "stack";
   container.replaceChildren(...items.slice(0, 10).map((item) => {
     const card = document.createElement("article");
@@ -917,7 +1008,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, shadowR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, shadowR, integrationsR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -929,6 +1020,7 @@ async function loadDashboard() {
     bridgeFetch("/health-monitor"),
     bridgeFetch("/effectiveness"),
     bridgeFetch("/actions/shadow"),
+    bridgeFetch("/integrations"),
   ]);
 
   const val = (r, fallback) => r.status === "fulfilled" ? r.value : fallback;
@@ -942,6 +1034,7 @@ async function loadDashboard() {
   const health = val(healthR, {});
   const effectiveness = val(effectivenessR, {});
   const shadow = val(shadowR, { items: [], summary: {} });
+  const integrations = val(integrationsR, { feishu: { configured: false }, dingtalk: { configured: false }, auto_send_reports: false });
 
   // Hide loading skeleton
   hideLoadingSkeleton();
@@ -963,6 +1056,7 @@ async function loadDashboard() {
   renderAlerts(insights.alerts || []);
   renderCoverage(insights.coverage || []);
   renderSettings(settings);
+  renderIntegrations(integrations);
   renderQianchuanAccounts(accounts);
   renderFullScan(extensionResponse?.dashboard?.fullScan || {});
   renderTrends(trends);
@@ -1138,8 +1232,6 @@ document.getElementById("save-settings").addEventListener("click", async () => {
       roi_target: Number(document.getElementById("roi-target").value),
       min_spend_for_action: Number(document.getElementById("spend-threshold").value),
       low_inventory_threshold: Number(document.getElementById("stock-threshold").value),
-      daily_report_time: document.getElementById("report-time").value,
-      daily_report_enabled: document.getElementById("report-enabled").checked,
     };
     await bridgeFetch("/settings", {
       method: "POST",
@@ -1152,16 +1244,131 @@ document.getElementById("save-settings").addEventListener("click", async () => {
     status.textContent = `保存失败：${error.message}`;
   }
 });
-document.getElementById("generate-report").addEventListener("click", async () => {
-  const status = document.getElementById("settings-status");
+
+document.getElementById("report-template").addEventListener("change", (event) => {
+  const template = REPORT_TEMPLATE_LABELS[event.currentTarget.value] ? event.currentTarget.value : "default";
+  document.getElementById("custom-template-wrap").hidden = template !== "custom";
+  document.getElementById("report-template-label").textContent = REPORT_TEMPLATE_LABELS[template];
+});
+
+document.getElementById("save-report-settings").addEventListener("click", async () => {
+  const status = document.getElementById("report-status");
+  try {
+    const payload = {
+      daily_report_time: document.getElementById("report-time").value,
+      daily_report_enabled: document.getElementById("report-enabled").checked,
+      report_template: document.getElementById("report-template").value,
+      custom_report_template: document.getElementById("custom-report-template").value,
+    };
+    await bridgeFetch("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+      body: JSON.stringify(payload),
+    });
+    status.textContent = `日志设置已保存：${REPORT_TEMPLATE_LABELS[payload.report_template] || "默认模板"}`;
+    await loadDashboard();
+  } catch (error) {
+    status.textContent = `保存失败：${error.message}`;
+  }
+});
+
+async function generateReport(notify, button) {
+  const status = document.getElementById("report-status");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = notify ? "正在生成并发送…" : "正在生成…";
   try {
     const result = await bridgeFetch("/reports/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-      body: "{}",
+      body: JSON.stringify({ notify }),
     });
-    status.textContent = `日报已生成：${result.report.date}`;
+    const deliveries = result.deliveries || [];
+    if (!notify) {
+      status.textContent = `日志已生成：${result.report.date} · ${REPORT_TEMPLATE_LABELS[result.report.template] || "默认模板"}`;
+    } else if (!deliveries.length) {
+      status.textContent = "日志已生成，但尚未连接飞书或钉钉。";
+    } else {
+      const success = deliveries.filter((item) => item.ok).length;
+      const failed = deliveries.length - success;
+      status.textContent = `日志已生成并发送：成功 ${success}，失败 ${failed}`;
+    }
   } catch (error) {
     status.textContent = `生成失败：${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+document.getElementById("generate-report").addEventListener("click", (event) => generateReport(false, event.currentTarget));
+document.getElementById("generate-send-report").addEventListener("click", (event) => generateReport(true, event.currentTarget));
+
+async function saveIntegrationPatch(patch) {
+  return bridgeFetch("/integrations/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+    body: JSON.stringify(patch),
+  });
+}
+
+document.querySelectorAll("[data-integration-test]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const platform = button.dataset.integrationTest;
+    const input = document.getElementById(`${platform}-webhook`);
+    const result = document.getElementById(`${platform}-result`);
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "正在测试…";
+    result.className = "";
+    try {
+      if (input.value.trim()) {
+        await saveIntegrationPatch({ [`${platform}_webhook`]: input.value.trim() });
+      }
+      await bridgeFetch("/integrations/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+        body: JSON.stringify({ platform }),
+      });
+      result.textContent = "连接成功，测试消息已发送到群。";
+      result.className = "ok";
+      await loadDashboard();
+    } catch (error) {
+      result.textContent = `连接失败：${error.message}`;
+      result.className = "error";
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  });
+});
+
+document.querySelectorAll("[data-integration-clear]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const platform = button.dataset.integrationClear;
+    const result = document.getElementById(`${platform}-result`);
+    try {
+      await saveIntegrationPatch({ [`${platform}_webhook`]: "" });
+      result.textContent = "连接已清除。";
+      result.className = "ok";
+      await loadDashboard();
+    } catch (error) {
+      result.textContent = `清除失败：${error.message}`;
+      result.className = "error";
+    }
+  });
+});
+
+document.getElementById("save-integration-settings").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await saveIntegrationPatch({ auto_send_reports: document.getElementById("auto-send-reports").checked });
+    button.textContent = "发送设置已保存";
+    await loadDashboard();
+  } catch (error) {
+    button.textContent = `保存失败：${error.message}`;
+  } finally {
+    setTimeout(() => { button.disabled = false; button.textContent = "保存发送设置"; }, 1500);
   }
 });
