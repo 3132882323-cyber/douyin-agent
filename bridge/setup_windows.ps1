@@ -8,7 +8,10 @@ $venvDir = Join-Path $bridgeDir ".venv"
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
 $startupDir = [Environment]::GetFolderPath("Startup")
 $shortcutPath = Join-Path $startupDir "DianAgent.lnk"
+$legacyShortcutPath = Join-Path $startupDir "抖店千川数据桥-Bridge.lnk"
 $autostartScript = Join-Path $bridgeDir "autostart.vbs"
+$manifestPath = Join-Path (Split-Path -Parent $bridgeDir) "extension\manifest.json"
+$expectedVersion = (Get-Content -Raw -Encoding UTF8 $manifestPath | ConvertFrom-Json).version
 
 function Resolve-Python {
   if ($PythonPath -and (Test-Path -LiteralPath $PythonPath)) {
@@ -46,9 +49,22 @@ $shortcut.Arguments = '"' + $autostartScript + '"'
 $shortcut.WorkingDirectory = $bridgeDir
 $shortcut.Description = "Dian Agent - start automatically after Windows sign-in"
 $shortcut.Save()
+if (Test-Path -LiteralPath $legacyShortcutPath) {
+  Remove-Item -LiteralPath $legacyShortcutPath -Force
+}
 
 try {
   $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2
+  if ([string]$health.version -ne [string]$expectedVersion) {
+    $listeners = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+    foreach ($listener in $listeners) {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)" -ErrorAction SilentlyContinue
+      if ($process.CommandLine -and $process.CommandLine.Contains((Join-Path $bridgeDir "http_receiver.py"))) {
+        Stop-Process -Id $listener.OwningProcess -Force
+      }
+    }
+    throw "Restart the local Agent after an update."
+  }
 } catch {
   Start-Process -FilePath (Join-Path $env:WINDIR "System32\wscript.exe") -ArgumentList ('"' + $autostartScript + '"') -WindowStyle Hidden
   Start-Sleep -Seconds 2
@@ -56,6 +72,7 @@ try {
 }
 
 if ($health.status -ne "ok") { throw "The local Agent did not return a healthy status." }
+if ([string]$health.version -ne [string]$expectedVersion) { throw "The local Agent version does not match the extension." }
 
 Write-Host ""
 Write-Host "Setup complete. Dian Agent is running and will start after Windows sign-in." -ForegroundColor Green

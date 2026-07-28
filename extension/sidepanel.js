@@ -1502,7 +1502,7 @@ document.getElementById("current-qianchuan-button").addEventListener("click", as
     const response = await chrome.runtime.sendMessage({ type: "sync-current-qianchuan" });
     if (!response?.ok) throw new Error(response?.error || "读取失败");
     const accountLabel = response.result?.account?.label ? ` · ${response.result.account.label}` : "";
-    hint.textContent = `读取成功：${LABELS[response.result?.page_type] || response.result?.page_type || "千川页面"}${accountLabel}`;
+    hint.textContent = `已锁定当前千川标签页：${LABELS[response.result?.page_type] || response.result?.page_type || "千川页面"}${accountLabel}。现在可以开始巡检。`;
     await loadDashboard();
   } catch (error) {
     hint.textContent = error.message || "读取失败，请先切换到巨量千川页面";

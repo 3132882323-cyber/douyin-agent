@@ -31,4 +31,11 @@ assert.strictEqual(policy.isNonRetryable(unresolved), true);
 assert.strictEqual(policy.errorCode(unresolved), "ACCOUNT_UNRESOLVED");
 assert.strictEqual(policy.isNonRetryable(new Error("页面加载超时")), false);
 
+const ranked = policy.rankSeedTabs([
+  { id: 1, active: true, lastAccessed: 300 },
+  { id: 2, active: false, lastAccessed: 100 },
+  { id: 3, active: false, lastAccessed: 500 },
+], 2);
+assert.deepStrictEqual(Array.from(ranked, (tab) => tab.id), [2, 1, 3]);
+
 console.log("scan-policy tests passed");
