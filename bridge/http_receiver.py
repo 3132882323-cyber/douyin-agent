@@ -193,21 +193,23 @@ def list_qianchuan_accounts() -> list[dict[str, Any]]:
         if not isinstance(accounts, list):
             return []
         cleaned: list[dict[str, Any]] = []
-        seen_labels: set[str] = set()
         seen_keys: set[str] = set()
         for account in accounts:
             if not isinstance(account, dict):
                 continue
             key = str(account.get("key") or "").lower()
             label = _normalized_account_label(account.get("label"))
-            label_key = re.sub(r"\s+", "", label).casefold()
             if not SAFE_KEY.fullmatch(key) or not _is_valid_qianchuan_account_label(label):
                 continue
-            if key in seen_keys or label_key in seen_labels:
+            if key in seen_keys:
                 continue
-            cleaned.append({**account, "key": key, "label": label})
+            aliases = [
+                str(alias).lower()
+                for alias in account.get("aliases", [])
+                if SAFE_KEY.fullmatch(str(alias).lower()) and str(alias).lower() != key
+            ][:20]
+            cleaned.append({**account, "key": key, "label": label, "aliases": list(dict.fromkeys(aliases))})
             seen_keys.add(key)
-            seen_labels.add(label_key)
         return cleaned
     except (OSError, json.JSONDecodeError):
         return []
@@ -222,11 +224,18 @@ def _remember_qianchuan_account(account: dict[str, Any]) -> None:
         return
     with _state_lock:
         accounts = {str(item.get("key")): item for item in list_qianchuan_accounts() if isinstance(item, dict)}
+        previous = accounts.get(key, {})
+        aliases = [
+            str(alias).lower()
+            for alias in [*(previous.get("aliases") or []), *(account.get("aliases") or [])]
+            if SAFE_KEY.fullmatch(str(alias).lower()) and str(alias).lower() != key
+        ][:20]
         accounts[key] = {
             "key": key,
             "label": label,
             "confidence": str(account.get("confidence") or "medium")[:16],
             "identity_source": str(account.get("identity_source") or "legacy")[:32],
+            "aliases": list(dict.fromkeys(aliases)),
             "last_seen": _now_label(),
         }
         _atomic_json_write(_account_catalog_path(), {"accounts": sorted(accounts.values(), key=lambda item: item.get("last_seen", ""), reverse=True)})
@@ -239,11 +248,31 @@ def _canonical_qianchuan_account_key(account: dict[str, Any]) -> str:
     label = _normalized_account_label(account.get("label"))
     if not _is_valid_qianchuan_account_label(label):
         return key
+    known_accounts = list_qianchuan_accounts()
+    for known in known_accounts:
+        aliases = {str(alias).lower() for alias in known.get("aliases", [])}
+        if key in aliases and SAFE_KEY.fullmatch(str(known.get("key") or "")):
+            return str(known["key"]).lower()
     label_key = re.sub(r"\s+", "", label).casefold()
-    for known in list_qianchuan_accounts():
+    matches: list[dict[str, Any]] = []
+    for known in known_accounts:
         known_label_key = re.sub(r"\s+", "", _normalized_account_label(known.get("label"))).casefold()
         if known_label_key == label_key and SAFE_KEY.fullmatch(str(known.get("key") or "")):
-            return str(known["key"]).lower()
+            matches.append(known)
+    identity_source = str(account.get("identity_source") or "legacy")
+    if identity_source == "platform_id":
+        label_only_matches = [
+            known for known in matches
+            if str(known.get("identity_source") or "legacy") in {"account_label", "legacy"}
+        ]
+        if len(label_only_matches) == 1:
+            return str(label_only_matches[0]["key"]).lower()
+        return key
+    platform_matches = [known for known in matches if known.get("identity_source") == "platform_id"]
+    if len(platform_matches) == 1:
+        return str(platform_matches[0]["key"]).lower()
+    if not platform_matches and len(matches) == 1:
+        return str(matches[0]["key"]).lower()
     return key
 
 
@@ -264,9 +293,12 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
     }
     if source == "qianchuan" and isinstance(normalized.get("account"), dict):
         account = {**normalized["account"]}
+        detected_key = str(account.get("key") or "").lower()
         canonical_key = _canonical_qianchuan_account_key(account)
         if canonical_key:
             account["key"] = canonical_key
+        if canonical_key and detected_key and canonical_key != detected_key and SAFE_KEY.fullmatch(detected_key):
+            account["aliases"] = list(dict.fromkeys([*(account.get("aliases") or []), detected_key]))[:20]
         normalized["account"] = account
     payload = {
         "source": source,
@@ -2427,7 +2459,7 @@ def _scan_status_path() -> Path:
 def save_scan_status(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("scan status must be an object")
-    allowed = {"status", "reason", "account_key", "account_label", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
+    allowed = {"status", "reason", "account_mode", "account_key", "account_label", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
     status = {key: value[key] for key in allowed if key in value}
     if status.get("status") not in {"idle", "running", "completed", "partial", "cancelled", "error"}:
         raise ValueError("invalid scan status")
@@ -2883,7 +2915,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.20.0"
+    server_version = "DianAgent/2.21.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2923,7 +2955,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.20.0",
+                    "version": "2.21.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),

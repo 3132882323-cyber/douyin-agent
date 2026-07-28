@@ -12,6 +12,7 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
       href,
       pathname,
       search,
+      hash: "",
       hostname: "qianchuan.jinritemai.com",
     },
     document: {
@@ -22,6 +23,7 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
         return (selectorValues[selector] || []).map((innerText) => ({
           innerText,
           getClientRects: () => [1],
+          getAttribute: () => null,
         }));
       },
     },
@@ -87,6 +89,23 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
   });
   assert.strictEqual(idOnly.label, "千川账号 · 5678");
   assert.strictEqual(idOnly.identity_source, "platform_id");
+
+  const sameNameAccountA = await collectAccount({
+    href: "https://qianchuan.jinritemai.com/home?advertiser_id=10000001",
+    pathname: "/home",
+    search: "?advertiser_id=10000001",
+    selectorValues: { "[class*='shopName']": ["同名旗舰店"] },
+  });
+  const sameNameAccountB = await collectAccount({
+    href: "https://qianchuan.jinritemai.com/home?advertiser_id=10000002",
+    pathname: "/home",
+    search: "?advertiser_id=10000002",
+    selectorValues: { "[class*='shopName']": ["同名旗舰店"] },
+  });
+  assert.strictEqual(sameNameAccountA.label, sameNameAccountB.label);
+  assert.notStrictEqual(sameNameAccountA.key, sameNameAccountB.key);
+  assert.strictEqual(sameNameAccountA.identity_source, "platform_id");
+  assert.strictEqual(sameNameAccountA.confidence, "high");
 
   console.log("content-qianchuan tests passed");
 })().catch((error) => {

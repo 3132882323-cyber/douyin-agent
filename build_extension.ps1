@@ -10,7 +10,7 @@ if ($Manifest.manifest_version -ne 3) { throw "manifest_version must be 3" }
 if ($Manifest.host_permissions -contains "<all_urls>") { throw "<all_urls> is not allowed" }
 
 $RequiredFiles = @(
-  "manifest.json", "background.js", "content-common.js", "content-doudian.js",
+  "manifest.json", "background.js", "scan-policy.js", "content-common.js", "content-doudian.js",
   "content-qianchuan.js", "popup.html", "popup.css", "popup.js",
   "sidepanel.html", "sidepanel.css", "sidepanel.js", "icon48.png", "icon128.png",
   "upgrade.html", "upgrade.js", "sync.html", "sync.js", "scan.html", "scan.js", "cancel-scan.html", "cancel-scan.js", "retry-scan.html", "retry-scan.js", "smoke-scan.html", "smoke-scan.js"

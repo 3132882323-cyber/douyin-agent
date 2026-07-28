@@ -31,12 +31,26 @@
   }
 
   function detectAccountContext() {
-    const params = new URLSearchParams(location.search);
+    const searchParams = new URLSearchParams(location.search);
+    const hashSearch = String(location.hash || "").includes("?")
+      ? String(location.hash).slice(String(location.hash).indexOf("?"))
+      : "";
+    const hashParams = new URLSearchParams(hashSearch);
     const pageText = (document.body?.innerText || "").slice(0, 12000);
-    const queryAccountId = ["advertiser_id", "aadvid", "account_id", "shop_id"]
-      .map((key) => params.get(key)).find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
+    const idKeys = ["advertiser_id", "advertiserId", "aadvid", "advid", "adv_id", "account_id", "accountId", "shop_id", "shopId"];
+    const queryAccountId = idKeys
+      .flatMap((key) => [searchParams.get(key), hashParams.get(key)])
+      .find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
+    const attributeAccountId = Array.from(document.querySelectorAll(
+      "[data-advertiser-id], [data-account-id], [data-shop-id], [data-aadvid]",
+    )).map((element) => (
+      element.getAttribute("data-advertiser-id")
+      || element.getAttribute("data-account-id")
+      || element.getAttribute("data-shop-id")
+      || element.getAttribute("data-aadvid")
+    )).find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
     const textAccountId = pageText.match(/(?:广告主|账户|账号|店铺)\s*(?:ID|id|编号)\s*[:：]?\s*([A-Za-z0-9_-]{4,64})/)?.[1] || "";
-    const accountId = queryAccountId || textAccountId;
+    const accountId = queryAccountId || attributeAccountId || textAccountId;
     const selectors = [
       "[data-testid*='account-name']", "[data-testid*='shop-name']", "[data-testid*='advertiser-name']",
       "[class*='accountName']", "[class*='advertiserName']", "[class*='shopName']",
@@ -57,15 +71,14 @@
       label = normalizeAccountLabel(match?.[1]);
     }
     if (!accountId && !label) return null;
-    // Prefer the visible account label when available. Some Qianchuan routes
-    // expose an account ID while others omit it; switching identity sources
-    // between pages would otherwise create a different key mid-scan.
-    const identity = label || accountId;
+    // A platform account ID is the only safe discriminator when several
+    // Qianchuan accounts share the same visible shop name.
+    const identity = accountId || label;
     return {
       key: accountHash(identity),
       label: label || `千川账号 · ${String(accountId).slice(-4)}`,
-      confidence: label && accountId ? "high" : "medium",
-      identity_source: label ? "account_label" : "platform_id",
+      confidence: accountId ? "high" : "medium",
+      identity_source: accountId ? "platform_id" : "account_label",
     };
   }
 

@@ -979,10 +979,17 @@ function renderQianchuanAccounts(payload = {}) {
   current.value = "";
   current.textContent = "自动识别当前登录账号（推荐）";
   select.append(current);
+  const labelCounts = accounts.reduce((counts, account) => {
+    const label = String(account.label || "未命名账号");
+    counts.set(label, (counts.get(label) || 0) + 1);
+    return counts;
+  }, new Map());
   accounts.forEach((account) => {
     const option = document.createElement("option");
     option.value = account.key;
-    option.textContent = account.label;
+    const duplicate = (labelCounts.get(String(account.label || "未命名账号")) || 0) > 1;
+    const suffix = String(account.key || "").slice(-4).toUpperCase();
+    option.textContent = duplicate ? `${account.label} · 账号 ${suffix}` : account.label;
     select.append(option);
   });
   if (selectedQianchuanAccount && accounts.some((account) => account.key === selectedQianchuanAccount)) {

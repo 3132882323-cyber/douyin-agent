@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "店策 Agent - 多浏览器兼容版",
-  "version": "2.20.0",
+  "version": "2.21.0",
   "description": "适配 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等 Chromium 浏览器；经营工作台使用新标签页打开。",
   "minimum_chrome_version": "109",
   "permissions": [
