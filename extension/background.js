@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v2.22.0) */
+/** 店策 Agent - MV3 service worker (v2.23.0) */
 
 importScripts("scan-policy.js");
 
@@ -30,11 +30,11 @@ const FULL_SCAN_PAGES = [
   { id: "search", label: "搜索运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/mcompass/search", waitMs: 6500, harvestList: true },
   { id: "recommend_card", label: "推荐卡运营", source: "doudian", url: "https://fxg.jinritemai.com/ffa/recommend-card/home", waitMs: 6500, harvestList: true },
   { id: "funds", label: "账户中心", source: "doudian", url: "https://fxg.jinritemai.com/ffa/fund-control/account-center", waitMs: 5500 },
+  { id: "qianchuan_video_library", expectedPageTypes: ["video_library", "materials"], label: "千川视频库与素材分析", source: "qianchuan", url: "https://qianchuan.jinritemai.com/dataV2/roi2-material-analysis", waitMs: 5000, harvestList: true, collectTimeoutMs: 24000 },
   { id: "qianchuan_overview", expectedPageType: "overview", label: "千川经营首页", source: "qianchuan", url: QIANCHUAN_ENTRY_URL, fallbackUrls: ["https://qianchuan.jinritemai.com/home"], waitMs: 4500 },
   { id: "qianchuan_campaigns", expectedPageType: "campaigns", label: "千川商品推广", source: "qianchuan", url: "https://qianchuan.jinritemai.com/uni-prom", tabTexts: ["商品全域推广", "商品推广"], waitMs: 5500, harvestList: true, collectTimeoutMs: 24000 },
   { id: "qianchuan_live", label: "千川直播推广", source: "qianchuan", url: "https://qianchuan.jinritemai.com/uni-prom", tabTexts: ["直播全域推广", "直播推广", "直播间推广"], waitMs: 5500, harvestList: true, collectTimeoutMs: 24000 },
   { id: "qianchuan_live_dashboard", expectedPageType: "live_dashboard", label: "千川直播大屏", source: "qianchuan", url: "https://qianchuan.jinritemai.com/board-next", waitMs: 5500 },
-  { id: "qianchuan_video_library", expectedPageType: "video_library", label: "千川视频库", source: "qianchuan", url: "https://qianchuan.jinritemai.com/tools/creative-management/video-library", waitMs: 5000, harvestList: true, collectTimeoutMs: 24000 },
 ];
 
 const SOURCE_PATTERNS = {
@@ -159,8 +159,7 @@ async function setFullScanState(patch) {
   }
 }
 
-async function selectAnalysisAccount(accountKey) {
-  if (!accountKey) return;
+async function selectAnalysisAccount(accountKey = "") {
   await fetch(`${BRIDGE_URL}/settings`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
@@ -278,8 +277,10 @@ async function scanOnePage(tabId, page, reason, expectedAccount = {}) {
         }
       }
       if (response.page_type === "unknown") throw new Error("页面类型未识别");
-      const expectedPageType = page.expectedPageType || page.id;
-      if (response.page_type !== expectedPageType) throw new Error(`页面识别为 ${response.page_type}，预期为 ${expectedPageType}`);
+      const expectedPageTypes = page.expectedPageTypes || [page.expectedPageType || page.id];
+      if (!expectedPageTypes.includes(response.page_type)) {
+        throw new Error(`页面识别为 ${response.page_type}，预期为 ${expectedPageTypes.join(" / ")}`);
+      }
       return {
         id: page.id,
         label: page.label,
@@ -341,16 +342,52 @@ async function findQianchuanSeedTab(expectedAccount = {}) {
   return fallbackTab ? { tab: fallbackTab, account: null } : null;
 }
 
+async function discoverQianchuanRoutes(tabId) {
+  try {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const current = { text: document.title || "", url: location.href };
+        const links = Array.from(document.querySelectorAll("a[href], [data-href], [data-path]"))
+          .filter((element) => element.getClientRects().length > 0)
+          .map((element) => {
+            const raw = element.href || element.getAttribute("data-href") || element.getAttribute("data-path") || "";
+            let url = "";
+            try { url = new URL(raw, location.origin).href; } catch { return null; }
+            return { text: String(element.innerText || element.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim(), url };
+          })
+          .filter((item) => item?.url?.startsWith(location.origin))
+          .slice(0, 300);
+        return { current, links };
+      },
+    });
+    const links = [result?.current, ...(result?.links || [])].filter(Boolean);
+    const pick = (textPattern, urlPattern = null) => links.find((item) => (
+      textPattern.test(item.text || "") || (urlPattern && urlPattern.test(item.url || ""))
+    ))?.url || "";
+    return {
+      qianchuan_overview: pick(/(?:经营|数据)?概览|首页/, /\/(?:home|overview)(?:[/?#]|$)/i),
+      qianchuan_campaigns: pick(/商品(?:全域)?推广|推广管理/, /(?:product|campaign|promotion|uni-prom)/i),
+      qianchuan_live: pick(/直播(?:全域|间)?推广/, /(?:live).*(?:prom|campaign)|(?:prom|campaign).*live/i),
+      qianchuan_live_dashboard: pick(/直播大屏/, /board|live-dashboard/i),
+      qianchuan_video_library: pick(/视频库|素材分析|视频素材/, /video-library|material-analysis/i),
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function createScanTab(source = "", expectedAccount = {}) {
   if (source === "qianchuan") {
     const seed = await findQianchuanSeedTab(expectedAccount);
     if (seed?.tab?.id) {
+      const routes = await discoverQianchuanRoutes(seed.tab.id);
       const duplicated = await chrome.tabs.duplicate(seed.tab.id);
       await chrome.tabs.update(duplicated.id, { active: false });
-      return { tab: duplicated, account: seed.account || null };
+      return { tab: duplicated, account: seed.account || null, routes };
     }
   }
-  return { tab: await chrome.tabs.create({ url: "about:blank", active: false }), account: null };
+  return { tab: await chrome.tabs.create({ url: "about:blank", active: false }), account: null, routes: {} };
 }
 
 async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
@@ -364,6 +401,8 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
   let lockedAccount = { key: String(accountKey || ""), label: "", identity_source: accountKey ? "selected" : "" };
   let scanTab;
   let scanSource = "";
+  let qianchuanRoutes = {};
+  if (accountMode === "auto") await selectAnalysisAccount("");
   await setFullScanState({ status: "running", reason, account_mode: accountMode, account_key: lockedAccount.key, account_label: "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
   try {
     for (let index = 0; index < scanPages.length; index += 1) {
@@ -374,18 +413,26 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
         const created = await createScanTab(page.source, lockedAccount);
         scanTab = created.tab;
         scanSource = page.source;
-        if (page.source === "qianchuan" && created.account && !lockedAccount.key) {
+        if (page.source === "qianchuan") qianchuanRoutes = created.routes || {};
+        if (
+          page.source === "qianchuan"
+          && created.account
+          && !lockedAccount.key
+          && (created.account.identity_source === "platform_id" || created.account.confidence === "high")
+        ) {
           lockedAccount = created.account;
           await selectAnalysisAccount(lockedAccount.key);
           await setFullScanState({ account_key: lockedAccount.key, account_label: lockedAccount.label || "" });
         }
       }
       await setFullScanState({ current: page.label, index: index + 1 });
-      let result = await scanOnePage(scanTab.id, page, reason, lockedAccount);
+      const discoveredUrl = page.source === "qianchuan" ? qianchuanRoutes[page.id] : "";
+      const scanPage = discoveredUrl ? { ...page, url: discoveredUrl, fallbackUrls: [page.url, ...(page.fallbackUrls || [])] } : page;
+      let result = await scanOnePage(scanTab.id, scanPage, reason, lockedAccount);
       if (!result.ok && isMissingTabError(result.error)) {
         const recovered = await createScanTab(page.source, lockedAccount);
         scanTab = recovered.tab;
-        result = await scanOnePage(scanTab.id, page, `${reason}-tab-recovered`, lockedAccount);
+        result = await scanOnePage(scanTab.id, scanPage, `${reason}-tab-recovered`, lockedAccount);
       }
       if (page.source === "qianchuan" && result.ok && result.account_key) {
         const detectedAccount = {
@@ -394,7 +441,8 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
           confidence: result.account_confidence || "",
           identity_source: result.account_identity_source || "",
         };
-        const shouldLock = !lockedAccount.key;
+        const shouldLock = !lockedAccount.key
+          && (detectedAccount.identity_source === "platform_id" || detectedAccount.confidence === "high");
         const shouldUpgrade = accountMode === "auto"
           && lockedAccount.identity_source !== "platform_id"
           && detectedAccount.identity_source === "platform_id"
