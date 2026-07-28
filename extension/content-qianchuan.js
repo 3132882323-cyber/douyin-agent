@@ -30,7 +30,28 @@
     return label;
   }
 
+  function detectStoredAccountId() {
+    const idKeyPattern = /(?:advertiser(?:[_-]?id|Id)|aadvid|advid|account(?:[_-]?id|Id)|shop(?:[_-]?id|Id))/i;
+    const jsonIdPattern = /"(?:advertiser_id|advertiserId|aadvid|advid|account_id|accountId|shop_id|shopId)"\s*:\s*"?([A-Za-z0-9_-]{4,64})"?/;
+    for (const storage of [globalThis.sessionStorage, globalThis.localStorage]) {
+      if (!storage) continue;
+      try {
+        for (let index = 0; index < Math.min(storage.length, 120); index += 1) {
+          const key = String(storage.key(index) || "");
+          const value = String(storage.getItem(key) || "").slice(0, 4096);
+          if (idKeyPattern.test(key) && /^[A-Za-z0-9_-]{4,64}$/.test(value)) return value;
+          const match = value.match(jsonIdPattern);
+          if (match?.[1]) return match[1];
+        }
+      } catch {
+        // Storage access can be blocked by browser policy on some routes.
+      }
+    }
+    return "";
+  }
+
   function detectAccountContext() {
+    if (location.pathname === "/login" || location.pathname.startsWith("/login/")) return null;
     const searchParams = new URLSearchParams(location.search);
     const hashSearch = String(location.hash || "").includes("?")
       ? String(location.hash).slice(String(location.hash).indexOf("?"))
@@ -50,7 +71,7 @@
       || element.getAttribute("data-aadvid")
     )).find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
     const textAccountId = pageText.match(/(?:广告主|账户|账号|店铺)\s*(?:ID|id|编号)\s*[:：]?\s*([A-Za-z0-9_-]{4,64})/)?.[1] || "";
-    const accountId = queryAccountId || attributeAccountId || textAccountId;
+    const accountId = queryAccountId || attributeAccountId || detectStoredAccountId() || textAccountId;
     const selectors = [
       "[data-testid*='account-name']", "[data-testid*='shop-name']", "[data-testid*='advertiser-name']",
       "[class*='accountName']", "[class*='advertiserName']", "[class*='shopName']",

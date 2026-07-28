@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync(require.resolve("./content-qianchuan.js"), "utf8");
 
-async function collectAccount({ href, pathname, search = "", bodyText = "", selectorValues = {} }) {
+async function collectAccount({ href, pathname, search = "", bodyText = "", selectorValues = {}, storageValues = {} }) {
   let listener;
   const context = {
     URLSearchParams,
@@ -35,6 +35,16 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
           return { ok: true, account: message.data.account };
         },
       },
+    },
+    sessionStorage: {
+      get length() { return Object.keys(storageValues).length; },
+      key(index) { return Object.keys(storageValues)[index] || null; },
+      getItem(key) { return storageValues[key] ?? null; },
+    },
+    localStorage: {
+      length: 0,
+      key() { return null; },
+      getItem() { return null; },
     },
     DianAgentExtractor: {
       async collect(sourceName, pageType) {
@@ -106,6 +116,22 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
   assert.notStrictEqual(sameNameAccountA.key, sameNameAccountB.key);
   assert.strictEqual(sameNameAccountA.identity_source, "platform_id");
   assert.strictEqual(sameNameAccountA.confidence, "high");
+
+  const storedId = await collectAccount({
+    href: "https://qianchuan.jinritemai.com/dataV2/roi2-material-analysis",
+    pathname: "/dataV2/roi2-material-analysis",
+    selectorValues: { "[class*='shopName']": ["会话账号"] },
+    storageValues: { selected_advertiser_id: "99887766" },
+  });
+  assert.strictEqual(storedId.identity_source, "platform_id");
+  assert.strictEqual(storedId.confidence, "high");
+
+  const loginPage = await collectAccount({
+    href: "https://qianchuan.jinritemai.com/login",
+    pathname: "/login",
+    storageValues: { selected_advertiser_id: "99887766" },
+  });
+  assert.strictEqual(loginPage, null);
 
   console.log("content-qianchuan tests passed");
 })().catch((error) => {
