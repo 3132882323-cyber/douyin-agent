@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>店策 Agent</title>
+    <title>店策 Agent 经营工作台</title>
     <link rel="stylesheet" href="sidepanel.css">
   </head>
   <body>
@@ -11,6 +11,7 @@
       <header>
         <div class="brand-mark">策</div>
         <div><h1>店策 Agent</h1><p>运营总管 · 货架 · 直播 · 千川 · 库存</p></div>
+        <span class="page-mode">独立经营工作台</span>
         <button id="refresh-button" class="icon-button" title="刷新" aria-label="刷新数据">↻</button>
       </header>
 
@@ -136,6 +137,13 @@
           <summary>查看单条视频诊断 <span id="creative-count">0 条</span></summary>
           <div id="creative-videos" class="stack empty-state">暂无视频数据</div>
         </details>
+      </section>
+
+      <section class="module-section shadow-section" data-owner="投放运营">
+        <div class="section-heading"><h3>投放影子执行</h3><span id="shadow-count">0 项</span></div>
+        <p class="section-intro">记录人工执行声明，并用后续千川页面回读核验；插件不会自动修改投放。</p>
+        <div id="shadow-summary" class="metric-strip"></div>
+        <div id="shadow-actions" class="stack empty-state">确认千川操作方案后，会在这里进入人工执行与回读核验流程</div>
       </section>
 
       <section class="module-section" data-owner="投放运营">

@@ -902,6 +902,196 @@ def cancel_confirmed_action(action_id: str) -> dict[str, Any]:
     return cancelled
 
 
+def _shadow_audit_path() -> Path:
+    return DATA_DIR / "shadow_execution.json"
+
+
+def load_shadow_execution() -> dict[str, Any]:
+    path = _shadow_audit_path()
+    if not path.exists():
+        return {"schema_version": 1, "records": [], "execution_enabled": False}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        records = value.get("records", []) if isinstance(value, dict) else []
+        return {
+            "schema_version": 1,
+            "updated_at": value.get("updated_at") if isinstance(value, dict) else None,
+            "records": [item for item in records if isinstance(item, dict)] if isinstance(records, list) else [],
+            "execution_enabled": False,
+        }
+    except (OSError, json.JSONDecodeError):
+        logger.exception("读取影子执行记录失败: %s", path)
+        return {"schema_version": 1, "records": [], "execution_enabled": False}
+
+
+def mark_action_manually_applied(action_id: str) -> dict[str, Any]:
+    """Record an operator claim without claiming or triggering execution."""
+    action_id = str(action_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{24}", action_id):
+        raise ValueError("动作编号无效。")
+    action = next(
+        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == action_id),
+        None,
+    )
+    if not action or action.get("state") != "confirmed":
+        raise ValueError("只有已确认且未撤销的方案可以进入影子核验。")
+    now_ms = int(time.time() * 1000)
+    with _state_lock:
+        shadow = load_shadow_execution()
+        existing = next((item for item in shadow["records"] if item.get("action_id") == action_id), None)
+        if existing:
+            return existing
+        record = {
+            "action_id": action_id,
+            "reported_state": "manually_applied",
+            "reported_applied_at_ms": now_ms,
+            "reported_by": "local_user",
+            "execution_source": "official_qianchuan_manual",
+            "execution_enabled": False,
+            "note": "仅记录用户声明；插件未点击、提交或修改千川。",
+        }
+        records = [item for item in shadow["records"] if item.get("action_id") != action_id]
+        records.append(record)
+        _atomic_json_write(
+            _shadow_audit_path(),
+            {"schema_version": 1, "updated_at": _now_label(), "execution_enabled": False, "records": records[-500:]},
+        )
+    return record
+
+
+def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
+    target = action.get("target_ref") if isinstance(action.get("target_ref"), dict) else {}
+    account_key = str(target.get("account_key") or "")
+    plan_id = str(target.get("id") or "")
+    if not account_key or not plan_id:
+        return None
+    snapshot = load_data("qianchuan", "campaigns", account_key=account_key)
+    data = (snapshot or {}).get("data", {})
+    if not isinstance(data, dict):
+        return None
+    tables = data.get("tables") if isinstance(data.get("tables"), list) else []
+    canonical_headers: list[str] = []
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        headers = [str(value).strip() for value in table.get("headers", [])]
+        rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+        if headers:
+            canonical_headers = headers
+        elif canonical_headers:
+            headers = canonical_headers
+        if not headers:
+            continue
+        for row in rows:
+            if not isinstance(row, list):
+                continue
+            values = [str(value).strip() for value in row]
+            record = {headers[index]: values[index] if index < len(values) else "" for index in range(len(headers))}
+            if _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id")) != plan_id:
+                continue
+            budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
+            captured_at_ms = int(
+                data.get("captured_at")
+                or (float((snapshot or {}).get("timestamp", 0)) * 1000)
+                or 0
+            )
+            return {
+                "account_key": account_key,
+                "account_label": str((data.get("account") or {}).get("label") or ""),
+                "plan_id": plan_id,
+                "plan_name": _clean_entity_name(next(iter(record.values()), ""), str(target.get("name") or plan_id)),
+                "current_value": budget,
+                "captured_at_ms": captured_at_ms,
+                "quality_score": int((data.get("quality") or {}).get("score", 0) or 0),
+            }
+    return None
+
+
+def build_shadow_execution_report() -> dict[str, Any]:
+    """Compare user-reported manual actions with a later Qianchuan readback."""
+    actions = [
+        item for item in load_action_audit().get("actions", [])
+        if isinstance(item, dict) and item.get("state") == "confirmed"
+    ]
+    markers = {
+        str(item.get("action_id") or ""): item
+        for item in load_shadow_execution().get("records", [])
+        if isinstance(item, dict)
+    }
+    items: list[dict[str, Any]] = []
+    for action in actions:
+        action_id = str(action.get("action_id") or "")
+        target = action.get("target_ref") if isinstance(action.get("target_ref"), dict) else {}
+        change = action.get("change") if isinstance(action.get("change"), dict) else {}
+        marker = markers.get(action_id)
+        readback = _find_plan_readback(action)
+        status = "awaiting_manual_action"
+        status_label = "等待人工执行"
+        detail = "方案已确认；请回到巨量千川人工执行，插件不会自动点击。"
+        if marker:
+            reported_at = int(marker.get("reported_applied_at_ms") or 0)
+            if not readback or int(readback.get("captured_at_ms") or 0) <= reported_at:
+                status = "awaiting_readback"
+                status_label = "等待重新读取"
+                detail = "已记录人工执行声明；请打开对应千川计划页面并重新读取。"
+            else:
+                observed = readback.get("current_value")
+                current = change.get("current_value")
+                target_value = change.get("target_value")
+                if isinstance(observed, (int, float)) and isinstance(target_value, (int, float)) and abs(float(observed) - float(target_value)) <= 0.01:
+                    status = "matched"
+                    status_label = "回读已匹配"
+                    detail = f"最新页面预算为 {observed:g}，与确认目标一致。"
+                elif isinstance(observed, (int, float)) and isinstance(current, (int, float)) and abs(float(observed) - float(current)) <= 0.01:
+                    status = "not_changed"
+                    status_label = "页面尚未变化"
+                    detail = f"最新页面预算仍为 {observed:g}，尚未观察到确认方案生效。"
+                elif isinstance(observed, (int, float)):
+                    status = "changed_differently"
+                    status_label = "检测到其他修改"
+                    detail = f"最新页面预算为 {observed:g}，与确认目标 {target_value} 不一致，请人工核对。"
+                else:
+                    status = "unverifiable"
+                    status_label = "无法核验"
+                    detail = "已读取计划，但没有获得可比较的当前预算。"
+        items.append(
+            {
+                "action_id": action_id,
+                "operation_type": action.get("operation_type"),
+                "operation_label": action.get("operation_label"),
+                "account_key": str(target.get("account_key") or ""),
+                "account_label": str(target.get("account_label") or ""),
+                "plan_id": str(target.get("id") or ""),
+                "plan_name": str(target.get("name") or ""),
+                "field": change.get("field"),
+                "before_value": change.get("current_value"),
+                "target_value": change.get("target_value"),
+                "confirmed_at_ms": int(action.get("confirmed_at_ms") or 0),
+                "reported_applied_at_ms": int((marker or {}).get("reported_applied_at_ms") or 0),
+                "status": status,
+                "status_label": status_label,
+                "detail": detail,
+                "readback": readback,
+                "execution_enabled": False,
+            }
+        )
+    order = {"changed_differently": 0, "not_changed": 1, "unverifiable": 2, "awaiting_readback": 3, "awaiting_manual_action": 4, "matched": 5}
+    items.sort(key=lambda item: (order.get(item["status"], 9), -item["confirmed_at_ms"]))
+    return {
+        "generated_at": _now_label(),
+        "mode": "shadow_only",
+        "execution_enabled": False,
+        "items": items,
+        "summary": {
+            "total": len(items),
+            "awaiting_manual_action": sum(item["status"] == "awaiting_manual_action" for item in items),
+            "awaiting_readback": sum(item["status"] == "awaiting_readback" for item in items),
+            "matched": sum(item["status"] == "matched" for item in items),
+            "needs_attention": sum(item["status"] in {"not_changed", "changed_differently", "unverifiable"} for item in items),
+        },
+    }
+
+
 def _clean_entity_name(value: Any, fallback: str) -> str:
     lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
     ignored = {"扶持中", "投放中", "商品", "素材", "保", "审核建议"}
@@ -2104,7 +2294,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.11.1"
+    server_version = "DianAgent/2.13.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2144,7 +2334,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.11.1",
+                    "version": "2.13.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -2209,6 +2399,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/actions/audit":
             self._json(get_action_audit(int(query.get("limit", ["100"])[0])))
+            return
+        if path == "/actions/shadow":
+            self._json(build_shadow_execution_report())
             return
         if path == "/trends":
             self._json(build_trends(int(query.get("days", ["7"])[0]), query.get("source", [None])[0], query.get("page_type", [None])[0]))
@@ -2291,6 +2484,11 @@ class Handler(BaseHTTPRequestHandler):
                 cancelled = cancel_confirmed_action(str(payload.get("action_id") or ""))
                 _invalidate_cache()
                 self._json({"ok": True, "action": cancelled, "executed": False, "execution_enabled": False})
+                return
+            if path == "/actions/manual-applied":
+                marker = mark_action_manually_applied(str(payload.get("action_id") or ""))
+                _invalidate_cache()
+                self._json({"ok": True, "marker": marker, "executed_by_plugin": False, "execution_enabled": False})
                 return
             if path == "/scan-status":
                 self._json({"ok": True, "scan": save_scan_status(payload)})

@@ -17,7 +17,8 @@ header { display: flex; align-items: center; gap: 10px; padding: 2px 2px 4px; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: linear-gradient(145deg, #1d4ed8, #60a5fa); color: white; font-weight: 800; }
 h1 { margin: 0; font-size: 16px; }
 header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
-.icon-button { margin-left: auto; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: white; color: #344054; cursor: pointer; font-size: 18px; }
+.page-mode { margin-left: auto; padding: 5px 9px; border-radius: 999px; background: #eef4ff; color: #1849a9; font-size: 10px; font-weight: 700; }
+.icon-button { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: white; color: #344054; cursor: pointer; font-size: 18px; }
 .connection { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; background: white; }
 .connection > span { width: 8px; height: 8px; border-radius: 50%; background: #98a2b3; }
 .connection.ok > span { background: #12b76a; }
@@ -247,3 +248,124 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .receipt-page.review .receipt-status { background: #fffaeb; color: var(--amber); }
 .receipt-page.failed .receipt-status { background: #fef3f2; color: var(--red); }
 .receipt-page button { grid-column: 1 / -1; justify-self: start; padding: 5px 8px; border: 1px solid #b2ccff; border-radius: 7px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 8px; font-weight: 700; }
+
+/* v2.12.0: shadow execution and readback verification */
+.shadow-section { border-color: #b2ccff; background: linear-gradient(145deg, #f8faff, #fff); }
+.shadow-card { padding: 11px; border: 1px solid var(--line); border-left: 3px solid #84adff; border-radius: 11px; background: white; }
+.shadow-card.matched { border-left-color: #12b76a; }
+.shadow-card.attention { border-left-color: #f79009; }
+.shadow-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 0; }
+.shadow-card header strong { font-size: 10px; line-height: 1.4; }
+.shadow-status { flex: none; padding: 2px 6px; border-radius: 999px; background: #eef4ff; color: #175cd3; font-size: 8px; font-weight: 700; }
+.shadow-card.matched .shadow-status { background: #ecfdf3; color: var(--green); }
+.shadow-card.attention .shadow-status { background: #fffaeb; color: var(--amber); }
+.shadow-change { margin: 7px 0 0; color: #344054; font-family: ui-monospace, monospace; font-size: 9px; }
+.shadow-detail { margin: 5px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.shadow-card footer { display: flex; gap: 6px; margin-top: 8px; padding: 0; }
+.shadow-card footer button { padding: 6px 8px; border: 1px solid #b2ccff; border-radius: 7px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 9px; font-weight: 700; }
+.shadow-card footer button.primary { border-color: #2563eb; background: #2563eb; color: white; }
+.shadow-card footer button:disabled { opacity: .55; cursor: wait; }
+
+/* v2.13.0: standalone responsive workbench */
+@media (min-width: 900px) {
+  body { min-width: 0; background: #f3f5f8; }
+  .panel-shell {
+    width: min(100%, 1380px);
+    margin: 0 auto;
+    padding: 24px 28px 40px;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 16px;
+    align-items: start;
+  }
+  .panel-shell > header,
+  .panel-shell > .connection,
+  .panel-shell > .hero,
+  .panel-shell > .role-nav,
+  .panel-shell > .workbench-switcher,
+  .panel-shell > .progress-card,
+  .panel-shell > .privacy-card {
+    grid-column: 1 / -1;
+  }
+  .panel-shell > .scan-card { grid-column: span 8; }
+  .panel-shell > .scan-receipt-card { grid-column: span 4; }
+  .panel-shell > .template-card,
+  .panel-shell > .trend-card,
+  .panel-shell > .manager-card,
+  .panel-shell > .growth-card,
+  .panel-shell > .module-section,
+  .panel-shell > .fold-card:not(.scan-receipt-card) {
+    grid-column: span 6;
+  }
+  .panel-shell > header { padding: 2px 4px; }
+  .brand-mark { width: 46px; height: 46px; border-radius: 14px; font-size: 18px; }
+  h1 { font-size: 20px; }
+  header p { font-size: 13px; }
+  .page-mode { padding: 7px 11px; font-size: 12px; }
+  .icon-button { width: 40px; height: 40px; }
+  .connection { padding: 12px 15px; }
+  .connection strong { font-size: 14px; }
+  .connection p { font-size: 12px; }
+  .hero { padding: 22px 24px; }
+  .eyebrow { font-size: 12px; }
+  .hero h2 { margin-top: 10px; font-size: 26px; }
+  .hero p { font-size: 14px; }
+  .hero-actions { grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(130px, .8fr)); max-width: 720px; }
+  .hero-actions button { min-height: 42px; font-size: 13px; }
+  .role-nav { top: 10px; padding: 7px; }
+  .role-nav button { padding: 10px 4px; font-size: 13px; }
+  .workbench-switcher,
+  .scan-card,
+  .trend-card,
+  .manager-card,
+  .growth-card,
+  .module-section,
+  .template-card {
+    padding: 18px;
+  }
+  .workbench-switcher strong,
+  .scan-head strong { font-size: 14px; }
+  .workbench-switcher small,
+  .workbench-switcher label,
+  .scan-head p,
+  .scan-schedule,
+  .scan-schedule select,
+  .scan-card > small,
+  .section-intro { font-size: 11px; }
+  .workbench-switcher select { min-width: 130px; padding: 8px 10px; font-size: 11px; }
+  .scan-actions button,
+  .current-page-button { min-height: 38px; font-size: 12px; }
+  .section-heading h3 { font-size: 15px; }
+  .section-heading span,
+  .fold-card > summary span { font-size: 11px; }
+  .fold-card > summary { padding: 15px 17px; font-size: 13px; }
+  .fold-card > section { padding: 0 16px 16px; }
+  .progress-card { padding: 16px 8px; }
+  .progress-card strong { font-size: 20px; }
+  .progress-card small { font-size: 11px; }
+  .task-card strong,
+  .alert-card strong,
+  .recommendation-top strong,
+  .plan-workbench-card h4,
+  .shadow-card header strong,
+  .template-task strong,
+  .coverage-card strong { font-size: 13px; }
+  .task-card p,
+  .alert-card p,
+  .recommendation-card p,
+  .plan-steps p,
+  .plan-steps b,
+  .shadow-detail,
+  .template-task p,
+  .coverage-card p { font-size: 11px; }
+  .metric-strip strong { font-size: 15px; }
+  .metric-strip small { font-size: 10px; }
+}
+
+@media (min-width: 1200px) {
+  .panel-shell > .module-section { grid-column: span 4; }
+}
+
+@media (max-width: 520px) {
+  .page-mode { display: none; }
+  .icon-button { margin-left: auto; }
+}

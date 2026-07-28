@@ -123,10 +123,9 @@ async function render() {
 }
 
 function configureWorkbenchMode() {
-  const supportsSidePanel = Boolean(globalThis.chrome?.sidePanel?.open);
-  document.getElementById("panel-button").textContent = supportsSidePanel ? "打开经营副驾" : "打开经营工作台";
-  document.getElementById("browser-mode").textContent = supportsSidePanel ? "侧栏模式 · 仅本机" : "兼容模式 · 新标签页";
-  document.body.dataset.workbenchMode = supportsSidePanel ? "side-panel" : "browser-tab";
+  document.getElementById("panel-button").textContent = "打开经营工作台";
+  document.getElementById("browser-mode").textContent = "独立工作台 · 仅本机";
+  document.body.dataset.workbenchMode = "browser-tab";
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -162,16 +161,6 @@ document.getElementById("full-scan-button").addEventListener("click", async (eve
 });
 
 document.getElementById("panel-button").addEventListener("click", async () => {
-  if (globalThis.chrome?.sidePanel?.open) {
-    const currentWindow = await chrome.windows.getCurrent();
-    try {
-      await chrome.sidePanel.open({ windowId: currentWindow.id });
-      globalThis.close();
-      return;
-    } catch (_error) {
-      // Some Chromium derivatives expose the API but block the side panel UI.
-    }
-  }
   await chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel.html"), active: true });
   globalThis.close();
 });

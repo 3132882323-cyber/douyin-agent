@@ -33,12 +33,41 @@
       .slice(0, max);
   }
 
+  function stableEntityToken(value) {
+    let hash = 2166136261;
+    for (const character of String(value || "")) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `pid_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  }
+
+  function pseudonymizePlanIdentifier(value, header = "") {
+    const text = compact(value, 20000);
+    const planHeader = /计划|项目|广告组|单元/i.test(String(header || ""));
+    if (!planHeader) return text;
+    if (/id|编号/i.test(String(header || "")) && /^[A-Za-z0-9_-]{4,64}$/.test(text)) {
+      return stableEntityToken(text);
+    }
+    return text.replace(
+      /((?:(?:计划|项目|广告组|单元)\s*)?ID\s*[:：#-]?\s*)([A-Za-z0-9_-]{4,64})/gi,
+      (_, prefix, identifier) => `${prefix}${stableEntityToken(identifier)}`,
+    );
+  }
+
   function maskText(value) {
-    return compact(value, 20000)
-      .replace(/((?:订单|支付|交易|用户|买家|账号|账户|ID|id|编号|单号)[\s：:#-]*)([A-Za-z0-9_-]{6,})/g, "$1[已隐藏]")
+    const protectedPlanTokens = [];
+    let text = compact(value, 20000).replace(/\bpid_[a-f0-9]{8}\b/gi, (token) => {
+      const placeholder = `\uE000${protectedPlanTokens.length}\uE001`;
+      protectedPlanTokens.push(token);
+      return placeholder;
+    });
+    text = text
+      .replace(/((?:订单|支付|交易|用户|买家|账号|账户|ID|id|编号|单号)[\s：:#-]*)(?!pid_)([A-Za-z0-9_-]{6,})/g, "$1[已隐藏]")
       .replace(/(?<!\d)(1\d{2})\d{4}(\d{4})(?!\d)/g, "$1****$2")
       .replace(/(?<![\dXx])(\d{6})\d{8}([\dXx]{4})(?![\dXx])/g, "$1********$2")
       .replace(/([\w.+-]{2})[\w.+-]*(@[\w.-]+\.[A-Za-z]{2,})/g, "$1***$2");
+    return text.replace(/\uE000(\d+)\uE001/g, (_, index) => protectedPlanTokens[Number(index)] || "[已隐藏]");
   }
 
   function clean(value, privacyMode, max = 300) {
@@ -87,7 +116,11 @@
         });
       }
       const dataRows = rows.filter((row, index) => index !== headerIndex).map((row) =>
-        row.cells.map((cell, index) => sensitiveColumns.has(index) ? "[已隐藏]" : clean(cell, privacyMode)),
+        row.cells.map((cell, index) => {
+          if (sensitiveColumns.has(index)) return "[已隐藏]";
+          const safeCell = privacyMode ? pseudonymizePlanIdentifier(cell, headers[index] || "") : cell;
+          return clean(safeCell, privacyMode);
+        }),
       );
       output.push({ headers, rows: dataRows });
     }
@@ -289,5 +322,13 @@
     };
   }
 
-  globalThis.DianAgentExtractor = { collect, compact, maskText, isSensitiveHeader, extractKnownMetrics, extractKnownSignals };
+  globalThis.DianAgentExtractor = {
+    collect,
+    compact,
+    maskText,
+    pseudonymizePlanIdentifier,
+    isSensitiveHeader,
+    extractKnownMetrics,
+    extractKnownSignals,
+  };
 })();
