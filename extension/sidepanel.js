@@ -21,6 +21,7 @@ let scanPoller = null;
 let scanStartTime = 0;
 let workbenchScene = "daily";
 let templateChecks = {};
+let focusOnlyActionable = true;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const ROLE_WORKBENCH = {
@@ -480,6 +481,50 @@ function empty(container, message) {
   container.textContent = message;
 }
 
+function setModuleActionCount(childId, count) {
+  const section = document.getElementById(childId)?.closest(".module-section");
+  if (section) section.dataset.actionCount = String(Math.max(0, Number(count || 0)));
+}
+
+function applyModuleVisibility() {
+  const toolbar = document.getElementById("focus-toolbar");
+  const toggle = document.getElementById("focus-toggle");
+  const summary = document.getElementById("focus-summary");
+  const managerView = currentRole === "运营总管";
+  toolbar.hidden = !managerView;
+
+  let roleModules = 0;
+  let actionableModules = 0;
+  let hiddenEmptyModules = 0;
+  document.querySelectorAll(".module-section").forEach((section) => {
+    const owners = String(section.dataset.owner || "").split(/\s+/).filter(Boolean);
+    const belongsToRole = managerView || owners.includes(currentRole);
+    const actionable = Number(section.dataset.actionCount || 0) > 0;
+    if (belongsToRole) {
+      roleModules += 1;
+      if (actionable) actionableModules += 1;
+    }
+    const hideForFocus = managerView && focusOnlyActionable && !actionable;
+    section.hidden = !belongsToRole || hideForFocus;
+    if (belongsToRole && hideForFocus) hiddenEmptyModules += 1;
+  });
+
+  if (!managerView) return;
+  toggle.setAttribute("aria-pressed", String(focusOnlyActionable));
+  toolbar.classList.toggle("showing-all", !focusOnlyActionable);
+  if (focusOnlyActionable) {
+    toggle.textContent = hiddenEmptyModules ? `显示全部模块（${hiddenEmptyModules}）` : "已经显示全部";
+    toggle.disabled = hiddenEmptyModules === 0;
+    summary.textContent = actionableModules
+      ? `已显示 ${actionableModules} 个有任务模块，隐藏 ${hiddenEmptyModules} 个暂无任务模块。`
+      : "当前没有专项任务；可显示全部模块查看经营指标和数据状态。";
+  } else {
+    toggle.disabled = false;
+    toggle.textContent = "只看需要处理";
+    summary.textContent = `当前显示全部 ${roleModules} 个经营模块。`;
+  }
+}
+
 function recommendationCard(item, kind) {
   const card = document.createElement("article");
   card.className = `recommendation-card ${item.level || "info"}`;
@@ -506,6 +551,7 @@ function recommendationCard(item, kind) {
 
 function renderPlans(items = []) {
   const container = document.getElementById("plans");
+  setModuleActionCount("plans", items.length);
   document.getElementById("plan-count").textContent = `${items.length} 项`;
   if (!items.length) return empty(container, "当前没有投放调整建议；如果尚未巡检，请先同步千川计划和报表。");
   container.className = "stack";
@@ -576,6 +622,7 @@ function renderInventory(items = []) {
   const moreWrap = document.getElementById("inventory-more-wrap");
   const moreContainer = document.getElementById("inventory-more");
   const moreCount = document.getElementById("inventory-more-count");
+  setModuleActionCount("inventory", items.length);
   document.getElementById("inventory-count").textContent = `${items.length} 项`;
   if (!items.length) {
     moreWrap.hidden = true;
@@ -605,6 +652,9 @@ function renderInventory(items = []) {
 
 function renderCreativeAnalysis(creative = {}) {
   const summary = creative.summary || {};
+  const recommendations = creative.recommendations || [];
+  const creativeSignals = Number(summary.risky_videos || 0) + Number(summary.untested_videos || 0) + Number(summary.high_potential_videos || 0);
+  setModuleActionCount("creative-actions", recommendations.length || creativeSignals);
   document.getElementById("creative-status").textContent = creative.data_status === "ready" ? "分析完成" : "等待数据";
   document.getElementById("creative-count").textContent = `${summary.total_videos || 0} 条`;
   renderMetricStrip("creative-metrics", {
@@ -614,7 +664,7 @@ function renderCreativeAnalysis(creative = {}) {
     高风险: summary.risky_videos || 0,
     高潜: summary.high_potential_videos || 0,
   });
-  renderTasks("creative-actions", creative.recommendations || []);
+  renderTasks("creative-actions", recommendations);
   const container = document.getElementById("creative-videos");
   const videos = creative.videos || [];
   if (!videos.length) return empty(container, "暂时没有视频明细；请先同步巨量千川视频库。");
@@ -739,14 +789,18 @@ function renderOperations(ops, shelf, live, creative, coverage = []) {
   document.getElementById("observing-count").textContent = scoped.filter((item) => item.status === "observing").length;
   const fresh = coverage.filter((item) => item.fresh).length;
   document.getElementById("data-freshness").textContent = coverage.length ? `${fresh}/${coverage.length}` : "--";
-  document.querySelectorAll(".module-section").forEach((section) => { section.hidden = currentRole !== "运营总管" && !String(section.dataset.owner || "").split(/\s+/).includes(currentRole); });
   document.getElementById("shelf-status").textContent = shelf.data_status === "ready" ? "分析完成" : "等待数据";
   renderMetricStrip("shelf-metrics", { 曝光: shelf.funnel?.exposure, 点击: shelf.funnel?.clicks, 成交人数: shelf.funnel?.buyers, 点击率: shelf.funnel?.click_rate == null ? null : `${shelf.funnel.click_rate.toFixed(1)}%` });
-  renderTasks("shelf-actions", shelf.recommendations || []);
+  const shelfRecommendations = shelf.recommendations || [];
+  setModuleActionCount("shelf-actions", shelfRecommendations.length);
+  renderTasks("shelf-actions", shelfRecommendations);
   document.getElementById("live-status").textContent = live.data_status === "ready" ? "分析完成" : "等待数据";
   renderMetricStrip("live-metrics", { 进房: live.funnel?.views, 进房率: live.funnel?.enter_rate == null ? null : `${live.funnel.enter_rate.toFixed(1)}%`, 商品点击: live.funnel?.product_clicks, 订单: live.funnel?.orders, ROI: live.funnel?.roi });
-  renderTasks("live-actions", live.recommendations || []);
+  const liveRecommendations = live.recommendations || [];
+  setModuleActionCount("live-actions", liveRecommendations.length);
+  renderTasks("live-actions", liveRecommendations);
   renderCreativeAnalysis(creative || {});
+  applyModuleVisibility();
 }
 
 function renderAlerts(alerts = []) {
@@ -924,6 +978,9 @@ function renderEffectiveness(report = {}) {
 function renderShadowExecution(report = {}) {
   const items = report.items || [];
   const summary = report.summary || {};
+  const pendingItems = Number(summary.awaiting_manual_action || 0) + Number(summary.awaiting_readback || 0) + Number(summary.needs_attention || 0);
+  setModuleActionCount("shadow-actions", pendingItems || (Object.keys(summary).length ? 0 : items.length));
+  applyModuleVisibility();
   document.getElementById("shadow-count").textContent = `${items.length} 项`;
   renderMetricStrip("shadow-summary", {
     待人工执行: summary.awaiting_manual_action || 0,
@@ -1115,9 +1172,10 @@ async function refreshAll(syncFirst = false) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference"]);
+  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference", "focusOnlyActionable"]);
   if (stored.preferredRole) currentRole = stored.preferredRole;
   if (SCENE_WORKBENCH[stored.workbenchScene]) workbenchScene = stored.workbenchScene;
+  focusOnlyActionable = stored.focusOnlyActionable !== false;
   selectedQianchuanAccount = String(stored.scanAccountPreference || "");
   if (stored.templateChecks && typeof stored.templateChecks === "object") {
     const today = `${localDateKey()}:`;
@@ -1126,10 +1184,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item.dataset.role === currentRole));
   renderWorkbench();
+  applyModuleVisibility();
   refreshAll(false);
 });
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
 document.getElementById("sync-diagnose").addEventListener("click", () => refreshAll(true));
+document.getElementById("focus-toggle").addEventListener("click", async () => {
+  focusOnlyActionable = !focusOnlyActionable;
+  await chrome.storage.local.set({ focusOnlyActionable });
+  applyModuleVisibility();
+});
 document.getElementById("full-scan-button").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "start-full-scan", account_key: selectedQianchuanAccount });
   await loadDashboard();
@@ -1185,7 +1249,7 @@ document.getElementById("role-nav").addEventListener("click", (event) => {
   if (currentOperationsContext) {
     const { ops, shelf, live, creative, coverage } = currentOperationsContext;
     renderOperations(ops, shelf, live, creative, coverage);
-  }
+  } else applyModuleVisibility();
 });
 document.getElementById("workbench-scene").addEventListener("change", async (event) => {
   workbenchScene = SCENE_WORKBENCH[event.currentTarget.value] ? event.currentTarget.value : "daily";
