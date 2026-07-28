@@ -2569,7 +2569,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.17.0"
+    server_version = "DianAgent/2.18.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2609,7 +2609,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.17.0",
+                    "version": "2.18.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),

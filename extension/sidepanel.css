@@ -92,6 +92,22 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .module-section { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.82); }
 .manager-card { padding: 13px; border-radius: 14px; background: #fff; border: 1px solid #c7d7fe; }
 .growth-card { padding: 13px; border-radius: 14px; background: #f2fbf6; border: 1px solid #abefc6; }
+.manager-heading { align-items: flex-start; }
+.manager-heading > div:first-child { min-width: 0; }
+.manager-heading h3 { margin-bottom: 4px; }
+.manager-heading small { display: block; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.queue-heading-actions { display: flex; flex: none; align-items: center; gap: 7px; }
+.queue-heading-actions button { padding: 5px 8px; border: 1px solid #b2ccff; border-radius: 7px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 9px; font-weight: 700; }
+.queue-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0; }
+.queue-stat { padding: 8px 5px; border-radius: 9px; background: #f8fafc; text-align: center; }
+.queue-stat strong { display: block; color: #344054; font-size: 13px; }
+.queue-stat small { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
+.queue-stat.urgent { background: #fef3f2; }
+.queue-stat.urgent strong { color: var(--red); }
+.queue-stat.doing { background: #eff8ff; }
+.queue-stat.doing strong { color: #175cd3; }
+.queue-stat.observing { background: #fffaeb; }
+.queue-stat.observing strong { color: var(--amber); }
 .task-card { padding: 12px; border: 1px solid var(--line); border-left: 3px solid #f79009; border-radius: 12px; background: white; }
 .task-card.high { border-left-color: var(--red); }
 .task-card.opportunity { border-left-color: var(--green); }
@@ -107,6 +123,13 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .task-actions > span { margin-right: auto; color: #475467; font-size: 9px; font-weight: 700; }
 .task-actions button { padding: 6px 8px; border: 1px solid #b2ccff; border-radius: 7px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 9px; font-weight: 700; }
 .task-actions button:last-child { border-color: #2563eb; background: #2563eb; color: white; }
+.module-jump-button { display: block; width: 100%; margin-top: 8px; padding: 7px 9px; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; color: #344054; cursor: pointer; font-size: 9px; font-weight: 700; text-align: left; }
+.module-jump-button:hover { border-color: #84adff; background: #f5f8ff; color: #1849a9; }
+.module-section.module-highlight { animation: module-highlight 1.8s ease-out; }
+@keyframes module-highlight {
+  0%, 30% { border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, .16); }
+  100% { border-color: var(--line); box-shadow: none; }
+}
 .metric-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 6px; margin-bottom: 8px; }
 .metric-strip:empty { display: none; }
 .metric-strip > div { min-width: 0; padding: 9px 5px; border-radius: 10px; background: #eef4ff; text-align: center; }
@@ -332,12 +355,12 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
   .panel-shell > .scan-receipt-card[open] { grid-column: 1 / -1; }
   .panel-shell > .template-card,
   .panel-shell > .trend-card,
-  .panel-shell > .manager-card,
-  .panel-shell > .growth-card,
   .panel-shell > .module-section,
   .panel-shell > .fold-card:not(.scan-receipt-card) {
     grid-column: span 6;
   }
+  .panel-shell > .manager-card { grid-column: span 8; }
+  .panel-shell > .growth-card { grid-column: span 4; }
   .panel-shell > .fold-card[open]:has(#report-template),
   .panel-shell > .fold-card[open]:has(#feishu-webhook) {
     grid-column: 1 / -1;
@@ -430,6 +453,11 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
   .section-heading h3 { font-size: 15px; }
   .section-heading span,
   .fold-card > summary span { font-size: 11px; }
+  .manager-heading small,
+  .queue-heading-actions button,
+  .module-jump-button { font-size: 10px; }
+  .queue-stat strong { font-size: 16px; }
+  .queue-stat small { font-size: 9px; }
   .fold-card > summary { padding: 15px 17px; font-size: 13px; }
   .fold-card > section { padding: 0 16px 16px; }
   .progress-card { padding: 16px 8px; }
@@ -463,4 +491,6 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 @media (max-width: 520px) {
   .page-mode { display: none; }
   .icon-button { margin-left: auto; }
+  .manager-heading { display: grid; gap: 8px; }
+  .queue-heading-actions { justify-content: space-between; }
 }

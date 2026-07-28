@@ -87,6 +87,26 @@
         <button id="focus-toggle" type="button" aria-pressed="true">显示全部模块</button>
       </section>
 
+      <section class="manager-card" aria-label="今日处置队列">
+        <div class="section-heading manager-heading">
+          <div>
+            <h3 id="task-heading">今日处置队列</h3>
+            <small id="manager-queue-caption">按紧急程度排列，处理后再进入观察。</small>
+          </div>
+          <div class="queue-heading-actions">
+            <span id="manager-count">0 项待处理</span>
+            <button id="manager-expand" type="button" hidden>查看全部</button>
+          </div>
+        </div>
+        <div id="manager-queue-stats" class="queue-stats" aria-label="处置队列状态"></div>
+        <div id="manager-tasks" class="stack empty-state">正在汇总各岗位任务</div>
+      </section>
+
+      <section id="growth-section" class="growth-card">
+        <div class="section-heading"><h3>今日增长机会</h3><span id="growth-count">0 项</span></div>
+        <div id="growth-tasks" class="stack empty-state">暂无稳定增长机会</div>
+      </section>
+
       <section class="workbench-switcher" aria-label="岗位工作台设置">
         <div>
           <strong id="workbench-title">运营总管工作台</strong>
@@ -157,16 +177,6 @@
       <section class="trend-card">
         <div class="section-heading"><h3>近7天经营变化</h3><span id="trend-count">积累中</span></div>
         <div id="trend-list" class="trend-list empty-state">历史数据正在积累，完成两次巡检后开始展示变化</div>
-      </section>
-
-      <section class="manager-card">
-        <div class="section-heading"><h3 id="task-heading">今日必须处理</h3><span id="manager-count">最多 3 项</span></div>
-        <div id="manager-tasks" class="stack empty-state">正在汇总各岗位任务</div>
-      </section>
-
-      <section id="growth-section" class="growth-card">
-        <div class="section-heading"><h3>今日增长机会</h3><span id="growth-count">0 项</span></div>
-        <div id="growth-tasks" class="stack empty-state">暂无稳定增长机会</div>
       </section>
 
       <section class="module-section" data-owner="货架运营">

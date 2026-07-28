@@ -22,6 +22,7 @@ let scanStartTime = 0;
 let workbenchScene = "daily";
 let templateChecks = {};
 let focusOnlyActionable = true;
+let managerQueueExpanded = false;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const ROLE_WORKBENCH = {
@@ -678,13 +679,47 @@ function renderCreativeAnalysis(creative = {}) {
   }, "plan")));
 }
 
-function taskCard(item) {
+function taskModuleTarget(item = {}) {
+  const context = `${item.title || ""} ${item.action || ""} ${item.suggestion || ""}`;
+  if (/(库存|补货|断货|可售)/.test(context)) return "inventory";
+  if (/(素材|视频|创意)/.test(context)) return "creative-actions";
+  if (/(直播|进房|场次|开播)/.test(context)) return "live-actions";
+  if (/(货架|主图|标题|搜索|推荐卡|商城)/.test(context)) return "shelf-actions";
+  if (/(投放|千川|计划|ROI|消耗|预算|出价)/i.test(context)) return "plans";
+  return {
+    货架运营: "shelf-actions",
+    直播运营: "live-actions",
+    投放运营: "plans",
+    商品运营: "inventory",
+  }[item.owner] || "";
+}
+
+function jumpToTaskModule(item, button) {
+  const targetId = taskModuleTarget(item);
+  const target = targetId ? document.getElementById(targetId) : null;
+  const section = target?.closest(".module-section");
+  if (!section) return;
+  section.hidden = false;
+  section.classList.remove("module-highlight");
+  requestAnimationFrame(() => {
+    section.classList.add("module-highlight");
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  button.textContent = "已定位到详情";
+  setTimeout(() => {
+    section.classList.remove("module-highlight");
+    button.textContent = "查看对应模块 ↓";
+  }, 1800);
+}
+
+function taskCard(item, options = {}) {
   const card = document.createElement("article");
   card.className = `task-card ${item.level || "info"}`;
   const meta = document.createElement("div");
   meta.className = "task-meta";
   const owner = String(item.owner || "运营").replace("运营总管", "总管").replace("运营", "");
-  meta.textContent = `${item.level === "high" ? "立即处理" : item.level === "opportunity" ? "增长机会" : "今日处理"} · ${owner || "运营"}`;
+  const queuePrefix = options.queueIndex ? `第 ${options.queueIndex} 项 · ` : "";
+  meta.textContent = `${queuePrefix}${item.level === "high" ? "立即处理" : item.level === "opportunity" ? "增长机会" : "今日处理"} · ${owner || "运营"}`;
   const title = document.createElement("strong"); title.textContent = item.title || "运营任务";
   const action = document.createElement("p");
   const actionLabel = document.createElement("b"); actionLabel.textContent = "下一步：";
@@ -746,14 +781,26 @@ function taskCard(item) {
     feedback.append(fbLabel, fbUp, fbDown, fbStatus);
     card.append(feedback);
   }
+  if (options.showModuleLink && taskModuleTarget(item)) {
+    const jump = document.createElement("button");
+    jump.type = "button";
+    jump.className = "module-jump-button";
+    jump.textContent = "查看对应模块 ↓";
+    jump.setAttribute("aria-label", `查看“${item.title || "任务"}”对应的详细经营模块`);
+    jump.addEventListener("click", () => jumpToTaskModule(item, jump));
+    card.append(jump);
+  }
   return card;
 }
 
-function renderTasks(id, items = []) {
+function renderTasks(id, items = [], options = {}) {
   const container = document.getElementById(id);
   if (!items.length) return empty(container, "当前没有需要处理的任务；如果数据未同步，请先完成一次巡检。");
   container.className = "stack";
-  container.replaceChildren(...items.slice(0, 8).map(taskCard));
+  container.replaceChildren(...items.slice(0, 8).map((item, index) => taskCard(item, {
+    ...options,
+    queueIndex: options.queue ? index + 1 : null,
+  })));
 }
 
 function renderMetricStrip(id, metrics) {
@@ -769,19 +816,53 @@ function renderMetricStrip(id, metrics) {
 
 function roleTasks(ops, opportunity = false) {
   const source = ops.all_tasks || [];
-  return source.filter((item) => item.status !== "done" && (currentRole === "运营总管" || item.owner === currentRole) && (opportunity ? item.level === "opportunity" : item.level !== "opportunity"));
+  const levelPriority = { high: 0, warning: 1, info: 2, opportunity: 3 };
+  const statusPriority = { doing: 0, todo: 1, observing: 2 };
+  return source
+    .filter((item) => item.status !== "done" && (currentRole === "运营总管" || item.owner === currentRole) && (opportunity ? item.level === "opportunity" : item.level !== "opportunity"))
+    .sort((a, b) => {
+      const levelDelta = (levelPriority[a.level] ?? 9) - (levelPriority[b.level] ?? 9);
+      if (levelDelta) return levelDelta;
+      return (statusPriority[a.status] ?? 9) - (statusPriority[b.status] ?? 9);
+    });
+}
+
+function renderQueueStats(items = []) {
+  const container = document.getElementById("manager-queue-stats");
+  const stats = [
+    ["紧急", items.filter((item) => item.level === "high").length, "urgent"],
+    ["待开始", items.filter((item) => !item.status || item.status === "todo").length, "todo"],
+    ["进行中", items.filter((item) => item.status === "doing").length, "doing"],
+    ["待观察", items.filter((item) => item.status === "observing").length, "observing"],
+  ];
+  container.replaceChildren(...stats.map(([label, value, tone]) => {
+    const item = document.createElement("div");
+    item.className = `queue-stat ${tone}`;
+    const strong = document.createElement("strong"); strong.textContent = value;
+    const small = document.createElement("small"); small.textContent = label;
+    item.append(strong, small);
+    return item;
+  }));
 }
 
 function renderOperations(ops, shelf, live, creative, coverage = []) {
   currentOps = ops;
   currentOperationsContext = { ops, shelf, live, creative, coverage };
-  const tasks = roleTasks(ops, false).slice(0, 3);
-  const growth = roleTasks(ops, true).slice(0, 3);
-  document.getElementById("task-heading").textContent = currentRole === "运营总管" ? "今日必须处理" : `${currentRole} · 今日必做`;
-  document.getElementById("manager-count").textContent = `${tasks.length} 项`;
-  renderTasks("manager-tasks", tasks);
-  document.getElementById("growth-count").textContent = `${growth.length} 项`;
-  renderTasks("growth-tasks", growth);
+  const allTasks = roleTasks(ops, false);
+  const allGrowth = roleTasks(ops, true);
+  const visibleTasks = managerQueueExpanded ? allTasks : allTasks.slice(0, 3);
+  const expand = document.getElementById("manager-expand");
+  document.getElementById("task-heading").textContent = currentRole === "运营总管" ? "今日处置队列" : `${currentRole} · 今日处置队列`;
+  document.getElementById("manager-queue-caption").textContent = currentRole === "运营总管"
+    ? "跨岗位按紧急程度排列，先处理风险，再进入观察。"
+    : "按紧急程度排列，完成动作后再进入观察。";
+  document.getElementById("manager-count").textContent = `${allTasks.length} 项待处理`;
+  expand.hidden = allTasks.length <= 3;
+  expand.textContent = managerQueueExpanded ? "收起队列" : `查看全部 ${allTasks.length} 项`;
+  renderQueueStats(allTasks);
+  renderTasks("manager-tasks", visibleTasks, { queue: true, showModuleLink: true });
+  document.getElementById("growth-count").textContent = `${allGrowth.length} 项`;
+  renderTasks("growth-tasks", allGrowth.slice(0, 3), { showModuleLink: true });
   const scoped = (ops.all_tasks || []).filter((item) => currentRole === "运营总管" || item.owner === currentRole);
   const done = scoped.filter((item) => item.status === "done").length;
   document.getElementById("progress-rate").textContent = scoped.length ? `${Math.round(done / scoped.length * 100)}%` : "--";
@@ -1194,6 +1275,12 @@ document.getElementById("focus-toggle").addEventListener("click", async () => {
   await chrome.storage.local.set({ focusOnlyActionable });
   applyModuleVisibility();
 });
+document.getElementById("manager-expand").addEventListener("click", () => {
+  managerQueueExpanded = !managerQueueExpanded;
+  if (!currentOperationsContext) return;
+  const { ops, shelf, live, creative, coverage } = currentOperationsContext;
+  renderOperations(ops, shelf, live, creative, coverage);
+});
 document.getElementById("full-scan-button").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "start-full-scan", account_key: selectedQianchuanAccount });
   await loadDashboard();
@@ -1243,6 +1330,7 @@ document.getElementById("role-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-role]");
   if (!button) return;
   currentRole = button.dataset.role;
+  managerQueueExpanded = false;
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item === button));
   chrome.storage.local.set({ preferredRole: currentRole });
   renderWorkbench();
