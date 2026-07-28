@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.16.0-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.17.0-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.16.0 Beta`。工作台下半区改为清晰的两列任务布局，素材与库存使用整行展示；库存默认只显示最紧急的 4 项，其余折叠收纳，任务文案统一为“下一步、判断依据、完成后检查”。
+> 当前版本：`v2.17.0 Beta`。运营总管默认启用聚焦模式，只展示当前有任务的专项模块；无任务模块可一键全部显示，选择会保存在当前浏览器，减少日常巡检后的无效滚动。
 
 ## 为什么做这个项目
 
@@ -173,7 +173,7 @@ Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-mode
 4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.16.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.17.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
 
 完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
@@ -313,6 +313,7 @@ douyin-agent/
 - [x] 紧凑总览、异常优先体检单与无空白自适应布局（v2.14.0）
 - [x] 默认/老板/交接/自定义日志模板与飞书、钉钉机器人通知（v2.15.0）
 - [x] 专项模块两列重排、库存 Top 4 折叠和任务文案清晰化（v2.16.0）
+- [x] 运营总管聚焦模式、无任务模块自动收纳与显示偏好记忆（v2.17.0）
 - [ ] 通过页面回读、操作前二次确认和操作后验收构建受控单步执行器
 
 更完整的产品说明见 [PRODUCT.md](PRODUCT.md)。
