@@ -1,10 +1,7 @@
 const BRIDGE_URL = "http://127.0.0.1:8765";
 
 function showBrowserMode() {
-  const supportsSidePanel = Boolean(globalThis.chrome?.sidePanel?.open);
-  document.getElementById("runtime-mode").textContent = supportsSidePanel
-    ? "当前浏览器支持侧栏，经营副驾将在右侧打开。"
-    : "已启用兼容模式，经营工作台将在新标签页打开。";
+  document.getElementById("runtime-mode").textContent = "点击扩展图标，将在独立标签页打开完整经营工作台。";
 }
 
 async function checkBridge() {

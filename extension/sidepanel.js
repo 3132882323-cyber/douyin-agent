@@ -238,6 +238,7 @@ function appendCopyAction(card, params) {
         confirmButton.textContent = params.state === "confirmed" ? "撤销确认" : "已撤销";
         confirmButton.disabled = params.state !== "confirmed";
         wrap.classList.toggle("confirmed", params.state === "confirmed");
+        refreshShadowExecution().catch(() => undefined);
       } catch (error) {
         if (hint) hint.textContent = `确认失败：${error.message}`;
         confirmButton.disabled = false;
@@ -829,6 +830,85 @@ function renderEffectiveness(report = {}) {
   }
 }
 
+function renderShadowExecution(report = {}) {
+  const items = report.items || [];
+  const summary = report.summary || {};
+  document.getElementById("shadow-count").textContent = `${items.length} 项`;
+  renderMetricStrip("shadow-summary", {
+    待人工执行: summary.awaiting_manual_action || 0,
+    待重新读取: summary.awaiting_readback || 0,
+    已匹配: summary.matched || 0,
+    需核对: summary.needs_attention || 0,
+  });
+  const container = document.getElementById("shadow-actions");
+  if (!items.length) return empty(container, "确认千川操作方案后，会在这里进入人工执行与回读核验流程");
+  container.className = "stack";
+  container.replaceChildren(...items.slice(0, 10).map((item) => {
+    const card = document.createElement("article");
+    const attention = ["not_changed", "changed_differently", "unverifiable"].includes(item.status);
+    card.className = `shadow-card${item.status === "matched" ? " matched" : attention ? " attention" : ""}`;
+    const header = document.createElement("header");
+    const title = document.createElement("strong"); title.textContent = item.plan_name || item.plan_id || "千川计划";
+    const status = document.createElement("span"); status.className = "shadow-status"; status.textContent = item.status_label || "待处理";
+    header.append(title, status);
+    const change = document.createElement("p"); change.className = "shadow-change";
+    change.textContent = `${item.field || "预算"}  ${item.before_value ?? "--"} → ${item.target_value ?? "--"}`;
+    const detail = document.createElement("p"); detail.className = "shadow-detail"; detail.textContent = item.detail || "";
+    card.append(header, change, detail);
+
+    if (item.status !== "matched") {
+      const footer = document.createElement("footer");
+      if (item.status === "awaiting_manual_action") {
+        const applied = document.createElement("button");
+        applied.type = "button";
+        applied.className = "primary";
+        applied.textContent = "我已在千川手动执行";
+        applied.addEventListener("click", async () => {
+          applied.disabled = true;
+          applied.textContent = "正在记录…";
+          try {
+            await bridgeFetch("/actions/manual-applied", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+              body: JSON.stringify({ action_id: item.action_id }),
+            });
+            await refreshShadowExecution();
+          } catch (error) {
+            applied.disabled = false;
+            applied.textContent = error.message || "记录失败";
+          }
+        });
+        footer.append(applied);
+      } else {
+        const reread = document.createElement("button");
+        reread.type = "button";
+        reread.className = "primary";
+        reread.textContent = "读取当前千川页面并核验";
+        reread.addEventListener("click", async () => {
+          reread.disabled = true;
+          reread.textContent = "正在读取…";
+          try {
+            const response = await chrome.runtime.sendMessage({ type: "sync-current-qianchuan" });
+            if (!response?.ok) throw new Error(response?.error || "读取失败");
+            await loadDashboard();
+          } catch (error) {
+            reread.disabled = false;
+            reread.textContent = error.message || "读取失败";
+          }
+        });
+        footer.append(reread);
+      }
+      card.append(footer);
+    }
+    return card;
+  }));
+}
+
+async function refreshShadowExecution() {
+  const report = await bridgeFetch("/actions/shadow");
+  renderShadowExecution(report);
+}
+
 async function loadDashboard() {
   // Show loading skeleton
   showLoadingSkeleton();
@@ -837,7 +917,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, shadowR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -848,6 +928,7 @@ async function loadDashboard() {
     bridgeFetch("/qianchuan-accounts"),
     bridgeFetch("/health-monitor"),
     bridgeFetch("/effectiveness"),
+    bridgeFetch("/actions/shadow"),
   ]);
 
   const val = (r, fallback) => r.status === "fulfilled" ? r.value : fallback;
@@ -860,6 +941,7 @@ async function loadDashboard() {
   const accounts = val(accountsR, { accounts: [], selected_account_key: "" });
   const health = val(healthR, {});
   const effectiveness = val(effectivenessR, {});
+  const shadow = val(shadowR, { items: [], summary: {} });
 
   // Hide loading skeleton
   hideLoadingSkeleton();
@@ -886,6 +968,7 @@ async function loadDashboard() {
   renderTrends(trends);
   renderHealthMonitor(health);
   renderEffectiveness(effectiveness);
+  renderShadowExecution(shadow);
 
   // Restore focus if the focused element still exists
   if (focusId) {
@@ -899,6 +982,7 @@ async function loadDashboard() {
     ...(actionCenter.plan_recommendations || []).slice(0, 5).map((item, index) => `千川 ${index + 1}. ${item.plan}：${item.suggestion}`),
     ...(actionCenter.creative_analysis?.recommendations || []).slice(0, 5).map((item, index) => `素材 ${index + 1}. ${item.title}：${item.action}`),
     ...(actionCenter.inventory_alerts || []).slice(0, 5).map((item, index) => `库存 ${index + 1}. ${item.product}：${item.suggestion}`),
+    ...(shadow.items || []).slice(0, 5).map((item, index) => `影子执行 ${index + 1}. ${item.plan_name}：${item.status_label}`),
   ].filter(Boolean).join("\n");
 }
 

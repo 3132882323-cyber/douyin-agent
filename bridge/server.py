@@ -34,6 +34,7 @@ from http_receiver import (
     build_plan_recommendations,
     build_qianchuan_creative_analysis,
     build_scan_receipt,
+    build_shadow_execution_report,
     build_shelf_analysis,
     build_trends,
     check_selector_health,
@@ -114,6 +115,11 @@ TOOLS = [
         name="get_qianchuan_action_audit",
         description="读取用户在扩展中确认或撤销的千川操作方案记录；只读，不确认也不执行操作",
         inputSchema={"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}, "required": []},
+    ),
+    Tool(
+        name="get_qianchuan_shadow_execution",
+        description="读取千川影子执行报告，对比已确认方案、用户声明的人工操作和后续页面回读结果；不执行投放变更",
+        inputSchema={"type": "object", "properties": {}, "required": []},
     ),
     Tool(
         name="get_qianchuan_creative_analysis",
@@ -274,6 +280,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     if name == "get_qianchuan_action_audit":
         return _text(get_action_audit(int(arguments.get("limit") or 100)))
+
+    if name == "get_qianchuan_shadow_execution":
+        return _text(build_shadow_execution_report())
 
     if name == "get_qianchuan_creative_analysis":
         return _text(_cached("creative_analysis", build_qianchuan_creative_analysis))

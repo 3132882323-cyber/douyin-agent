@@ -164,6 +164,42 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertFalse(draft["can_confirm"])
         self.assertIn("CURRENT_VALUE_MISSING", {item["code"] for item in draft["blocked_reasons"]})
 
+    def test_shadow_execution_requires_manual_claim_and_matches_later_readback(self) -> None:
+        captured_at = int(time.time() * 1000)
+        snapshot = {
+            "schema_version": 2,
+            "page_type": "campaigns",
+            "captured_at": captured_at,
+            "account": {"key": "acct_shadow123", "label": "影子测试账号"},
+            "quality": {"score": 90, "row_count": 1},
+            "tables": [
+                {
+                    "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_shadow01", "影子计划", "500", "300", "0.60", "2"]],
+                }
+            ],
+        }
+        http_receiver.save_data("qianchuan", snapshot)
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_shadow123"})
+        draft = http_receiver.build_plan_recommendations()[0]["action_params"]
+        confirmed = http_receiver.confirm_action_draft(draft)
+
+        before_claim = http_receiver.build_shadow_execution_report()
+        self.assertEqual(before_claim["items"][0]["status"], "awaiting_manual_action")
+        marker = http_receiver.mark_action_manually_applied(confirmed["action_id"])
+        self.assertFalse(marker["execution_enabled"])
+        awaiting = http_receiver.build_shadow_execution_report()
+        self.assertEqual(awaiting["items"][0]["status"], "awaiting_readback")
+
+        snapshot["captured_at"] = marker["reported_applied_at_ms"] + 1000
+        snapshot["tables"][0]["rows"][0][2] = "400"
+        http_receiver.save_data("qianchuan", snapshot)
+        verified = http_receiver.build_shadow_execution_report()
+        self.assertFalse(verified["execution_enabled"])
+        self.assertEqual(verified["summary"]["matched"], 1)
+        self.assertEqual(verified["items"][0]["status"], "matched")
+        self.assertEqual(verified["items"][0]["readback"]["current_value"], 400)
+
     def test_inventory_alert_uses_days_of_cover(self) -> None:
         http_receiver.save_data(
             "doudian",

@@ -1,10 +1,11 @@
-/** 店策 Agent - MV3 service worker (v2.11.1) */
+/** 店策 Agent - MV3 service worker (v2.13.0) */
 
 const BRIDGE_URL = "http://127.0.0.1:8765";
 const QIANCHUAN_ENTRY_URL = "https://qianchuan.jinritemai.com/";
 const ALARM_NAME = "dian-agent-sync";
 const FULL_SCAN_ALARM = "dian-agent-full-scan";
 const BRIDGE_HEALTH_ALARM = "dian-agent-bridge-health";
+const WORKBENCH_PATH = "sidepanel.html";
 const DEFAULT_SETTINGS = {
   autoSync: false,
   intervalMinutes: 5,
@@ -75,6 +76,24 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 });
 
 chrome.runtime.onStartup.addListener(configureAlarm);
+
+async function openWorkbench() {
+  const workbenchUrl = chrome.runtime.getURL(WORKBENCH_PATH);
+  const existingTabs = await chrome.tabs.query({ url: `${workbenchUrl}*` });
+  const existing = existingTabs.find((tab) => Number.isInteger(tab.id));
+  if (existing?.id) {
+    if (Number.isInteger(existing.windowId)) {
+      await chrome.windows.update(existing.windowId, { focused: true }).catch(() => undefined);
+    }
+    await chrome.tabs.update(existing.id, { active: true });
+    return existing;
+  }
+  return chrome.tabs.create({ url: workbenchUrl, active: true });
+}
+
+chrome.action.onClicked.addListener(() => {
+  openWorkbench().catch((error) => updateStatus("system", `工作台打开失败：${error.message || error}`, "error"));
+});
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) syncAll("scheduled");
