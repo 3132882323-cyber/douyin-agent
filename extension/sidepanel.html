@@ -7,6 +7,15 @@
     <link rel="stylesheet" href="sidepanel.css">
   </head>
   <body>
+    <aside id="qianchuan-sync-dock" class="qianchuan-sync-dock" aria-label="千川快速同步">
+      <button id="qianchuan-sync-dock-button" type="button" title="同步最近访问的千川页面">
+        <span class="qianchuan-sync-dock-icon" aria-hidden="true">川</span>
+        <span class="qianchuan-sync-dock-copy">
+          <strong id="qianchuan-sync-dock-label">同步千川</strong>
+          <small id="qianchuan-sync-dock-status" aria-live="polite">读取最近页面</small>
+        </span>
+      </button>
+    </aside>
     <main class="panel-shell">
       <header>
         <div class="brand-mark">策</div>
@@ -141,10 +150,10 @@
               </select>
             </label>
           </div>
-          <button id="current-qianchuan-button" class="current-page-button">读取当前千川页面</button>
+          <button id="current-qianchuan-button" class="current-page-button">同步最近千川页面</button>
         </div>
         <div class="scan-meta">
-          <small id="qianchuan-account-hint">多账号首次使用：先切换到要分析的千川账号，再点“读取当前千川页面”。巡检会复制该页面并保留登录账号。</small>
+          <small id="qianchuan-account-hint">多账号首次使用：先打开要分析的千川账号页面，再点“同步最近千川页面”。工作台会记住最近访问的千川标签页。</small>
           <small id="scan-summary">手动巡检 · 覆盖经营、商品、订单、内容、直播、货架与千川核心页面</small>
         </div>
       </section>

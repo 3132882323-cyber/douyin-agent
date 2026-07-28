@@ -24,6 +24,7 @@ let templateChecks = {};
 let focusOnlyActionable = true;
 let managerQueueExpanded = false;
 let currentPreflightSession = null;
+let qianchuanSyncPromise = null;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const ROLE_WORKBENCH = {
@@ -1410,8 +1411,86 @@ async function refreshAll(syncFirst = false) {
   }
 }
 
+function shortSyncTime(timestamp) {
+  if (!timestamp) return "";
+  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function setQianchuanSyncUi(state = "idle", detail = "读取最近页面") {
+  const dock = document.getElementById("qianchuan-sync-dock");
+  const dockButton = document.getElementById("qianchuan-sync-dock-button");
+  const mainButton = document.getElementById("current-qianchuan-button");
+  const dockLabel = document.getElementById("qianchuan-sync-dock-label");
+  const dockStatus = document.getElementById("qianchuan-sync-dock-status");
+  const running = state === "syncing";
+  dock.className = `qianchuan-sync-dock ${state}`;
+  dockButton.disabled = running;
+  mainButton.disabled = running;
+  dockLabel.textContent = running ? "同步中" : state === "success" ? "已同步" : state === "error" ? "同步失败" : "同步千川";
+  dockStatus.textContent = detail;
+  dockButton.title = detail;
+  mainButton.textContent = running ? "正在同步千川页面…" : "同步最近千川页面";
+}
+
+function restoreQianchuanSyncUi(record = {}) {
+  if (record.status === "success") {
+    const label = record.account_label || LABELS[record.page_type] || "千川页面";
+    setQianchuanSyncUi("success", `${label} · ${shortSyncTime(record.timestamp)}`);
+  } else if (record.status === "error") {
+    setQianchuanSyncUi("error", record.message || "请先打开千川");
+  } else {
+    setQianchuanSyncUi("idle", "读取最近页面");
+  }
+}
+
+async function syncRecentQianchuanPage() {
+  if (qianchuanSyncPromise) return qianchuanSyncPromise;
+  qianchuanSyncPromise = (async () => {
+    const hint = document.getElementById("qianchuan-account-hint");
+    setQianchuanSyncUi("syncing", "正在读取最近页面");
+    try {
+      selectedQianchuanAccount = "";
+      accountSelectionRequired = false;
+      document.getElementById("qianchuan-account-select").value = "";
+      await chrome.storage.local.set({ scanAccountPreference: "" });
+      await bridgeFetch("/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+        body: JSON.stringify({ qianchuan_account_key: "" }),
+      });
+      const response = await chrome.runtime.sendMessage({ type: "sync-current-qianchuan" });
+      if (!response?.ok) throw new Error(response?.error || "同步失败");
+      const result = response.result || {};
+      const accountLabel = result.account?.label || "";
+      const pageLabel = LABELS[result.page_type] || result.page_type || "千川页面";
+      const timestamp = Date.now();
+      const record = {
+        status: "success",
+        timestamp,
+        account_label: accountLabel,
+        page_type: result.page_type || "",
+        tab_id: result.tab?.id || null,
+      };
+      await chrome.storage.local.set({ lastQianchuanManualSync: record });
+      await loadDashboard();
+      hint.textContent = `已同步最近访问的${pageLabel}${accountLabel ? ` · ${accountLabel}` : ""}。后续巡检会优先复用这个千川标签页。`;
+      setQianchuanSyncUi("success", `${accountLabel || pageLabel} · ${shortSyncTime(timestamp)}`);
+      return result;
+    } catch (error) {
+      const message = error.message || "同步失败，请先打开巨量千川页面";
+      await chrome.storage.local.set({ lastQianchuanManualSync: { status: "error", timestamp: Date.now(), message } });
+      hint.textContent = message;
+      setQianchuanSyncUi("error", message);
+      throw error;
+    } finally {
+      qianchuanSyncPromise = null;
+    }
+  })();
+  return qianchuanSyncPromise;
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference", "focusOnlyActionable"]);
+  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference", "focusOnlyActionable", "lastQianchuanManualSync"]);
   if (stored.preferredRole) currentRole = stored.preferredRole;
   if (SCENE_WORKBENCH[stored.workbenchScene]) workbenchScene = stored.workbenchScene;
   focusOnlyActionable = stored.focusOnlyActionable !== false;
@@ -1422,6 +1501,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await chrome.storage.local.set({ templateChecks });
   }
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item.dataset.role === currentRole));
+  restoreQianchuanSyncUi(stored.lastQianchuanManualSync || {});
   renderWorkbench();
   applyModuleVisibility();
   refreshAll(false);
@@ -1485,31 +1565,11 @@ document.getElementById("qianchuan-account-select").addEventListener("change", a
   await bridgeFetch("/settings", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ qianchuan_account_key: selectedQianchuanAccount }) });
   await loadDashboard();
 });
-document.getElementById("current-qianchuan-button").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
-  const hint = document.getElementById("qianchuan-account-hint");
-  button.disabled = true;
-  button.textContent = "正在读取当前页面…";
-  try {
-    selectedQianchuanAccount = "";
-    await chrome.storage.local.set({ scanAccountPreference: "" });
-    document.getElementById("qianchuan-account-select").value = "";
-    await bridgeFetch("/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-      body: JSON.stringify({ qianchuan_account_key: "" }),
-    });
-    const response = await chrome.runtime.sendMessage({ type: "sync-current-qianchuan" });
-    if (!response?.ok) throw new Error(response?.error || "读取失败");
-    const accountLabel = response.result?.account?.label ? ` · ${response.result.account.label}` : "";
-    hint.textContent = `已锁定当前千川标签页：${LABELS[response.result?.page_type] || response.result?.page_type || "千川页面"}${accountLabel}。现在可以开始巡检。`;
-    await loadDashboard();
-  } catch (error) {
-    hint.textContent = error.message || "读取失败，请先切换到巨量千川页面";
-  } finally {
-    button.disabled = false;
-    button.textContent = "读取当前千川页面";
-  }
+document.getElementById("current-qianchuan-button").addEventListener("click", () => {
+  syncRecentQianchuanPage().catch(() => undefined);
+});
+document.getElementById("qianchuan-sync-dock-button").addEventListener("click", () => {
+  syncRecentQianchuanPage().catch(() => undefined);
 });
 document.getElementById("cancel-scan-button").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "cancel-full-scan" });

@@ -38,4 +38,42 @@ const ranked = policy.rankSeedTabs([
 ], 2);
 assert.deepStrictEqual(Array.from(ranked, (tab) => tab.id), [2, 1, 3]);
 
+assert.strictEqual(policy.isQianchuanUrl("https://qianchuan.jinritemai.com/dataV2/roi2-material-analysis"), true);
+assert.strictEqual(policy.isQianchuanUrl("chrome-extension://workbench/sidepanel.html"), false);
+
+const qianchuanTabs = [
+  { id: 11, url: "https://qianchuan.jinritemai.com/home", active: false, lastAccessed: 100 },
+  { id: 12, url: "https://qianchuan.jinritemai.com/dataV2/roi2-material-analysis", active: false, lastAccessed: 300 },
+];
+const recentSelection = policy.selectQianchuanSyncTab(
+  qianchuanTabs,
+  { id: 99, url: "chrome-extension://workbench/sidepanel.html", active: true },
+  11,
+  12,
+);
+assert.strictEqual(recentSelection.tab.id, 11);
+assert.strictEqual(recentSelection.matchedBy, "recent");
+
+const activeSelection = policy.selectQianchuanSyncTab(
+  qianchuanTabs,
+  { id: 12, url: qianchuanTabs[1].url, active: true },
+  11,
+  null,
+);
+assert.strictEqual(activeSelection.tab.id, 12);
+assert.strictEqual(activeSelection.matchedBy, "active");
+
+const seedSelection = policy.selectQianchuanSyncTab(
+  qianchuanTabs,
+  { id: 99, url: "chrome-extension://workbench/sidepanel.html", active: true },
+  404,
+  12,
+);
+assert.strictEqual(seedSelection.tab.id, 12);
+assert.strictEqual(seedSelection.matchedBy, "seed");
+
+const missingSelection = policy.selectQianchuanSyncTab([], null, 11, 12);
+assert.strictEqual(missingSelection.tab, null);
+assert.strictEqual(missingSelection.matchedBy, "none");
+
 console.log("scan-policy tests passed");

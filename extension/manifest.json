@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "店策 Agent - 抖店千川经营副驾",
-  "version": "2.23.0",
+  "version": "2.24.0",
   "description": "适配 Chrome、Edge、360 极速浏览器 X 等现代 Chromium 浏览器，从已登录的抖店和巨量千川页面读取经营快照，并在独立工作台中分析。无需开发者 API。",
   "minimum_chrome_version": "116",
   "permissions": [

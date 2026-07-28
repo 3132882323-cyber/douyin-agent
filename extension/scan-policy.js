@@ -59,11 +59,35 @@
     });
   }
 
+  function isQianchuanUrl(value) {
+    const url = String(value || "");
+    return url.startsWith("https://qianchuan.jinritemai.com/")
+      || url.startsWith("https://buyin.jinritemai.com/");
+  }
+
+  function selectQianchuanSyncTab(tabs, activeTab = null, recentTabId = null, seedTabId = null) {
+    if (activeTab?.id && isQianchuanUrl(activeTab.url)) {
+      return { tab: activeTab, matchedBy: "active" };
+    }
+    const candidates = (tabs || []).filter((tab) => tab?.id && isQianchuanUrl(tab.url));
+    if (!candidates.length) return { tab: null, matchedBy: "none" };
+    const preferredTabId = candidates.some((tab) => tab.id === recentTabId)
+      ? recentTabId
+      : candidates.some((tab) => tab.id === seedTabId) ? seedTabId : null;
+    const [tab] = rankSeedTabs(candidates, preferredTabId);
+    return {
+      tab: tab || null,
+      matchedBy: tab?.id === recentTabId ? "recent" : tab?.id === seedTabId ? "seed" : "latest",
+    };
+  }
+
   globalThis.DianAgentScanPolicy = {
     sameAccountLabel,
     matchAccount,
     errorCode,
     isNonRetryable,
     rankSeedTabs,
+    isQianchuanUrl,
+    selectQianchuanSyncTab,
   };
 })();

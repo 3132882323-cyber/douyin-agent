@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v2.23.0) */
+/** 店策 Agent - MV3 service worker (v2.24.0) */
 
 importScripts("scan-policy.js");
 
@@ -78,6 +78,35 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 });
 
 chrome.runtime.onStartup.addListener(configureAlarm);
+
+async function rememberRecentQianchuanTab(tabId) {
+  if (!Number.isInteger(tabId)) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!DianAgentScanPolicy.isQianchuanUrl(tab?.url)) return;
+    await chrome.storage.local.set({
+      recentQianchuanTab: {
+        tab_id: tab.id,
+        window_id: tab.windowId,
+        url: tab.url || "",
+        title: tab.title || "",
+        last_seen: Date.now(),
+      },
+    });
+  } catch {
+    // The tab may have closed between activation and lookup.
+  }
+}
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  rememberRecentQianchuanTab(tabId).catch(() => undefined);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tab?.active && (changeInfo.url || changeInfo.status === "complete")) {
+    rememberRecentQianchuanTab(tabId).catch(() => undefined);
+  }
+});
 
 async function openWorkbench() {
   const workbenchUrl = chrome.runtime.getURL(WORKBENCH_PATH);
@@ -335,7 +364,7 @@ async function findQianchuanSeedTab(expectedAccount = {}) {
     }
   }
   if (expectedAccount?.key) {
-    const error = new Error("没有找到已登录且与所选账号一致的千川页面。请先切换到该账号，点击“读取当前千川页面”，再开始巡检。");
+    const error = new Error("没有找到已登录且与所选账号一致的千川页面。请先访问该账号的千川页面，点击工作台右侧“同步千川”，再开始巡检。");
     error.code = "ACCOUNT_MISMATCH";
     throw error;
   }
@@ -556,26 +585,59 @@ async function syncAll(reason = "manual") {
 
 async function syncCurrentPage(sourceOnly = "") {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const url = activeTab?.url || "";
+  let targetTab = activeTab || null;
+  let matchedBy = "active";
+  if (sourceOnly === "qianchuan" && !DianAgentScanPolicy.isQianchuanUrl(activeTab?.url)) {
+    const [tabs, stored] = await Promise.all([
+      querySourceTabs("qianchuan"),
+      chrome.storage.local.get(["recentQianchuanTab", "qianchuanSeed"]),
+    ]);
+    const selection = DianAgentScanPolicy.selectQianchuanSyncTab(
+      tabs,
+      activeTab,
+      Number(stored.recentQianchuanTab?.tab_id),
+      Number(stored.qianchuanSeed?.tab_id),
+    );
+    targetTab = selection.tab;
+    matchedBy = selection.matchedBy;
+  }
+  const url = targetTab?.url || "";
   const source = url.startsWith("https://fxg.jinritemai.com/") ? "doudian"
     : url.startsWith("https://qianchuan.jinritemai.com/") || url.startsWith("https://buyin.jinritemai.com/") ? "qianchuan" : "";
-  if (!activeTab?.id || !source) throw new Error("当前页面不是抖店或巨量千川后台");
-  if (sourceOnly && source !== sourceOnly) throw new Error("请先切换到需要读取的巨量千川页面");
-  await inspectPlatformPage(activeTab.id, source);
-  const response = await collectFromTab(source, activeTab, "manual-current-page");
+  if (!targetTab?.id || !source) {
+    throw new Error(sourceOnly === "qianchuan"
+      ? "没有找到可同步的千川标签页，请先打开巨量千川任意页面"
+      : "当前页面不是抖店或巨量千川后台");
+  }
+  if (sourceOnly && source !== sourceOnly) throw new Error("请先打开需要读取的巨量千川页面");
+  await inspectPlatformPage(targetTab.id, source);
+  const response = await collectFromTab(source, targetTab, "manual-current-page");
   if (!response?.ok) throw new Error(response?.error || "当前页面读取失败");
   const capturedAccount = response.bridge?.account || response.account || null;
   const updates = { lastSyncAttempt: Date.now() };
   if (source === "qianchuan") {
     updates.qianchuanSeed = {
-      tab_id: activeTab.id,
-      url: activeTab.url || "",
+      tab_id: targetTab.id,
+      url: targetTab.url || "",
       account: capturedAccount,
       captured_at: Date.now(),
     };
+    updates.recentQianchuanTab = {
+      tab_id: targetTab.id,
+      window_id: targetTab.windowId,
+      url: targetTab.url || "",
+      title: targetTab.title || "",
+      last_seen: Date.now(),
+    };
   }
   await chrome.storage.local.set(updates);
-  return { source, page_type: response.page_type, quality: response.quality, account: capturedAccount };
+  return {
+    source,
+    page_type: response.page_type,
+    quality: response.quality,
+    account: capturedAccount,
+    tab: { id: targetTab.id, title: targetTab.title || "", url: targetTab.url || "", matched_by: matchedBy },
+  };
 }
 
 async function storeAndPush(source, snapshot) {
