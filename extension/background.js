@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v2.21.0) */
+/** 店策 Agent - MV3 service worker (v2.22.0) */
 
 importScripts("scan-policy.js");
 
@@ -133,7 +133,12 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-const { matchAccount, errorCode: scanErrorCode, isNonRetryable: isNonRetryableScanError } = globalThis.DianAgentScanPolicy;
+const {
+  matchAccount,
+  errorCode: scanErrorCode,
+  isNonRetryable: isNonRetryableScanError,
+  rankSeedTabs,
+} = globalThis.DianAgentScanPolicy;
 
 function withTimeout(promise, timeoutMs, message) {
   let timer;
@@ -184,7 +189,10 @@ function waitForTabReady(tabId, timeoutMs = 30000) {
 async function navigateScanTab(tabId, url, forceReload = false) {
   const current = await chrome.tabs.get(tabId);
   const sameUrl = (current.url || "").split("#")[0] === url.split("#")[0];
-  if (sameUrl && !forceReload && current.status === "complete") return;
+  if (sameUrl && !forceReload) {
+    if (current.status !== "complete") await waitForTabReady(tabId, 25000);
+    return;
+  }
   const ready = waitForTabReady(tabId, 25000);
   if (sameUrl) await chrome.tabs.reload(tabId);
   else await chrome.tabs.update(tabId, { url, active: false });
@@ -306,8 +314,43 @@ function isMissingTabError(error) {
   return /No tab with id|Invalid tab ID|tab.+(?:closed|not found)/i.test(String(error || ""));
 }
 
-async function createScanTab() {
-  return chrome.tabs.create({ url: "about:blank", active: false });
+async function findQianchuanSeedTab(expectedAccount = {}) {
+  const stored = await chrome.storage.local.get("qianchuanSeed");
+  const preferredTabId = Number(stored.qianchuanSeed?.tab_id);
+  const tabs = rankSeedTabs(await querySourceTabs("qianchuan"), Number.isInteger(preferredTabId) ? preferredTabId : null)
+    .filter((tab) => Number.isInteger(tab.id));
+  let fallbackTab = null;
+  for (const tab of tabs.slice(0, 8)) {
+    fallbackTab ||= tab;
+    try {
+      const response = await collectFromTab("qianchuan", tab, "identify-scan-seed");
+      if (!response?.ok) continue;
+      const account = response.bridge?.account || response.account || null;
+      if (!expectedAccount?.key || matchAccount(account, expectedAccount).ok) {
+        return { tab, account };
+      }
+    } catch {
+      // Try another already-open Qianchuan tab before falling back.
+    }
+  }
+  if (expectedAccount?.key) {
+    const error = new Error("没有找到已登录且与所选账号一致的千川页面。请先切换到该账号，点击“读取当前千川页面”，再开始巡检。");
+    error.code = "ACCOUNT_MISMATCH";
+    throw error;
+  }
+  return fallbackTab ? { tab: fallbackTab, account: null } : null;
+}
+
+async function createScanTab(source = "", expectedAccount = {}) {
+  if (source === "qianchuan") {
+    const seed = await findQianchuanSeedTab(expectedAccount);
+    if (seed?.tab?.id) {
+      const duplicated = await chrome.tabs.duplicate(seed.tab.id);
+      await chrome.tabs.update(duplicated.id, { active: false });
+      return { tab: duplicated, account: seed.account || null };
+    }
+  }
+  return { tab: await chrome.tabs.create({ url: "about:blank", active: false }), account: null };
 }
 
 async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
@@ -328,13 +371,20 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
       const page = scanPages[index];
       if (!scanTab?.id || page.source !== scanSource) {
         if (scanTab?.id) await chrome.tabs.remove(scanTab.id).catch(() => undefined);
-        scanTab = await createScanTab();
+        const created = await createScanTab(page.source, lockedAccount);
+        scanTab = created.tab;
         scanSource = page.source;
+        if (page.source === "qianchuan" && created.account && !lockedAccount.key) {
+          lockedAccount = created.account;
+          await selectAnalysisAccount(lockedAccount.key);
+          await setFullScanState({ account_key: lockedAccount.key, account_label: lockedAccount.label || "" });
+        }
       }
       await setFullScanState({ current: page.label, index: index + 1 });
       let result = await scanOnePage(scanTab.id, page, reason, lockedAccount);
       if (!result.ok && isMissingTabError(result.error)) {
-        scanTab = await createScanTab();
+        const recovered = await createScanTab(page.source, lockedAccount);
+        scanTab = recovered.tab;
         result = await scanOnePage(scanTab.id, page, `${reason}-tab-recovered`, lockedAccount);
       }
       if (page.source === "qianchuan" && result.ok && result.account_key) {
@@ -466,8 +516,18 @@ async function syncCurrentPage(sourceOnly = "") {
   await inspectPlatformPage(activeTab.id, source);
   const response = await collectFromTab(source, activeTab, "manual-current-page");
   if (!response?.ok) throw new Error(response?.error || "当前页面读取失败");
-  await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
-  return { source, page_type: response.page_type, quality: response.quality, account: response.account || null };
+  const capturedAccount = response.bridge?.account || response.account || null;
+  const updates = { lastSyncAttempt: Date.now() };
+  if (source === "qianchuan") {
+    updates.qianchuanSeed = {
+      tab_id: activeTab.id,
+      url: activeTab.url || "",
+      account: capturedAccount,
+      captured_at: Date.now(),
+    };
+  }
+  await chrome.storage.local.set(updates);
+  return { source, page_type: response.page_type, quality: response.quality, account: capturedAccount };
 }
 
 async function storeAndPush(source, snapshot) {
@@ -606,10 +666,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const failedIds = (stored.fullScan?.results || []).filter((item) => !item.ok).map((item) => item.id);
       if (!failedIds.length) sendResponse({ ok: false, error: "没有需要重试的失败页面" });
       else {
-        const retryAccountKey = stored.fullScan?.account_mode === "fixed"
-          ? String(stored.fullScan?.account_key || "")
-          : "";
-        startFullScan("retry-failed", failedIds, retryAccountKey).catch(() => undefined);
+        startFullScan("retry-failed-current-account", failedIds, "").catch(() => undefined);
         sendResponse({ ok: true, started: true, total: failedIds.length });
       }
       return;

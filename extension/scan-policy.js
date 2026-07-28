@@ -49,10 +49,21 @@
     return ["ACCOUNT_UNRESOLVED", "ACCOUNT_MISMATCH", "LOGIN_REQUIRED"].includes(errorCode(error));
   }
 
+  function rankSeedTabs(tabs, preferredTabId = null) {
+    return [...(tabs || [])].sort((left, right) => {
+      const leftPreferred = left?.id === preferredTabId ? 1 : 0;
+      const rightPreferred = right?.id === preferredTabId ? 1 : 0;
+      if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred;
+      if (Boolean(left?.active) !== Boolean(right?.active)) return Number(Boolean(right?.active)) - Number(Boolean(left?.active));
+      return Number(right?.lastAccessed || 0) - Number(left?.lastAccessed || 0);
+    });
+  }
+
   globalThis.DianAgentScanPolicy = {
     sameAccountLabel,
     matchAccount,
     errorCode,
     isNonRetryable,
+    rankSeedTabs,
   };
 })();

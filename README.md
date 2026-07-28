@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.21.0-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.22.0-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.21.0 Beta`。重点修复千川多账号巡检：优先按平台账号 ID 区分账号，同名店铺不再被合并；巡检会锁定本轮账号，并在识别失败或账号不一致时立即停止当前页，不再反复刷新。当前仍不写入千川。
+> 当前版本：`v2.22.0 Beta`。多账号巡检改为复制运营刚刚读取成功的千川标签页，保留该标签页中的登录与账号选择上下文，不再从空白标签页重新进入千川；失败页会按当前账号重新识别。安装器同时清理旧自启入口并校验本地 Agent 与扩展版本一致。当前仍不写入千川。
 
 ## 为什么做这个项目
 
@@ -173,7 +173,7 @@ Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-mode
 4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.21.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.22.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
 
 完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
@@ -320,6 +320,7 @@ douyin-agent/
 - [x] 自动化投放候选队列、资格闸门、阻止原因与执行前检查状态（v2.19.0）
 - [x] 降低预算首批试运行、三分钟执行前检查会话、重新回读与紧急停止（v2.20.0）
 - [x] 千川多账号稳定 ID、同名账号区分、账号锁定升级与失败停止刷新（v2.21.0）
+- [x] 复制当前千川标签页保留多账号会话、按当前账号重试、Agent 版本一致性检查（v2.22.0）
 - [ ] 通过页面回读、操作前二次确认和操作后验收构建受控单步执行器
 
 更完整的产品说明见 [PRODUCT.md](PRODUCT.md)。

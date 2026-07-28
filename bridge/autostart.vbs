@@ -3,6 +3,19 @@
 Dim shell, fso, py, script, log, localPy
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
+
+' Do not launch another copy when the local Agent is already healthy.
+On Error Resume Next
+Dim health
+Set health = CreateObject("MSXML2.XMLHTTP")
+health.Open "GET", "http://127.0.0.1:8765/health", False
+health.Send
+If Err.Number = 0 And health.Status = 200 Then
+  WScript.Quit 0
+End If
+Err.Clear
+On Error GoTo 0
+
 script = fso.GetParentFolderName(WScript.ScriptFullName)
 localPy = script & "\.venv\Scripts\pythonw.exe"
 If fso.FileExists(localPy) Then
