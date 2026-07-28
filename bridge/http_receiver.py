@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from action_protocol import assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
+from oceanengine_data import OceanEngineDataClient, load_sync_status
 from oceanengine_oauth import OceanEngineOAuth
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(message)s")
@@ -2916,7 +2917,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.25.0"
+    server_version = "DianAgent/2.26.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2968,7 +2969,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.25.0",
+                    "version": "2.26.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -2986,6 +2987,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/oauth/oceanengine/status":
             self._json(OceanEngineOAuth(DATA_DIR).status())
+            return
+        if path == "/oauth/oceanengine/sync-status":
+            self._json(load_sync_status(DATA_DIR))
             return
         if path == "/oauth/oceanengine/callback":
             oauth = OceanEngineOAuth(DATA_DIR)
@@ -3148,6 +3152,38 @@ class Handler(BaseHTTPRequestHandler):
                     str(payload.get("app_secret") or ""),
                 )
                 self._json({"ok": True, **result})
+                return
+            if path == "/oauth/oceanengine/sync":
+                account_ids = payload.get("account_ids")
+                if account_ids is not None and not isinstance(account_ids, list):
+                    raise ValueError("账号选择格式不正确。")
+                result = OceanEngineDataClient(
+                    OceanEngineOAuth(DATA_DIR)
+                ).sync(
+                    save_data,
+                    [str(value) for value in account_ids] if account_ids else None,
+                    int(payload.get("days") or 7),
+                )
+                selected_key = str(
+                    load_agent_settings().get("qianchuan_account_key") or ""
+                )
+                if not selected_key:
+                    active_account = next(
+                        (
+                            account
+                            for account in result.get("accounts", [])
+                            if int(account.get("advertiser_count") or 0) > 0
+                        ),
+                        None,
+                    )
+                    if active_account:
+                        selected_key = str(active_account.get("account_key") or "")
+                        save_agent_settings(
+                            {"qianchuan_account_key": selected_key}
+                        )
+                result["selected_account_key"] = selected_key
+                _invalidate_cache()
+                self._json(result)
                 return
             if path == "/integrations/settings":
                 self._json({"ok": True, "integrations": save_integration_settings(payload)})

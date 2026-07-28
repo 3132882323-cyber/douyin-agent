@@ -32,6 +32,7 @@ QIANCHUAN_AUTHORIZE_URL = (
     "https://qianchuan.jinritemai.com/openapi/qc/audit/oauth.html"
 )
 TOKEN_URL = "https://api.oceanengine.com/open_api/oauth2/access_token/"
+REFRESH_TOKEN_URL = "https://api.oceanengine.com/open_api/oauth2/refresh_token/"
 AUTHORIZED_ACCOUNTS_URL = (
     "https://api.oceanengine.com/open_api/oauth2/advertiser/get/"
 )
@@ -316,6 +317,17 @@ class OceanEngineOAuth:
         accounts = tokens.get("accounts")
         if not isinstance(accounts, list):
             accounts = []
+        public_accounts = [
+            {
+                "account_id": str(account.get("account_id") or ""),
+                "account_name": str(account.get("account_name") or ""),
+                "account_role": str(account.get("account_role") or ""),
+                "valid": bool(account.get("valid", True)),
+                "advertiser_count": len(account.get("advertiser_ids") or []),
+            }
+            for account in accounts
+            if isinstance(account, dict)
+        ]
         expires_at = int(tokens.get("expires_at") or 0)
         connected = bool(tokens.get("access_token")) and (
             not expires_at or expires_at > int(time.time())
@@ -327,14 +339,90 @@ class OceanEngineOAuth:
             "secret_storage": "windows_dpapi" if sys.platform == "win32" else "environment",
             "connected": connected,
             "needs_refresh": bool(tokens.get("access_token")) and not connected,
-            "account_count": len(accounts),
-            "accounts": accounts,
+            "account_count": len(public_accounts),
+            "accounts": public_accounts,
             "expires_at": expires_at or None,
-            "authorization_in_progress": bool(session),
+            "authorization_in_progress": bool(session) and not connected,
             "authorized_at": tokens.get("authorized_at"),
             "last_error": str(tokens.get("last_error") or ""),
             "secrets_exposed": False,
         }
+
+    def get_valid_access_token(self) -> str:
+        """Return an internal access token, refreshing it before expiry.
+
+        Callers must never include the returned value in logs or HTTP responses.
+        """
+        with _oauth_lock:
+            tokens = self._load_tokens()
+            access_token = str(tokens.get("access_token") or "")
+            expires_at = int(tokens.get("expires_at") or 0)
+            if access_token and (not expires_at or expires_at > int(time.time()) + 300):
+                return access_token
+            refresh_token = str(tokens.get("refresh_token") or "")
+            app_secret = self._load_secret()
+            if not refresh_token or not app_secret:
+                raise ValueError("千川授权已过期，请重新授权账号。")
+            config = self._load_config()
+            response = _request_json(
+                REFRESH_TOKEN_URL,
+                payload={
+                    "app_id": int(config["app_id"]),
+                    "secret": app_secret,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+            )
+            data = _platform_data(response, "刷新 Access Token")
+            next_access_token = str(data.get("access_token") or "")
+            next_refresh_token = str(data.get("refresh_token") or refresh_token)
+            if not next_access_token:
+                raise ValueError("平台未返回新的 Access Token，请重新授权账号。")
+            now = int(time.time())
+            tokens.update(
+                {
+                    "access_token": next_access_token,
+                    "refresh_token": next_refresh_token,
+                    "expires_at": now + max(0, int(data.get("expires_in") or 0)),
+                    "refresh_token_expires_at": now
+                    + max(0, int(data.get("refresh_token_expires_in") or 0)),
+                    "last_error": "",
+                }
+            )
+            _store_encrypted(
+                self.token_path,
+                tokens,
+                "店策 Agent 巨量千川 OAuth Token",
+            )
+            return next_access_token
+
+    def authorized_accounts_private(self) -> list[dict[str, Any]]:
+        """Return authorization metadata for the local API client only."""
+        accounts = self._load_tokens().get("accounts")
+        return accounts if isinstance(accounts, list) else []
+
+    def save_account_advertisers(
+        self, advertisers_by_account: dict[str, list[str]]
+    ) -> None:
+        """Persist resolved advertiser IDs inside the encrypted token record."""
+        with _oauth_lock:
+            tokens = self._load_tokens()
+            accounts = tokens.get("accounts")
+            if not isinstance(accounts, list):
+                return
+            for account in accounts:
+                if not isinstance(account, dict):
+                    continue
+                account_id = str(account.get("account_id") or "")
+                account["advertiser_ids"] = list(
+                    dict.fromkeys(advertisers_by_account.get(account_id, []))
+                )[:100]
+            tokens["accounts"] = accounts
+            _store_encrypted(
+                self.token_path,
+                tokens,
+                "店策 Agent 巨量千川 OAuth Token",
+            )
 
     def _load_session(self) -> dict[str, Any]:
         if not self.session_path.exists():

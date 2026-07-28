@@ -1,6 +1,8 @@
 # Local business data and generated reports
 bridge/data/
 bridge/bridge.log
+bridge/bridge.stdout.log
+bridge/bridge.stderr.log
 
 # Private extension signing material and generated packages
 *.pem
@@ -18,4 +20,3 @@ venv/
 .vscode/
 .DS_Store
 Thumbs.db
-

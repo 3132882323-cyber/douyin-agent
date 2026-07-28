@@ -979,6 +979,7 @@ function renderOceanEngineOAuth(payload = {}) {
   const secret = document.getElementById("oceanengine-app-secret");
   const accountBox = document.getElementById("oceanengine-accounts");
   const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  document.getElementById("sync-oceanengine-data").disabled = !payload.connected;
   if (payload.app_id) appId.value = payload.app_id;
   secret.value = "";
   secret.placeholder = payload.secret_saved
@@ -1018,9 +1019,28 @@ function renderOceanEngineOAuth(payload = {}) {
   }
 }
 
+function renderOceanEngineSync(payload = {}) {
+  const result = document.getElementById("oceanengine-sync-result");
+  if (!payload.synced_at) {
+    result.textContent = "同步会自动读取已授权店铺关联的广告账户、计划、7 日经营报表和视频素材；不会修改投放。";
+    result.className = "";
+    return;
+  }
+  const time = new Date(Number(payload.synced_at) * 1000).toLocaleString("zh-CN", { hour12: false });
+  const failures = Number(payload.failure_count || 0);
+  result.textContent = failures
+    ? `上次同步 ${time}：${payload.account_count || 0} 个店铺、保存 ${payload.saved_pages || 0} 类数据；${failures} 个接口未获权限或读取失败，浏览器快照仍作为备用。`
+    : `上次同步 ${time}：${payload.account_count || 0} 个店铺、保存 ${payload.saved_pages || 0} 类数据，全部只读接口成功。`;
+  result.className = failures ? "warn" : "ok";
+}
+
 async function refreshOceanEngineStatus() {
-  const status = await bridgeFetch("/oauth/oceanengine/status");
+  const [status, sync] = await Promise.all([
+    bridgeFetch("/oauth/oceanengine/status"),
+    bridgeFetch("/oauth/oceanengine/sync-status"),
+  ]);
   renderOceanEngineOAuth(status);
+  renderOceanEngineSync(sync);
   if (status.connected && oceanengineStatusPoller) {
     clearInterval(oceanengineStatusPoller);
     oceanengineStatusPoller = null;
@@ -1377,7 +1397,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR, oceanengineR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR, oceanengineR, oceanengineSyncR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1393,6 +1413,7 @@ async function loadDashboard() {
     bridgeFetch("/actions/shadow"),
     bridgeFetch("/integrations"),
     bridgeFetch("/oauth/oceanengine/status"),
+    bridgeFetch("/oauth/oceanengine/sync-status"),
   ]);
 
   const val = (r, fallback) => r.status === "fulfilled" ? r.value : fallback;
@@ -1410,6 +1431,7 @@ async function loadDashboard() {
   const shadow = val(shadowR, { items: [], summary: {} });
   const integrations = val(integrationsR, { feishu: { configured: false }, dingtalk: { configured: false }, auto_send_reports: false });
   const oceanengine = val(oceanengineR, { app_id: "1871942906223351", connected: false, secret_saved: false, accounts: [] });
+  const oceanengineSync = val(oceanengineSyncR, { synced_at: null });
 
   // Hide loading skeleton
   hideLoadingSkeleton();
@@ -1433,6 +1455,7 @@ async function loadDashboard() {
   renderSettings(settings);
   renderIntegrations(integrations);
   renderOceanEngineOAuth(oceanengine);
+  renderOceanEngineSync(oceanengineSync);
   renderQianchuanAccounts(accounts);
   renderFullScan(extensionResponse?.dashboard?.fullScan || {});
   renderTrends(trends);
@@ -1631,6 +1654,29 @@ document.getElementById("authorize-oceanengine").addEventListener("click", async
   } finally {
     button.disabled = false;
     button.textContent = "授权千川账号";
+  }
+});
+document.getElementById("sync-oceanengine-data").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const result = document.getElementById("oceanengine-sync-result");
+  button.disabled = true;
+  button.textContent = "正在读取官方数据…";
+  result.textContent = "正在解析店铺与广告账户关系，并读取计划、报表和视频素材。";
+  result.className = "";
+  try {
+    const response = await bridgeFetch("/oauth/oceanengine/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+      body: JSON.stringify({ days: 7 }),
+    });
+    renderOceanEngineSync(response);
+    await loadDashboard();
+  } catch (error) {
+    result.textContent = `官方数据同步失败：${error.message}。已有浏览器快照不会丢失。`;
+    result.className = "error";
+  } finally {
+    button.disabled = false;
+    button.textContent = "同步官方数据";
   }
 });
 document.getElementById("focus-toggle").addEventListener("click", async () => {

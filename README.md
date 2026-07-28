@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.25.0-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.26.0-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.25.0 Beta`。新增巨量千川官方 OAuth 授权入口，支持将已审核应用与多个千川账号安全关联；App Secret 和 Token 使用 Windows 当前用户 DPAPI 加密并仅保存在本机。网页采集继续作为无 API 与异常回退通道，当前仍不写入千川。
+> 当前版本：`v2.26.0 Beta`。巨量千川官方 API 已接通：可按“授权店铺 → 关联广告账户”自动识别多账号，并一键只读同步普通计划、全域推广、7 日经营报表、素材投放报表和视频素材库。App Secret 与 Token 使用 Windows 当前用户 DPAPI 加密并仅保存在本机；网页采集继续作为异常回退通道，当前仍不写入千川。
 
 ## 为什么做这个项目
 
@@ -182,7 +182,7 @@ Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-mode
 4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.25.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.26.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
 
 完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
@@ -336,6 +336,7 @@ douyin-agent/
 - [x] 动态发现千川新版路由、会话账号 ID 哈希识别、素材页优先与登录页防误识别（v2.23.0）
 - [x] 工作台侧边常驻同步千川、最近访问标签页记忆与独立工作台误判修复（v2.24.0）
 - [x] 千川官方 OAuth 授权、本机 DPAPI 密钥存储、state 校验与多账号授权状态（v2.25.0）
+- [x] 千川官方 API 多账号映射、Token 自动续期、计划/全域推广/报表/视频素材一键只读同步（v2.26.0）
 - [ ] 通过页面回读、操作前二次确认和操作后验收构建受控单步执行器
 - [ ] 在 OAuth 基础上补齐官方 API 数据适配层，与无 API 浏览器通道共用账号目录、数据模型和执行护栏
 

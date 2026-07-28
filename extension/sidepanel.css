@@ -57,10 +57,14 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .oauth-fields input:focus { border-color: #528bff; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
 .oauth-actions { display: flex; gap: 8px; }
 .oauth-actions button { min-height: 34px; padding: 0 13px; border: 1px solid #b2ccff; border-radius: 8px; background: #eef4ff; color: #1849a9; cursor: pointer; font-size: 10px; font-weight: 700; }
-.oauth-actions button:first-child { border-color: #2563eb; background: #2563eb; color: white; }
+.oauth-actions button:first-child,
+.oauth-actions button:nth-child(2) { border-color: #2563eb; background: #2563eb; color: white; }
 .oauth-actions button:disabled { opacity: .6; cursor: wait; }
 .oauth-accounts { display: flex; flex-wrap: wrap; gap: 6px; }
 .oauth-accounts span { padding: 5px 8px; border: 1px solid #abefc6; border-radius: 999px; background: #ecfdf3; color: #067647; font-size: 9px; }
+#oceanengine-sync-result.ok { color: #067647; }
+#oceanengine-sync-result.warn { color: #b54708; }
+#oceanengine-sync-result.error { color: #b42318; }
 #oceanengine-oauth-result { color: var(--muted); font-size: 9px; line-height: 1.5; }
 #oceanengine-oauth-result.ok { color: var(--green); }
 #oceanengine-oauth-result.error { color: var(--red); }
@@ -589,7 +593,7 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 @media (max-width: 520px) {
   .oauth-fields { grid-template-columns: 1fr; }
-  .oauth-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .oauth-actions { display: grid; grid-template-columns: 1fr; }
   .qianchuan-sync-dock { top: auto; right: 12px; bottom: 12px; transform: none; }
   .qianchuan-sync-dock button { width: auto; min-width: 104px; min-height: 48px; border-radius: 12px; }
   .qianchuan-sync-dock-icon { width: 28px; height: 28px; }
