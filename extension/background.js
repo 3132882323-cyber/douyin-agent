@@ -1,4 +1,6 @@
-/** 店策 Agent - MV3 service worker (v2.20.0) */
+/** 店策 Agent - MV3 service worker (v2.21.0) */
+
+importScripts("scan-policy.js");
 
 const BRIDGE_URL = "http://127.0.0.1:8765";
 const QIANCHUAN_ENTRY_URL = "https://qianchuan.jinritemai.com/";
@@ -131,12 +133,7 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function sameAccountLabel(left, right) {
-  const normalize = (value) => String(value || "").replace(/\s+/g, "").trim().toLocaleLowerCase();
-  const a = normalize(left);
-  const b = normalize(right);
-  return Boolean(a && b && a === b);
-}
+const { matchAccount, errorCode: scanErrorCode, isNonRetryable: isNonRetryableScanError } = globalThis.DianAgentScanPolicy;
 
 function withTimeout(promise, timeoutMs, message) {
   let timer;
@@ -184,10 +181,12 @@ function waitForTabReady(tabId, timeoutMs = 30000) {
   });
 }
 
-async function navigateScanTab(tabId, url) {
+async function navigateScanTab(tabId, url, forceReload = false) {
   const current = await chrome.tabs.get(tabId);
+  const sameUrl = (current.url || "").split("#")[0] === url.split("#")[0];
+  if (sameUrl && !forceReload && current.status === "complete") return;
   const ready = waitForTabReady(tabId, 25000);
-  if ((current.url || "").split("#")[0] === url.split("#")[0]) await chrome.tabs.reload(tabId);
+  if (sameUrl) await chrome.tabs.reload(tabId);
   else await chrome.tabs.update(tabId, { url, active: false });
   try {
     await ready;
@@ -238,13 +237,13 @@ async function activatePageTab(tabId, texts) {
   return result;
 }
 
-async function scanOnePage(tabId, page, reason, accountKey = "", accountLabel = "") {
+async function scanOnePage(tabId, page, reason, expectedAccount = {}) {
   let lastError;
   const candidateUrls = [page.url, ...(page.fallbackUrls || [])];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const targetUrl = candidateUrls[Math.min(attempt - 1, candidateUrls.length - 1)];
-      await navigateScanTab(tabId, targetUrl);
+      await navigateScanTab(tabId, targetUrl, attempt > 1);
       await inspectPlatformPage(tabId, page.source);
       await sleep(page.waitMs);
       if (page.tabText || page.tabTexts) {
@@ -262,10 +261,12 @@ async function scanOnePage(tabId, page, reason, accountKey = "", accountLabel = 
       );
       if (!response?.ok) throw new Error(response?.error || "采集失败");
       const capturedAccount = response.bridge?.account || response.account || null;
-      if (page.source === "qianchuan" && accountKey) {
-        if (!capturedAccount?.key) throw new Error("未识别当前千川账号，请先在千川后台确认账号后重试");
-        if (capturedAccount.key !== accountKey && !sameAccountLabel(capturedAccount.label, accountLabel)) {
-          throw new Error(`当前千川账号为“${capturedAccount.label || "其他账号"}”，与所选巡查账号不一致`);
+      if (page.source === "qianchuan" && expectedAccount?.key) {
+        const accountMatch = matchAccount(capturedAccount, expectedAccount);
+        if (!accountMatch.ok) {
+          const accountError = new Error(accountMatch.message);
+          accountError.code = accountMatch.code;
+          throw accountError;
         }
       }
       if (response.page_type === "unknown") throw new Error("页面类型未识别");
@@ -281,9 +282,12 @@ async function scanOnePage(tabId, page, reason, accountKey = "", accountLabel = 
         captured_at: Date.now(),
         account_key: capturedAccount?.key || "",
         account_label: capturedAccount?.label || "",
+        account_confidence: capturedAccount?.confidence || "",
+        account_identity_source: capturedAccount?.identity_source || "",
       };
     } catch (error) {
       lastError = error;
+      if (isNonRetryableScanError(error)) break;
       if (attempt < 2) await sleep(1200);
     }
   }
@@ -294,6 +298,7 @@ async function scanOnePage(tabId, page, reason, accountKey = "", accountLabel = 
     ok: false,
     captured_at: Date.now(),
     error: lastError?.message || String(lastError),
+    error_code: scanErrorCode(lastError),
   };
 }
 
@@ -312,11 +317,11 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
   const targeted = Array.isArray(pageIds) && pageIds.length > 0;
   const previousScan = (await chrome.storage.local.get("fullScan")).fullScan || {};
   const scanPages = targeted ? FULL_SCAN_PAGES.filter((page) => pageIds.includes(page.id)) : FULL_SCAN_PAGES;
-  let lockedAccountKey = String(accountKey || "");
-  let lockedAccountLabel = "";
+  const accountMode = accountKey ? "fixed" : "auto";
+  let lockedAccount = { key: String(accountKey || ""), label: "", identity_source: accountKey ? "selected" : "" };
   let scanTab;
   let scanSource = "";
-  await setFullScanState({ status: "running", reason, account_key: lockedAccountKey, account_label: "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
+  await setFullScanState({ status: "running", reason, account_mode: accountMode, account_key: lockedAccount.key, account_label: "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
   try {
     for (let index = 0; index < scanPages.length; index += 1) {
       if (fullScanCancelled) break;
@@ -327,20 +332,31 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
         scanSource = page.source;
       }
       await setFullScanState({ current: page.label, index: index + 1 });
-      let result = await scanOnePage(scanTab.id, page, reason, lockedAccountKey, lockedAccountLabel);
+      let result = await scanOnePage(scanTab.id, page, reason, lockedAccount);
       if (!result.ok && isMissingTabError(result.error)) {
         scanTab = await createScanTab();
-        result = await scanOnePage(scanTab.id, page, `${reason}-tab-recovered`, lockedAccountKey, lockedAccountLabel);
+        result = await scanOnePage(scanTab.id, page, `${reason}-tab-recovered`, lockedAccount);
       }
       if (page.source === "qianchuan" && result.ok && result.account_key) {
-        if (!lockedAccountKey) {
-          lockedAccountKey = result.account_key;
-          lockedAccountLabel = result.account_label || "";
-          await selectAnalysisAccount(lockedAccountKey);
-          await setFullScanState({ account_key: lockedAccountKey, account_label: lockedAccountLabel });
-        } else if (!lockedAccountLabel && result.account_key === lockedAccountKey) {
-          lockedAccountLabel = result.account_label || "";
-          await setFullScanState({ account_label: lockedAccountLabel });
+        const detectedAccount = {
+          key: result.account_key,
+          label: result.account_label || "",
+          confidence: result.account_confidence || "",
+          identity_source: result.account_identity_source || "",
+        };
+        const shouldLock = !lockedAccount.key;
+        const shouldUpgrade = accountMode === "auto"
+          && lockedAccount.identity_source !== "platform_id"
+          && detectedAccount.identity_source === "platform_id"
+          && matchAccount(detectedAccount, lockedAccount).ok;
+        if (shouldLock || shouldUpgrade) {
+          lockedAccount = detectedAccount;
+          await selectAnalysisAccount(lockedAccount.key);
+          await setFullScanState({ account_key: lockedAccount.key, account_label: lockedAccount.label });
+        } else if (!lockedAccount.label && result.account_key === lockedAccount.key) {
+          lockedAccount.label = result.account_label || "";
+          lockedAccount.identity_source = result.account_identity_source || lockedAccount.identity_source;
+          await setFullScanState({ account_label: lockedAccount.label });
         }
       }
       results.push(result);
@@ -590,7 +606,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const failedIds = (stored.fullScan?.results || []).filter((item) => !item.ok).map((item) => item.id);
       if (!failedIds.length) sendResponse({ ok: false, error: "没有需要重试的失败页面" });
       else {
-        startFullScan("retry-failed", failedIds, String(stored.fullScan?.account_key || "")).catch(() => undefined);
+        const retryAccountKey = stored.fullScan?.account_mode === "fixed"
+          ? String(stored.fullScan?.account_key || "")
+          : "";
+        startFullScan("retry-failed", failedIds, retryAccountKey).catch(() => undefined);
         sendResponse({ ok: true, started: true, total: failedIds.length });
       }
       return;

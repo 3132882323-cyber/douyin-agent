@@ -380,7 +380,7 @@ class SnapshotStoreTests(unittest.TestCase):
         account_b = http_receiver.build_qianchuan_creative_analysis()
         self.assertEqual([item["name"] for item in account_b["videos"]], ["素材 B"])
 
-    def test_qianchuan_account_catalog_filters_false_accounts_and_deduplicates_labels(self) -> None:
+    def test_qianchuan_account_catalog_filters_false_accounts_without_merging_same_name_accounts(self) -> None:
         http_receiver._atomic_json_write(
             http_receiver._account_catalog_path(),
             {
@@ -394,14 +394,22 @@ class SnapshotStoreTests(unittest.TestCase):
             },
         )
         accounts = http_receiver.list_qianchuan_accounts()
-        self.assertEqual([(item["key"], item["label"]) for item in accounts], [("acct_real0001", "真实旗舰店")])
+        self.assertEqual(
+            [(item["key"], item["label"]) for item in accounts],
+            [("acct_real0001", "真实旗舰店"), ("acct_duplicate", "真实旗舰店")],
+        )
 
     def test_same_qianchuan_account_label_reuses_canonical_key_across_pages(self) -> None:
         first = http_receiver.save_data(
             "qianchuan",
             {
                 "page_type": "overview",
-                "account": {"key": "acct_route001", "label": "跨页面旗舰店", "confidence": "medium"},
+                "account": {
+                    "key": "acct_route001",
+                    "label": "跨页面旗舰店",
+                    "confidence": "medium",
+                    "identity_source": "account_label",
+                },
                 "quality": {"score": 80},
             },
         )
@@ -409,14 +417,43 @@ class SnapshotStoreTests(unittest.TestCase):
             "qianchuan",
             {
                 "page_type": "campaigns",
-                "account": {"key": "acct_route002", "label": "跨页面旗舰店", "confidence": "high"},
+                "account": {
+                    "key": "acct_route002",
+                    "label": "跨页面旗舰店",
+                    "confidence": "high",
+                    "identity_source": "platform_id",
+                },
                 "quality": {"score": 90},
             },
         )
         self.assertEqual(first["data"]["account"]["key"], "acct_route001")
         self.assertEqual(second["data"]["account"]["key"], "acct_route001")
         self.assertTrue((http_receiver.DATA_DIR / "qianchuan_accounts" / "acct_route001" / "campaigns.json").exists())
-        self.assertEqual(len(http_receiver.list_qianchuan_accounts()), 1)
+        accounts = http_receiver.list_qianchuan_accounts()
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(accounts[0]["identity_source"], "platform_id")
+        self.assertIn("acct_route002", accounts[0]["aliases"])
+
+    def test_same_name_platform_accounts_remain_separate(self) -> None:
+        for key in ("acct_stable001", "acct_stable002"):
+            saved = http_receiver.save_data(
+                "qianchuan",
+                {
+                    "page_type": "campaigns",
+                    "account": {
+                        "key": key,
+                        "label": "同名旗舰店",
+                        "confidence": "high",
+                        "identity_source": "platform_id",
+                    },
+                    "quality": {"score": 90},
+                },
+            )
+            self.assertEqual(saved["data"]["account"]["key"], key)
+        self.assertEqual(
+            {item["key"] for item in http_receiver.list_qianchuan_accounts()},
+            {"acct_stable001", "acct_stable002"},
+        )
 
     def test_settings_and_daily_report_are_local_and_configurable(self) -> None:
         settings = http_receiver.save_agent_settings(
@@ -517,8 +554,9 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(item["evidence"]["roi_target"], 3.0)
 
     def test_auto_scan_status_is_saved_for_reports(self) -> None:
-        saved = http_receiver.save_scan_status({"status": "partial", "index": 16, "total": 16, "success": 14, "failed": 2, "results": [{"id": "orders", "ok": True}]})
+        saved = http_receiver.save_scan_status({"status": "partial", "account_mode": "auto", "index": 16, "total": 16, "success": 14, "failed": 2, "results": [{"id": "orders", "ok": True}]})
         self.assertEqual(saved["success"], 14)
+        self.assertEqual(saved["account_mode"], "auto")
         self.assertEqual(http_receiver.load_scan_status()["failed"], 2)
         report = http_receiver.generate_daily_report("2026-07-22")
         self.assertIn("自动巡检：partial；成功 14 页，失败 2 页", Path(report["path"]).read_text(encoding="utf-8"))
