@@ -14,7 +14,7 @@ from typing import Any
 
 ACTION_SCHEMA_VERSION = 1
 ACTION_DRAFT_TTL_SECONDS = 10 * 60
-EXECUTABLE_OPERATIONS = {"adjust_budget", "pause_plan", "adjust_bid", "set_schedule"}
+EXECUTABLE_OPERATIONS = {"adjust_budget", "restore_budget", "pause_plan", "adjust_bid", "set_schedule"}
 ACTION_STATES = {
     "draft",
     "confirmed",
@@ -68,6 +68,7 @@ def _identity_payload(action: dict[str, Any]) -> dict[str, Any]:
         "captured_at_ms": evidence.get("captured_at_ms"),
         "quality_score": evidence.get("quality_score"),
         "confidence": evidence.get("confidence"),
+        "rollback_of_action_id": evidence.get("rollback_of_action_id"),
         "policy": action.get("policy"),
         "blocked_reasons": action.get("blocked_reasons"),
         "can_confirm": action.get("can_confirm"),
@@ -139,22 +140,28 @@ def build_action_draft(
         blocked.append(_block("CONFIDENCE_NOT_HIGH", "当前判断置信度不足，需补齐消耗、ROI 和成交数据。"))
 
     change_percent: float | None = None
-    if operation_type in {"adjust_budget", "adjust_bid"}:
+    if operation_type in {"adjust_budget", "adjust_bid", "restore_budget"}:
         if not isinstance(current_value, (int, float)) or float(current_value) <= 0:
             blocked.append(_block("CURRENT_VALUE_MISSING", "缺少可回读的当前数值，禁止生成调价动作。"))
         if not isinstance(target_value, (int, float)) or float(target_value) <= 0:
             blocked.append(_block("TARGET_VALUE_INVALID", "目标数值无效，禁止生成调价动作。"))
         if isinstance(current_value, (int, float)) and float(current_value) > 0 and isinstance(target_value, (int, float)):
             change_percent = round((float(target_value) - float(current_value)) / float(current_value) * 100, 2)
-            if change_percent > 15:
+            if operation_type == "restore_budget":
+                rollback_id = str((evidence or {}).get("rollback_of_action_id") or "")
+                if not rollback_id:
+                    blocked.append(_block("ROLLBACK_SOURCE_MISSING", "恢复预算必须绑定已验收的原执行记录。"))
+                if change_percent <= 0 or change_percent > 50:
+                    blocked.append(_block("ROLLBACK_RANGE_INVALID", "恢复预算只能回到原值，且单次恢复幅度不能超过 50%。"))
+            elif change_percent > 15:
                 blocked.append(_block("INCREASE_LIMIT_EXCEEDED", "单次增加幅度不能超过 15%。"))
-            if change_percent < -30:
+            if operation_type != "restore_budget" and change_percent < -30:
                 blocked.append(_block("DECREASE_LIMIT_EXCEEDED", "单次降低幅度不能超过 30%。"))
     elif operation_type == "pause_plan":
         if str(current_value or "") not in {"投放中", "启用", "生效中", "运行中"}:
             blocked.append(_block("CURRENT_STATUS_UNVERIFIED", "未确认计划当前处于投放状态，禁止生成暂停动作。"))
 
-    risk_level = "high" if operation_type == "pause_plan" or (change_percent or 0) > 0 else "medium"
+    risk_level = "high" if operation_type in {"pause_plan", "restore_budget"} or (change_percent or 0) > 0 else "medium"
     action: dict[str, Any] = {
         "schema_version": ACTION_SCHEMA_VERSION,
         "state": "draft",

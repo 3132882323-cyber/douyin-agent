@@ -234,6 +234,7 @@ class SnapshotStoreTests(unittest.TestCase):
             captured_at_ms=captured_at,
             quality_score=90,
             confidence="high",
+            evidence={"spend": 300.0, "roi": 0.60, "orders": 2.0},
         )
         confirmed = http_receiver.confirm_action_draft(draft)
         awaiting = http_receiver.start_execution_preflight(confirmed["action_id"])
@@ -283,11 +284,27 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual("succeeded", executed["state"])
         snapshot["captured_at"] = executed["execution_reported_at_ms"] + 1000
         snapshot["tables"][0]["rows"][0][2] = "400"
+        snapshot["tables"][0]["rows"][0][4] = "0.80"
+        snapshot["tables"][0]["rows"][0][5] = "3"
         http_receiver.save_data("qianchuan", snapshot)
         verification = http_receiver.verify_execution_result(confirmed["action_id"])
         self.assertTrue(verification["verified"])
         self.assertEqual("verified", verification["state"])
         self.assertEqual(1, http_receiver.get_action_audit()["summary"]["executed"])
+        effectiveness = http_receiver.build_execution_effectiveness_report(
+            now_ms=executed["execution_reported_at_ms"] + 2 * 60 * 60 * 1000 + 1,
+        )
+        self.assertEqual("effective", effectiveness["items"][0]["status"])
+        self.assertEqual(0.8, effectiveness["items"][0]["after"]["roi"])
+        rollback = http_receiver.create_budget_rollback_draft(confirmed["action_id"])
+        self.assertEqual("restore_budget", rollback["operation_type"])
+        self.assertEqual(400.0, rollback["change"]["current_value"])
+        self.assertEqual(500.0, rollback["change"]["target_value"])
+        self.assertTrue(rollback["can_confirm"])
+        rollback_confirmed = http_receiver.confirm_action_draft(rollback)
+        rollback_preflight = http_receiver.start_execution_preflight(rollback_confirmed["action_id"])
+        self.assertIn(rollback_preflight["state"], {"awaiting_reread", "ready_for_final_confirmation"})
+        self.assertTrue(rollback_preflight["session"]["quota"]["recovery_exemption"])
 
     def test_supervised_preflight_rejects_budget_increase(self) -> None:
         now_ms = int(time.time() * 1000)
@@ -309,8 +326,65 @@ class SnapshotStoreTests(unittest.TestCase):
             confidence="high",
         )
         confirmed = http_receiver.confirm_action_draft(draft)
-        with self.assertRaisesRegex(ValueError, "不开放自动放量"):
+        with self.assertRaisesRegex(ValueError, "不能增加预算"):
             http_receiver.start_execution_preflight(confirmed["action_id"])
+
+    def test_execution_quota_blocks_daily_count_budget_impact_and_cooldown(self) -> None:
+        now_ms = int(time.time() * 1000)
+        http_receiver.save_agent_settings({
+            "max_daily_execution_count": 1,
+            "max_daily_budget_reduction": 150,
+            "execution_cooldown_minutes": 30,
+        })
+        completed = http_receiver.build_action_draft(
+            operation_type="adjust_budget",
+            operation_label="降低预算",
+            target_kind="qianchuan_plan",
+            target_id="plan_done",
+            target_name="已执行计划",
+            account_key="acct_quota",
+            account_label="额度测试账号",
+            field="预算",
+            current_value=500.0,
+            target_value=400.0,
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=now_ms,
+            quality_score=90,
+            confidence="high",
+            now_ms=now_ms,
+        )
+        completed.update({"state": "verified", "execution_reported_at_ms": now_ms - 60_000})
+        http_receiver._atomic_json_write(
+            http_receiver._action_audit_path(),
+            {"schema_version": 1, "actions": [completed], "execution_enabled": True},
+        )
+        proposed = http_receiver.build_action_draft(
+            operation_type="adjust_budget",
+            operation_label="再次降低预算",
+            target_kind="qianchuan_plan",
+            target_id="plan_next",
+            target_name="待执行计划",
+            account_key="acct_quota",
+            account_label="额度测试账号",
+            field="预算",
+            current_value=500.0,
+            target_value=400.0,
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=now_ms,
+            quality_score=90,
+            confidence="high",
+            now_ms=now_ms,
+        )
+        quota = http_receiver.assess_execution_quota(proposed, now_ms=now_ms)
+        codes = {item["code"] for item in quota["blocked_reasons"]}
+        self.assertFalse(quota["allowed"])
+        self.assertEqual(1, quota["today_execution_count"])
+        self.assertEqual(100.0, quota["today_budget_reduction"])
+        self.assertIn("DAILY_EXECUTION_COUNT_LIMIT", codes)
+        self.assertIn("DAILY_BUDGET_REDUCTION_LIMIT", codes)
+        self.assertIn("EXECUTION_COOLDOWN", codes)
 
     def test_shadow_execution_requires_manual_claim_and_matches_later_readback(self) -> None:
         captured_at = int(time.time() * 1000)

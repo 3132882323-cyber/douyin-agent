@@ -948,6 +948,9 @@ function renderSettings(settings) {
   document.getElementById("roi-target").value = settings.roi_target;
   document.getElementById("spend-threshold").value = settings.min_spend_for_action;
   document.getElementById("stock-threshold").value = settings.low_inventory_threshold;
+  document.getElementById("daily-execution-limit").value = settings.max_daily_execution_count ?? 3;
+  document.getElementById("daily-budget-limit").value = settings.max_daily_budget_reduction ?? 300;
+  document.getElementById("execution-cooldown").value = settings.execution_cooldown_minutes ?? 30;
   document.getElementById("report-time").value = settings.daily_report_time;
   document.getElementById("report-enabled").checked = settings.daily_report_enabled;
   const template = REPORT_TEMPLATE_LABELS[settings.report_template] ? settings.report_template : "default";
@@ -1337,7 +1340,65 @@ function renderExecutionPreflight(report = {}) {
   reread.disabled = state === "expired";
   authorize.hidden = state !== "ready_for_final_confirmation";
   authorize.dataset.targetValue = action.target_value ?? "";
+  authorize.dataset.operationType = action.operation_type || "adjust_budget";
   stop.disabled = !currentPreflightSession || ["stopped", "expired"].includes(state);
+}
+
+function renderExecutionEffectiveness(report = {}) {
+  const items = report.items || [];
+  const summary = report.summary || {};
+  document.getElementById("execution-effectiveness-status").textContent = `${items.length} 项`;
+  const container = document.getElementById("execution-effectiveness");
+  if (!items.length) return empty(container, "完成一次受监督执行后，这里会生成 2 小时复查任务。");
+  container.classList.remove("empty-state");
+  container.replaceChildren(...items.map((item) => {
+    const card = document.createElement("article");
+    card.className = `shadow-card${item.status === "effective" ? " matched" : item.status === "review" ? " attention" : ""}`;
+    const head = document.createElement("div"); head.className = "card-title";
+    const title = document.createElement("strong"); title.textContent = item.plan_name || "千川计划";
+    const tag = document.createElement("span"); tag.className = "shadow-status"; tag.textContent = item.status_label || "待复查";
+    head.append(title, tag);
+    const change = document.createElement("p"); change.className = "shadow-change";
+    change.textContent = `预算 ${item.change?.from ?? "--"} → ${item.change?.to ?? "--"}`;
+    const metrics = document.createElement("small");
+    metrics.textContent = item.after
+      ? `调整前 ROI ${item.before?.roi ?? "--"} / 订单 ${item.before?.orders ?? "--"}；最新 ROI ${item.after?.roi ?? "--"} / 订单 ${item.after?.orders ?? "--"}`
+      : "等待新的计划数据";
+    const verdict = document.createElement("p"); verdict.className = "shadow-detail"; verdict.textContent = item.verdict || "";
+    card.append(head, change, metrics, verdict);
+    if (item.rollback_available) {
+      const rollback = document.createElement("button");
+      rollback.type = "button";
+      rollback.textContent = "生成恢复原预算方案";
+      rollback.addEventListener("click", async () => {
+        if (!window.confirm(`确认基于已验收记录，为“${item.plan_name || "该计划"}”生成恢复原预算方案？生成后仍需最终口令授权。`)) return;
+        rollback.disabled = true;
+        try {
+          const created = await bridgeFetch("/actions/rollback/create", {
+            method: "POST",
+            body: JSON.stringify({ action_id: item.action_id }),
+          });
+          const confirmed = await bridgeFetch("/actions/confirm", {
+            method: "POST",
+            body: JSON.stringify({ action: created.action }),
+          });
+          const started = await bridgeFetch("/actions/preflight/start", {
+            method: "POST",
+            body: JSON.stringify({ action_id: confirmed.action.action_id }),
+          });
+          renderExecutionPreflight(started.preflight || {});
+          document.getElementById("execution-preflight").scrollIntoView({ behavior: "smooth", block: "center" });
+        } catch (error) {
+          verdict.textContent = error.message || "回滚方案生成失败";
+          rollback.disabled = false;
+        }
+      });
+      card.append(rollback);
+    }
+    return card;
+  }));
+  document.getElementById("execution-effectiveness-status").textContent =
+    summary.review ? `${summary.review} 项需复核` : summary.needs_reread ? `${summary.needs_reread} 项待读取` : `${items.length} 项`;
 }
 
 function renderShadowExecution(report = {}) {
@@ -1440,7 +1501,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR, oceanengineR, oceanengineSyncR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, preflightR, shadowR, executionEffectivenessR, integrationsR, oceanengineR, oceanengineSyncR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1455,6 +1516,7 @@ async function loadDashboard() {
     bridgeFetch("/actions/readiness"),
     bridgeFetch("/actions/preflight"),
     bridgeFetch("/actions/shadow"),
+    bridgeFetch("/actions/effectiveness"),
     bridgeFetch("/integrations"),
     bridgeFetch("/oauth/oceanengine/status"),
     bridgeFetch("/oauth/oceanengine/sync-status"),
@@ -1474,6 +1536,7 @@ async function loadDashboard() {
   const readiness = val(readinessR, { items: [], summary: {}, criteria: [] });
   const preflight = val(preflightR, { state: "idle", session: null, checks: [] });
   const shadow = val(shadowR, { items: [], summary: {} });
+  const executionEffectiveness = val(executionEffectivenessR, { items: [], summary: {} });
   const integrations = val(integrationsR, { feishu: { configured: false }, dingtalk: { configured: false }, auto_send_reports: false });
   const oceanengine = val(oceanengineR, { app_id: "1871942906223351", connected: false, secret_saved: false, accounts: [] });
   const oceanengineSync = val(oceanengineSyncR, { synced_at: null });
@@ -1510,6 +1573,7 @@ async function loadDashboard() {
   renderAutomationReadiness(readiness);
   renderExecutionPreflight(preflight);
   renderShadowExecution(shadow);
+  renderExecutionEffectiveness(executionEffectiveness);
 
   // Restore focus if the focused element still exists
   if (focusId) {
@@ -1786,7 +1850,8 @@ document.getElementById("preflight-stop").addEventListener("click", async (event
 document.getElementById("preflight-authorize").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   if (!currentPreflightSession?.session_id) return;
-  const confirmationText = `确认降低预算至${button.dataset.targetValue || ""}`;
+  const verb = button.dataset.operationType === "restore_budget" ? "恢复预算" : "降低预算";
+  const confirmationText = `确认${verb}至${button.dataset.targetValue || ""}`;
   const entered = window.prompt(`这是最后一次人工授权，不会立即修改千川。\n请输入：${confirmationText}`, "");
   if (entered === null) return;
   button.disabled = true;
@@ -1905,6 +1970,9 @@ document.getElementById("save-settings").addEventListener("click", async () => {
       roi_target: Number(document.getElementById("roi-target").value),
       min_spend_for_action: Number(document.getElementById("spend-threshold").value),
       low_inventory_threshold: Number(document.getElementById("stock-threshold").value),
+      max_daily_execution_count: Number(document.getElementById("daily-execution-limit").value),
+      max_daily_budget_reduction: Number(document.getElementById("daily-budget-limit").value),
+      execution_cooldown_minutes: Number(document.getElementById("execution-cooldown").value),
     };
     await bridgeFetch("/settings", {
       method: "POST",
