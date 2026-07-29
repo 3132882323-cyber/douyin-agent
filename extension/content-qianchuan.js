@@ -152,8 +152,8 @@
   }
 
   function probeBudgetExecution(request) {
-    if (request?.operation_type !== "adjust_budget" || request?.mode !== "supervised_submit") {
-      throw new Error("当前页面执行器只支持受监督降低预算。");
+    if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
+      throw new Error("当前页面执行器只支持受监督降低预算或恢复原预算。");
     }
     const account = detectAccountContext();
     if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
@@ -162,8 +162,11 @@
     const expected = Number(request.expected_current_value);
     const target = Number(request.target_value);
     if (!planId || !planName || !Number.isFinite(expected)) throw new Error("授权缺少计划身份或当前预算。");
-    if (!Number.isFinite(target) || target <= 0 || target >= expected || (expected - target) / expected > 0.30) {
-      throw new Error("目标预算不符合首批止损范围。");
+    const inRange = request.operation_type === "restore_budget"
+      ? target > expected && (target - expected) / expected <= 0.50
+      : target > 0 && target < expected && (expected - target) / expected <= 0.30;
+    if (!Number.isFinite(target) || !inRange) {
+      throw new Error("目标预算不符合首批止损或回滚范围。");
     }
     const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']"))
       .filter(visible);
@@ -193,8 +196,8 @@
 
   async function supervisedBudgetSubmit(request) {
     probeBudgetExecution(request);
-    if (request?.operation_type !== "adjust_budget" || request?.mode !== "supervised_submit") {
-      throw new Error("当前页面执行器只支持受监督降低预算。");
+    if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
+      throw new Error("当前页面执行器只支持受监督降低预算或恢复原预算。");
     }
     const account = detectAccountContext();
     if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
@@ -218,8 +221,11 @@
     });
     if (!budgetInput) throw new Error("未找到与授权当前预算一致的输入框，页面未做任何修改。");
     const target = Number(request.target_value);
-    if (!Number.isFinite(target) || target <= 0 || target >= expected || (expected - target) / expected > 0.30) {
-      throw new Error("目标预算不符合首批止损范围。");
+    const inRange = request.operation_type === "restore_budget"
+      ? target > expected && (target - expected) / expected <= 0.50
+      : target > 0 && target < expected && (expected - target) / expected <= 0.30;
+    if (!Number.isFinite(target) || !inRange) {
+      throw new Error("目标预算不符合首批止损或回滚范围。");
     }
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     if (!setter) throw new Error("浏览器不支持安全填写预算。");

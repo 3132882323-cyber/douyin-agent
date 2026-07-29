@@ -18,4 +18,6 @@ The supervised executor is limited to a single Qianchuan budget reduction. It re
 
 Budget increases, bulk changes, plan pause/resume, bids, inventory, orders, refunds and account funds remain disabled. A missing or ambiguous selector, account, plan, value, button or success receipt stops the executor rather than guessing or retrying.
 
+The only supported increase is a rollback to the exact pre-execution budget from a verified reduction record. It requires a fresh page value equal to the prior reduced target and follows the same confirmation, single-use authorization, submit receipt and postflight verification flow.
+
 Budget drafts are blocked unless they bind a selected account, a platform plan ID, a fresh high-quality snapshot, a readable current value, and a policy-compliant target value. A missing budget must never fall back to a pause action.

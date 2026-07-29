@@ -295,6 +295,13 @@
             <button id="preflight-stop" type="button" class="danger">紧急停止</button>
           </footer>
         </article>
+        <article class="execution-preflight">
+          <header>
+            <div><strong>执行效果复盘</strong><small>预算调整后观察 2 小时，再判断止损是否有效</small></div>
+            <span id="execution-effectiveness-status">0 项</span>
+          </header>
+          <div id="execution-effectiveness" class="stack empty-state">完成一次受监督执行后，这里会生成复查任务。</div>
+        </article>
         <div id="automation-candidates" class="stack empty-state">同步千川计划后，这里会显示哪些动作可授权、哪些被阻止以及下一步怎么补齐。</div>
       </section>
 
@@ -350,6 +357,9 @@
           <label>ROI 目标<input id="roi-target" type="number" min="0.1" max="20" step="0.1"></label>
           <label>判断消耗门槛<input id="spend-threshold" type="number" min="0" step="10"></label>
           <label>低库存阈值<input id="stock-threshold" type="number" min="0" step="1"></label>
+          <label>单账户每日最多执行<input id="daily-execution-limit" type="number" min="1" max="50" step="1"></label>
+          <label>每日预算影响上限<input id="daily-budget-limit" type="number" min="1" step="10"></label>
+          <label>同账户执行冷却（分钟）<input id="execution-cooldown" type="number" min="0" max="1440" step="5"></label>
         </div>
         <div class="settings-actions">
           <button id="save-settings" class="small-primary">保存设置</button>

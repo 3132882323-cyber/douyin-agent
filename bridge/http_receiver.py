@@ -70,6 +70,9 @@ DEFAULT_AGENT_SETTINGS = {
     "custom_report_template": DEFAULT_CUSTOM_REPORT_TEMPLATE,
     "history_retention_days": 30,
     "qianchuan_account_key": "",
+    "max_daily_execution_count": 3,
+    "max_daily_budget_reduction": 300.0,
+    "execution_cooldown_minutes": 30,
 }
 
 # Thread-safe state mutation lock (prevents concurrent read-modify-write races)
@@ -773,6 +776,12 @@ def save_agent_settings(values: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("custom_report_template is too long")
     next_settings["custom_report_template"] = custom_template or DEFAULT_CUSTOM_REPORT_TEMPLATE
     next_settings["history_retention_days"] = min(365, max(1, int(next_settings["history_retention_days"])))
+    next_settings["max_daily_execution_count"] = min(50, max(1, int(next_settings["max_daily_execution_count"])))
+    next_settings["max_daily_budget_reduction"] = min(
+        1_000_000.0,
+        max(1.0, float(next_settings["max_daily_budget_reduction"])),
+    )
+    next_settings["execution_cooldown_minutes"] = min(1440, max(0, int(next_settings["execution_cooldown_minutes"])))
     account_key = str(next_settings.get("qianchuan_account_key") or "").lower()
     if account_key and not SAFE_KEY.fullmatch(account_key):
         raise ValueError("invalid qianchuan_account_key")
@@ -1245,6 +1254,9 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
             if _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id")) != plan_id:
                 continue
             budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
+            spend = _evidence_value(record, ("消耗", "总消耗", "广告消耗"))
+            roi = _evidence_value(record, ("支付roi", "roi", "整体roi"))
+            orders = _evidence_value(record, ("成交订单", "支付订单", "成交订单数", "订单数"))
             captured_at_ms = int(
                 data.get("captured_at")
                 or (float((snapshot or {}).get("timestamp", 0)) * 1000)
@@ -1256,6 +1268,9 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
                 "plan_id": plan_id,
                 "plan_name": _clean_entity_name(next(iter(record.values()), ""), str(target.get("name") or plan_id)),
                 "current_value": budget,
+                "spend": spend,
+                "roi": roi,
+                "orders": orders,
                 "captured_at_ms": captured_at_ms,
                 "quality_score": int((data.get("quality") or {}).get("score", 0) or 0),
             }
@@ -1291,6 +1306,108 @@ def _save_execution_preflight(session: dict[str, Any] | None) -> None:
     )
 
 
+def assess_execution_quota(action: dict[str, Any], *, now_ms: int | None = None) -> dict[str, Any]:
+    """Apply per-account daily limits and a cooldown before any page write."""
+
+    now_ms = int(now_ms or time.time() * 1000)
+    settings = load_agent_settings()
+    target = action.get("target_ref") if isinstance(action.get("target_ref"), dict) else {}
+    change = action.get("change") if isinstance(action.get("change"), dict) else {}
+    account_key = str(target.get("account_key") or "")
+    today = datetime.fromtimestamp(now_ms / 1000).date()
+    completed: list[dict[str, Any]] = []
+    for item in load_action_audit().get("actions", []):
+        item_target = item.get("target_ref") if isinstance(item.get("target_ref"), dict) else {}
+        executed_at = int(item.get("execution_reported_at_ms") or 0)
+        if item.get("state") not in {"succeeded", "verified"} or item_target.get("account_key") != account_key or executed_at <= 0:
+            continue
+        if datetime.fromtimestamp(executed_at / 1000).date() == today:
+            completed.append(item)
+    reductions = []
+    for item in completed:
+        item_change = item.get("change") if isinstance(item.get("change"), dict) else {}
+        current = item_change.get("current_value")
+        target_value = item_change.get("target_value")
+        if isinstance(current, (int, float)) and isinstance(target_value, (int, float)):
+            reductions.append(max(0.0, float(current) - float(target_value)))
+    proposed_reduction = (
+        max(0.0, float(change["current_value"]) - float(change["target_value"]))
+        if isinstance(change.get("current_value"), (int, float)) and isinstance(change.get("target_value"), (int, float))
+        else 0.0
+    )
+    last_execution_ms = max((int(item.get("execution_reported_at_ms") or 0) for item in completed), default=0)
+    cooldown_ms = int(settings["execution_cooldown_minutes"]) * 60 * 1000
+    blockers: list[dict[str, str]] = []
+    recovery_exemption = action.get("operation_type") == "restore_budget"
+    if not recovery_exemption and len(completed) >= int(settings["max_daily_execution_count"]):
+        blockers.append({"code": "DAILY_EXECUTION_COUNT_LIMIT", "message": "该账户今日执行次数已达到上限。"})
+    if not recovery_exemption and sum(reductions) + proposed_reduction > float(settings["max_daily_budget_reduction"]):
+        blockers.append({"code": "DAILY_BUDGET_REDUCTION_LIMIT", "message": "该账户今日累计预算影响金额将超过上限。"})
+    if not recovery_exemption and last_execution_ms and now_ms - last_execution_ms < cooldown_ms:
+        remaining = max(1, int((cooldown_ms - (now_ms - last_execution_ms) + 59_999) // 60_000))
+        blockers.append({"code": "EXECUTION_COOLDOWN", "message": f"距离该账户上次执行不足冷却时间，请等待约 {remaining} 分钟。"})
+    return {
+        "allowed": not blockers,
+        "account_key": account_key,
+        "today_execution_count": len(completed),
+        "max_daily_execution_count": int(settings["max_daily_execution_count"]),
+        "today_budget_reduction": round(sum(reductions), 2),
+        "proposed_budget_reduction": round(proposed_reduction, 2),
+        "max_daily_budget_reduction": float(settings["max_daily_budget_reduction"]),
+        "cooldown_minutes": int(settings["execution_cooldown_minutes"]),
+        "blocked_reasons": blockers,
+        "recovery_exemption": recovery_exemption,
+    }
+
+
+def create_budget_rollback_draft(action_id: str) -> dict[str, Any]:
+    """Build a fresh restore-to-original-budget action from a verified write."""
+
+    action_id = str(action_id or "").lower()
+    original = next(
+        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == action_id),
+        None,
+    )
+    if not original or original.get("state") != "verified" or original.get("operation_type") != "adjust_budget":
+        raise ValueError("只有已完成页面验收的降低预算动作可以生成回滚。")
+    readback = _find_plan_readback(original)
+    target = original.get("target_ref") if isinstance(original.get("target_ref"), dict) else {}
+    change = original.get("change") if isinstance(original.get("change"), dict) else {}
+    current_value = (readback or {}).get("current_value")
+    reduced_value = change.get("target_value")
+    original_value = change.get("current_value")
+    if not readback or int(readback.get("captured_at_ms") or 0) <= int(original.get("execution_reported_at_ms") or 0):
+        raise ValueError("缺少执行后的新页面数据，请先重新读取当前千川计划页。")
+    if not all(isinstance(value, (int, float)) for value in (current_value, reduced_value, original_value)):
+        raise ValueError("预算回读数据不完整，不能生成回滚。")
+    if abs(float(current_value) - float(reduced_value)) > 0.01:
+        raise ValueError("当前预算已被再次修改，不能按旧记录回滚。")
+    return build_action_draft(
+        operation_type="restore_budget",
+        operation_label=f"恢复原预算至 {float(original_value):g}",
+        target_kind=str(target.get("kind") or "qianchuan_plan"),
+        target_id=str(target.get("id") or ""),
+        target_name=str(target.get("name") or ""),
+        account_key=str(target.get("account_key") or ""),
+        account_label=str(target.get("account_label") or ""),
+        field=str(change.get("field") or "预算"),
+        current_value=float(current_value),
+        target_value=float(original_value),
+        source="qianchuan",
+        page_type="campaigns",
+        captured_at_ms=int(readback.get("captured_at_ms") or 0),
+        quality_score=int(readback.get("quality_score") or 0),
+        confidence="high",
+        evidence={
+            "rollback_of_action_id": action_id,
+            "spend": readback.get("spend"),
+            "roi": readback.get("roi"),
+            "orders": readback.get("orders"),
+        },
+        copy_text=f"{target.get('name') or '千川计划'} | 预算 {float(current_value):g} → {float(original_value):g}（恢复原值）",
+    )
+
+
 def start_execution_preflight(action_id: str) -> dict[str, Any]:
     """Start a short-lived, read-only supervised-execution preflight."""
 
@@ -1310,10 +1427,18 @@ def start_execution_preflight(action_id: str) -> dict[str, Any]:
     change = action.get("change") if isinstance(action.get("change"), dict) else {}
     current_value = change.get("current_value")
     target_value = change.get("target_value")
-    if action.get("operation_type") != "adjust_budget":
-        raise ValueError("首批受监督执行只开放降低预算，不支持其他动作。")
-    if not isinstance(current_value, (int, float)) or not isinstance(target_value, (int, float)) or float(target_value) >= float(current_value):
-        raise ValueError("首批受监督执行只开放降低预算，不开放自动放量。")
+    operation_type = str(action.get("operation_type") or "")
+    if operation_type not in {"adjust_budget", "restore_budget"}:
+        raise ValueError("首批受监督执行只开放降低预算和恢复原预算。")
+    if not isinstance(current_value, (int, float)) or not isinstance(target_value, (int, float)):
+        raise ValueError("预算数据不完整，不能执行。")
+    if operation_type == "adjust_budget" and float(target_value) >= float(current_value):
+        raise ValueError("降低预算动作不能增加预算。")
+    if operation_type == "restore_budget" and float(target_value) <= float(current_value):
+        raise ValueError("恢复预算动作必须回到更高的原预算。")
+    quota = assess_execution_quota(action)
+    if not quota["allowed"]:
+        raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
 
     now_ms = int(time.time() * 1000)
     session_seed = f"{action_id}:{now_ms}".encode("utf-8")
@@ -1323,9 +1448,11 @@ def start_execution_preflight(action_id: str) -> dict[str, Any]:
         "state": "awaiting_reread",
         "started_at_ms": now_ms,
         "expires_at_ms": now_ms + 3 * 60 * 1000,
-        "pilot_scope": "reduce_budget_only",
+        "pilot_scope": "reduce_or_restore_budget",
+        "operation_type": operation_type,
         "current_value": current_value,
         "target_value": target_value,
+        "quota": quota,
         "write_enabled": False,
         "execution_enabled": False,
     }
@@ -1368,7 +1495,8 @@ def authorize_execution_preflight(session_id: str, confirmation_text: str) -> di
     if report.get("state") != "ready_for_final_confirmation":
         raise ValueError("执行前检查尚未全部通过，不能生成最终授权。")
     action = report.get("action") if isinstance(report.get("action"), dict) else {}
-    expected_text = f"确认降低预算至{action.get('target_value')}"
+    verb = "恢复预算" if session.get("operation_type") == "restore_budget" else "降低预算"
+    expected_text = f"确认{verb}至{action.get('target_value')}"
     if str(confirmation_text or "").strip() != expected_text:
         raise ValueError(f"确认口令不一致，请完整输入：{expected_text}")
 
@@ -1396,6 +1524,16 @@ def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
     authorization_id = str(authorization_id or "").lower()
     if not re.fullmatch(r"[a-f0-9]{32}", authorization_id):
         raise ValueError("执行授权编号无效。")
+    session_before = load_execution_preflight().get("session")
+    action_before = next(
+        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == (session_before or {}).get("action_id")),
+        None,
+    )
+    if not action_before:
+        raise ValueError("授权对应的动作不存在。")
+    quota = assess_execution_quota(action_before)
+    if not quota["allowed"]:
+        raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
     with _state_lock:
         session = load_execution_preflight().get("session")
         if not session or session.get("authorization_id") != authorization_id:
@@ -1461,10 +1599,14 @@ def preview_execution_authorization(authorization_id: str) -> dict[str, Any]:
     )
     if not action or action.get("state") != "confirmed":
         raise ValueError("授权对应的动作不可执行。")
+    quota = assess_execution_quota(action)
+    if not quota["allowed"]:
+        raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
     return {
         "action_id": session.get("action_id"),
         "authorization_expires_at_ms": session.get("authorization_expires_at_ms"),
         "execution_request": _execution_request_for_action(action),
+        "quota": quota,
     }
 
 
@@ -1525,11 +1667,106 @@ def verify_execution_result(action_id: str) -> dict[str, Any]:
             action["verified_at_ms"] = int(time.time() * 1000)
             action["verification_readback"] = readback
             actions = [action if item.get("action_id") == action_id else item for item in audit["actions"]]
+            rollback_of = str((action.get("evidence_ref") or {}).get("rollback_of_action_id") or "")
+            if rollback_of:
+                next_actions = []
+                for item in actions:
+                    if item.get("action_id") == rollback_of and item.get("state") == "verified":
+                        rolled_back = transition_action(item, "rolled_back")
+                        rolled_back["rolled_back_at_ms"] = action["verified_at_ms"]
+                        rolled_back["rollback_action_id"] = action_id
+                        next_actions.append(rolled_back)
+                    else:
+                        next_actions.append(item)
+                actions = next_actions
             _atomic_json_write(
                 _action_audit_path(),
                 {"schema_version": 1, "updated_at": _now_label(), "execution_enabled": True, "actions": actions},
             )
     return {"action_id": action_id, "verified": matched, "state": action.get("state"), "readback": readback}
+
+
+def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[str, Any]:
+    """Evaluate verified budget actions after a two-hour observation window."""
+
+    now_ms = int(now_ms or time.time() * 1000)
+    items: list[dict[str, Any]] = []
+    for action in load_action_audit().get("actions", []):
+        if action.get("state") not in {"succeeded", "verified"}:
+            continue
+        executed_at_ms = int(action.get("execution_reported_at_ms") or 0)
+        if executed_at_ms <= 0:
+            continue
+        target = action.get("target_ref") if isinstance(action.get("target_ref"), dict) else {}
+        change = action.get("change") if isinstance(action.get("change"), dict) else {}
+        evidence = action.get("evidence_ref") if isinstance(action.get("evidence_ref"), dict) else {}
+        before = {
+            "spend": evidence.get("spend"),
+            "roi": evidence.get("roi"),
+            "orders": evidence.get("orders"),
+            "budget": change.get("current_value"),
+        }
+        after = _find_plan_readback(action)
+        due_at_ms = executed_at_ms + 2 * 60 * 60 * 1000
+        fresh_after = bool(after and int(after.get("captured_at_ms") or 0) > executed_at_ms)
+        if now_ms < due_at_ms:
+            status = "waiting"
+            label = "等待 2 小时复查"
+            verdict = "观察窗口尚未结束，不追加动作。"
+        elif not fresh_after:
+            status = "needs_reread"
+            label = "等待重新读取"
+            verdict = "请打开对应千川计划页重新读取后再判断效果。"
+        else:
+            before_roi = before.get("roi")
+            after_roi = after.get("roi")
+            before_orders = before.get("orders")
+            after_orders = after.get("orders")
+            improved = bool(
+                isinstance(after_roi, (int, float))
+                and isinstance(before_roi, (int, float))
+                and float(after_roi) >= float(before_roi) * 1.2
+            ) or bool(
+                isinstance(after_orders, (int, float))
+                and isinstance(before_orders, (int, float))
+                and float(after_orders) > float(before_orders)
+            )
+            status = "effective" if improved else "review"
+            label = "止损有效" if improved else "需要人工复核"
+            verdict = (
+                "ROI 或成交已经改善，保持当前预算并继续观察。"
+                if improved
+                else "暂未观察到明确改善；建议检查素材、人群和转化承接，必要时生成原预算回滚方案。"
+            )
+        items.append({
+            "action_id": action.get("action_id"),
+            "account_label": target.get("account_label"),
+            "plan_name": target.get("name"),
+            "executed_at_ms": executed_at_ms,
+            "due_at_ms": due_at_ms,
+            "status": status,
+            "status_label": label,
+            "verdict": verdict,
+            "before": before,
+            "after": after,
+            "change": {
+                "from": change.get("current_value"),
+                "to": change.get("target_value"),
+            },
+            "rollback_available": status == "review" and action.get("state") == "verified",
+        })
+    items.sort(key=lambda item: (0 if item["status"] in {"review", "needs_reread"} else 1, -item["executed_at_ms"]))
+    return {
+        "observation_window_hours": 2,
+        "items": items[:100],
+        "summary": {
+            "total": len(items),
+            "waiting": sum(item["status"] == "waiting" for item in items),
+            "needs_reread": sum(item["status"] == "needs_reread" for item in items),
+            "effective": sum(item["status"] == "effective" for item in items),
+            "review": sum(item["status"] == "review" for item in items),
+        },
+    }
 
 
 def build_execution_preflight_report() -> dict[str, Any]:
@@ -1609,14 +1846,18 @@ def build_execution_preflight_report() -> dict[str, Any]:
         },
         {
             "id": "pilot_scope",
-            "label": "符合首批止损范围",
+            "label": "符合首批止损或回滚范围",
             "passed": bool(
                 isinstance(current_value, (int, float))
                 and isinstance(target_value, (int, float))
                 and float(current_value) > 0
-                and 0 < (float(current_value) - float(target_value)) / float(current_value) <= 0.30
+                and (
+                    0 < (float(current_value) - float(target_value)) / float(current_value) <= 0.30
+                    if action and action.get("operation_type") == "adjust_budget"
+                    else 0 < (float(target_value) - float(current_value)) / float(current_value) <= 0.50
+                )
             ),
-            "detail": "仅允许单次降低预算，降幅不超过 30%。",
+            "detail": "降低预算不超过 30%；恢复预算必须绑定原执行记录且增幅不超过 50%。",
         },
     ]
 
@@ -1661,6 +1902,7 @@ def build_execution_preflight_report() -> dict[str, Any]:
             "field": change.get("field"),
             "current_value": current_value,
             "target_value": target_value,
+            "operation_type": action.get("operation_type") if isinstance(action, dict) else "",
         },
         "readback": readback,
         "checks": checks,
@@ -3363,9 +3605,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "3.0.1",
-                    "mode": "proposal_only",
-                    "execution_enabled": False,
+                    "version": "3.2.0",
+                    "mode": "supervised_execution",
+                    "execution_enabled": True,
                     "snapshot_count": len(catalog),
                     "schema_warnings": schema_warnings,
                     "disk": disk_info,
@@ -3492,6 +3734,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/actions/shadow":
             self._json(build_shadow_execution_report())
+            return
+        if path == "/actions/effectiveness":
+            self._json(build_execution_effectiveness_report())
             return
         if path == "/trends":
             self._json(build_trends(int(query.get("days", ["7"])[0]), query.get("source", [None])[0], query.get("page_type", [None])[0]))
@@ -3652,6 +3897,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/actions/preflight/preview":
                 preview = preview_execution_authorization(str(payload.get("authorization_id") or ""))
                 self._json({"ok": True, "preview": preview})
+                return
+            if path == "/actions/rollback/create":
+                draft = create_budget_rollback_draft(str(payload.get("action_id") or ""))
+                self._json({"ok": True, "action": draft})
                 return
             if path == "/actions/execution/result":
                 action = record_execution_result(str(payload.get("action_id") or ""), payload.get("result") or {})

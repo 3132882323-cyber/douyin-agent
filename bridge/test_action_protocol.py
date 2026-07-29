@@ -106,6 +106,18 @@ class ActionProtocolTests(unittest.TestCase):
         self.assertEqual("manual_only", manual["status"])
         self.assertFalse(manual["execution_enabled"])
 
+    def test_restore_budget_requires_verified_source_and_allows_original_value(self):
+        missing_source = self._draft(operation_type="restore_budget", current_value=400, target_value=500)
+        self.assertIn("ROLLBACK_SOURCE_MISSING", {item["code"] for item in missing_source["blocked_reasons"]})
+        restore = self._draft(
+            operation_type="restore_budget",
+            current_value=400,
+            target_value=500,
+            evidence={"rollback_of_action_id": "a" * 24},
+        )
+        self.assertTrue(restore["can_confirm"])
+        self.assertEqual(25.0, restore["change"]["change_percent"])
+
 
 if __name__ == "__main__":
     unittest.main()
