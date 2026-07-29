@@ -2651,6 +2651,135 @@ def build_scan_receipt() -> dict[str, Any]:
     }
 
 
+def _timestamp_seconds(value: Any) -> int:
+    """Normalize browser millisecond timestamps and server second timestamps."""
+    try:
+        timestamp = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return timestamp // 1000 if timestamp > 10_000_000_000 else timestamp
+
+
+def build_operation_context(
+    catalog: dict[str, Any] | None = None,
+    receipt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the identity and data-trust gate shown before any recommendation."""
+    catalog = catalog or build_store_catalog()
+    receipt = receipt or build_scan_receipt()
+    stores = catalog.get("stores") if isinstance(catalog.get("stores"), list) else []
+    selected_key = str(catalog.get("selected_store_key") or catalog.get("selected_account_key") or "")
+    selected = next(
+        (
+            item
+            for item in stores
+            if isinstance(item, dict) and str(item.get("key") or "") == selected_key
+        ),
+        None,
+    )
+    receipt_key = str(receipt.get("account_key") or "")
+    identity_match = not receipt_key or not selected_key or receipt_key == selected_key
+    updated_at = max(
+        _timestamp_seconds(selected.get("updated_at") if selected else 0),
+        _timestamp_seconds(receipt.get("finished_at")),
+    )
+    age_seconds = max(0, int(time.time()) - updated_at) if updated_at else None
+    fresh = age_seconds is not None and age_seconds <= 24 * 60 * 60
+    official_ready = bool(
+        selected
+        and selected.get("channel") == "official_api"
+        and selected.get("state") == "ready"
+        and int(selected.get("page_count") or 0) > 0
+    )
+    browser_ready = bool(receipt.get("analysis_ready"))
+    coverage_rate = int((receipt.get("summary") or {}).get("coverage_rate") or 0)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not selected:
+        blockers.append("尚未选择当前店铺")
+    elif selected.get("state") == "not_linked":
+        blockers.append("当前店铺未关联可用的千川广告账户")
+    elif selected.get("state") == "empty":
+        blockers.append("当前店铺还没有可分析的数据")
+    if not identity_match:
+        blockers.append("最近巡检账号与当前店铺不一致")
+    if selected and not fresh:
+        warnings.append("当前店铺数据已超过 24 小时或缺少更新时间")
+    if selected and selected.get("channel") == "browser" and not browser_ready:
+        warnings.append("网页巡检尚未完整通过，相关建议需要人工复核")
+    warnings.extend(
+        str(item)[:200]
+        for item in receipt.get("warnings", [])
+        if isinstance(item, str)
+    )
+
+    if blockers:
+        state = "blocked"
+        state_label = "暂停经营判断"
+        decision_policy = "blocked"
+        next_action = "先确认店铺、千川账户和数据来源，再生成经营建议。"
+    elif fresh and identity_match and (official_ready or browser_ready):
+        state = "ready"
+        state_label = "数据可信，可进入处理"
+        decision_policy = "reviewable"
+        next_action = "可以处理今日任务；涉及预算、启停和资金的动作仍需执行前复核。"
+    else:
+        state = "review"
+        state_label = "建议仅供人工复核"
+        decision_policy = "manual_review"
+        next_action = "先同步官方数据或完成一次全店巡检，补齐后再进入投放执行准备。"
+
+    source_label = "尚未绑定"
+    if selected:
+        source_label = "千川官方 API" if selected.get("channel") == "official_api" else "浏览器网页"
+    freshness_label = "暂无更新时间"
+    if age_seconds is not None:
+        if age_seconds < 60:
+            freshness_label = "刚刚更新"
+        elif age_seconds < 60 * 60:
+            freshness_label = f"{max(1, age_seconds // 60)} 分钟前"
+        elif age_seconds < 24 * 60 * 60:
+            freshness_label = f"{max(1, age_seconds // 3600)} 小时前"
+        else:
+            freshness_label = f"{max(1, age_seconds // 86400)} 天前"
+
+    return {
+        "generated_at": _now_label(),
+        "state": state,
+        "state_label": state_label,
+        "decision_policy": decision_policy,
+        "analysis_allowed": state != "blocked",
+        "execution_review_allowed": state == "ready",
+        "selected_store": {
+            "key": selected_key,
+            "label": str(selected.get("label") or "未命名店铺") if selected else "尚未选择",
+            "state": str(selected.get("state") or "empty") if selected else "empty",
+            "state_label": str(selected.get("state_label") or "暂无数据") if selected else "尚未绑定",
+            "channel": str(selected.get("channel") or "") if selected else "",
+            "advertiser_count": selected.get("advertiser_count") if selected else None,
+        },
+        "identity_match": identity_match,
+        "source_label": source_label,
+        "freshness": {
+            "updated_at": updated_at or None,
+            "age_seconds": age_seconds,
+            "fresh": fresh,
+            "label": freshness_label,
+        },
+        "coverage": {
+            "rate": coverage_rate,
+            "label": f"{coverage_rate}% 网页覆盖" if receipt.get("summary") else "未生成网页体检",
+            "official_ready": official_ready,
+            "browser_ready": browser_ready,
+        },
+        "blockers": blockers,
+        "warnings": list(dict.fromkeys(warnings))[:8],
+        "next_action": next_action,
+        "mode": "read_only",
+    }
+
+
 def build_action_center() -> dict[str, Any]:
     settings = load_agent_settings()
     plans = build_plan_recommendations(settings)
@@ -2985,7 +3114,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.27.0"
+    server_version = "DianAgent/3.0.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -3037,7 +3166,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.27.0",
+                    "version": "3.0.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -3138,6 +3267,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/scan-receipt":
             self._json(build_scan_receipt())
+            return
+        if path == "/operation-context":
+            self._json(build_operation_context())
             return
         if path == "/health-monitor":
             self._json(check_selector_health())

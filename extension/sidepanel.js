@@ -26,6 +26,7 @@ let managerQueueExpanded = false;
 let currentPreflightSession = null;
 let qianchuanSyncPromise = null;
 let oceanengineStatusPoller = null;
+let currentOperationContext = null;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const ROLE_WORKBENCH = {
@@ -734,7 +735,12 @@ function taskCard(item, options = {}) {
   const actionLabel = document.createElement("b"); actionLabel.textContent = "下一步：";
   action.append(actionLabel, document.createTextNode(item.action || item.suggestion || "请先回到后台核对数据。"));
   const chips = document.createElement("div"); chips.className = "task-chips";
-  [item.impact, item.confidence === "high" ? "数据较充分" : "数据需复核"].filter(Boolean).forEach((value) => {
+  const trustLabel = currentOperationContext?.state === "ready"
+    ? "当前数据可信"
+    : currentOperationContext?.state === "blocked"
+      ? "经营判断已暂停"
+      : "建议需人工复核";
+  [item.impact, item.confidence === "high" ? "证据较充分" : "证据需复核", trustLabel].filter(Boolean).forEach((value) => {
     const chip = document.createElement("span"); chip.textContent = value; chips.append(chip);
   });
   const detail = document.createElement("details"); detail.className = "task-detail";
@@ -1072,19 +1078,17 @@ function renderQianchuanAccounts(payload = {}) {
   const select = document.getElementById("qianchuan-account-select");
   const accounts = payload.stores || payload.accounts || [];
   const analysisAccountKey = String(payload.selected_account_key || "");
-  const preferredKey = selectedQianchuanAccount || analysisAccountKey;
-  const fallbackAccount = accounts.find((account) => account.state === "ready") || accounts[0];
-  const activeKey = accounts.some((account) => account.key === preferredKey)
-    ? preferredKey
-    : String(fallbackAccount?.key || "");
+  // The Agent setting is the only source of truth. Never silently fall back to
+  // another store because a stale browser preference can mix operational context.
+  const activeKey = accounts.some((account) => account.key === analysisAccountKey)
+    ? analysisAccountKey
+    : "";
   const analysisAccount = accounts.find((account) => account.key === activeKey);
   select.replaceChildren();
-  if (!accounts.length) {
-    const current = document.createElement("option");
-    current.value = "";
-    current.textContent = "尚未识别店铺";
-    select.append(current);
-  }
+  const current = document.createElement("option");
+  current.value = "";
+  current.textContent = accounts.length ? "请选择当前店铺" : "尚未识别店铺";
+  select.append(current);
   const labelCounts = accounts.reduce((counts, account) => {
     const label = String(account.label || "未命名账号");
     counts.set(label, (counts.get(label) || 0) + 1);
@@ -1103,7 +1107,10 @@ function renderQianchuanAccounts(payload = {}) {
   selectedQianchuanAccount = activeKey;
   select.value = activeKey;
   chrome.storage.local.set({ scanAccountPreference: activeKey });
-  accountSelectionRequired = false;
+  accountSelectionRequired = !activeKey;
+  const scanButton = document.getElementById("full-scan-button");
+  scanButton.disabled = !activeKey;
+  scanButton.title = activeKey ? "按当前店铺开始巡检" : "请先选择当前店铺";
   document.getElementById("active-store-name").textContent = analysisAccount?.label || "尚未识别店铺";
   document.getElementById("store-mode-summary").textContent = analysisAccount
     ? `${payload.store_count || accounts.length} 个店铺 · 当前${analysisAccount.state_label || "数据已隔离"} · 建议与日志仅使用本店数据`
@@ -1111,6 +1118,32 @@ function renderQianchuanAccounts(payload = {}) {
   document.getElementById("qianchuan-account-hint").textContent = analysisAccount
     ? `当前巡检固定为“${analysisAccount.label}”；不会读取或混合其他店铺数据。`
     : "尚未选择店铺，本次不会启动千川巡检。";
+}
+
+function renderOperationContext(payload = {}) {
+  currentOperationContext = payload;
+  const container = document.getElementById("operation-context");
+  const state = ["ready", "review", "blocked"].includes(payload.state) ? payload.state : "checking";
+  container.className = `operation-context ${state}`;
+  document.getElementById("context-state").textContent = payload.state_label || "正在核对";
+  document.getElementById("context-store").textContent = payload.selected_store?.label || "尚未选择";
+  document.getElementById("context-source").textContent = payload.source_label || "尚未绑定";
+  document.getElementById("context-freshness").textContent = payload.freshness?.label || "暂无更新时间";
+  const coverage = payload.coverage || {};
+  document.getElementById("context-coverage").textContent = coverage.official_ready
+    ? "官方数据可用"
+    : coverage.label || "尚未体检";
+  document.getElementById("context-next-action").textContent = payload.next_action || "先补齐数据，再处理今日任务。";
+  const warnings = [...(payload.blockers || []), ...(payload.warnings || [])].slice(0, 4);
+  const warningBox = document.getElementById("context-warnings");
+  warningBox.hidden = warnings.length === 0;
+  warningBox.replaceChildren(...warnings.map((message) => {
+    const item = document.createElement("span");
+    item.textContent = message;
+    return item;
+  }));
+  const action = document.getElementById("context-action");
+  action.textContent = state === "ready" ? "查看数据体检" : payload.selected_store?.key ? "补齐经营数据" : "选择并绑定店铺";
 }
 
 function renderHealthMonitor(health = {}) {
@@ -1404,7 +1437,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR, oceanengineR, oceanengineSyncR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, preflightR, shadowR, integrationsR, oceanengineR, oceanengineSyncR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1413,6 +1446,7 @@ async function loadDashboard() {
     chrome.runtime.sendMessage({ type: "get-dashboard" }),
     bridgeFetch("/trends?days=7"),
     bridgeFetch("/qianchuan-accounts"),
+    bridgeFetch("/operation-context"),
     bridgeFetch("/health-monitor"),
     bridgeFetch("/effectiveness"),
     bridgeFetch("/actions/readiness"),
@@ -1431,6 +1465,7 @@ async function loadDashboard() {
   const extensionResponse = val(extensionR, {});
   const trends = val(trendsR, {});
   const accounts = val(accountsR, { accounts: [], selected_account_key: "" });
+  const operationContext = val(contextR, { state: "blocked", state_label: "经营上下文读取失败", blockers: ["请刷新后重试"] });
   const health = val(healthR, {});
   const effectiveness = val(effectivenessR, {});
   const readiness = val(readinessR, { items: [], summary: {}, criteria: [] });
@@ -1454,6 +1489,7 @@ async function loadDashboard() {
   renderConnection(true, "本地 Agent 已连接", `已读取 ${insights.coverage?.length || 0} 类页面快照`);
   document.getElementById("headline").textContent = insights.headline || "经营数据已同步";
   document.getElementById("summary").textContent = insights.summary || "请查看下方建议。";
+  renderOperationContext(operationContext);
   renderPlans(actionCenter.plan_recommendations || []);
   renderInventory(actionCenter.inventory_alerts || []);
   renderOperations(ops, actionCenter.shelf_analysis || {}, actionCenter.live_analysis || {}, actionCenter.creative_analysis || {}, insights.coverage || []);
@@ -1691,6 +1727,17 @@ document.getElementById("focus-toggle").addEventListener("click", async () => {
   await chrome.storage.local.set({ focusOnlyActionable });
   applyModuleVisibility();
 });
+document.getElementById("context-action").addEventListener("click", () => {
+  if (!currentOperationContext?.selected_store?.key) {
+    const select = document.getElementById("qianchuan-account-select");
+    select.focus();
+    select.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  const receipt = document.getElementById("scan-receipt-card");
+  receipt.open = true;
+  document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 document.getElementById("manager-expand").addEventListener("click", () => {
   managerQueueExpanded = !managerQueueExpanded;
   if (!currentOperationsContext) return;
@@ -1733,6 +1780,12 @@ document.getElementById("preflight-stop").addEventListener("click", async (event
   }
 });
 document.getElementById("full-scan-button").addEventListener("click", async () => {
+  if (!selectedQianchuanAccount) {
+    const select = document.getElementById("qianchuan-account-select");
+    select.focus();
+    document.getElementById("scan-detail").textContent = "请先选择当前店铺，避免把多个千川账号的数据混在一起。";
+    return;
+  }
   await chrome.runtime.sendMessage({ type: "start-full-scan", account_key: selectedQianchuanAccount });
   await loadDashboard();
 });

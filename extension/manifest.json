@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "店策 Agent - 抖店千川经营副驾",
-  "version": "2.27.0",
+  "version": "3.0.0",
   "description": "轻量哨兵默认零自动扫描，按需连接巨量千川官方 API 与已登录网页，在独立工作台中完成经营分析。",
   "minimum_chrome_version": "116",
   "permissions": [

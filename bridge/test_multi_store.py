@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -69,6 +70,86 @@ class MultiStoreCatalogTests(unittest.TestCase):
             result = http_receiver.build_store_catalog()
         self.assertEqual(result["stores"][0]["state"], "not_linked")
         self.assertEqual(result["stores"][0]["state_label"], "未关联广告账户")
+
+    def test_operation_context_allows_review_for_fresh_official_store(self):
+        now = int(time.time())
+        result = http_receiver.build_operation_context(
+            catalog={
+                "selected_store_key": "acct_ready",
+                "stores": [{
+                    "key": "acct_ready",
+                    "label": "甲店",
+                    "state": "ready",
+                    "state_label": "官方 API 可用",
+                    "channel": "official_api",
+                    "advertiser_count": 1,
+                    "page_count": 4,
+                    "updated_at": now,
+                }],
+            },
+            receipt={
+                "account_key": "",
+                "finished_at": 0,
+                "analysis_ready": False,
+                "summary": {"coverage_rate": 0},
+                "warnings": [],
+            },
+        )
+        self.assertEqual(result["state"], "ready")
+        self.assertTrue(result["execution_review_allowed"])
+        self.assertEqual(result["source_label"], "千川官方 API")
+
+    def test_operation_context_blocks_cross_store_receipt(self):
+        result = http_receiver.build_operation_context(
+            catalog={
+                "selected_store_key": "acct_a",
+                "stores": [{
+                    "key": "acct_a",
+                    "label": "甲店",
+                    "state": "browser_only",
+                    "state_label": "网页数据",
+                    "channel": "browser",
+                    "page_count": 1,
+                    "updated_at": int(time.time()),
+                }],
+            },
+            receipt={
+                "account_key": "acct_b",
+                "finished_at": int(time.time() * 1000),
+                "analysis_ready": True,
+                "summary": {"coverage_rate": 100},
+                "warnings": [],
+            },
+        )
+        self.assertEqual(result["state"], "blocked")
+        self.assertFalse(result["analysis_allowed"])
+        self.assertIn("最近巡检账号与当前店铺不一致", result["blockers"])
+
+    def test_operation_context_requires_review_for_incomplete_browser_scan(self):
+        result = http_receiver.build_operation_context(
+            catalog={
+                "selected_store_key": "acct_a",
+                "stores": [{
+                    "key": "acct_a",
+                    "label": "甲店",
+                    "state": "browser_only",
+                    "state_label": "网页数据",
+                    "channel": "browser",
+                    "page_count": 2,
+                    "updated_at": int(time.time()),
+                }],
+            },
+            receipt={
+                "account_key": "acct_a",
+                "finished_at": int(time.time() * 1000),
+                "analysis_ready": False,
+                "summary": {"coverage_rate": 65},
+                "warnings": ["2 个页面读取失败"],
+            },
+        )
+        self.assertEqual(result["state"], "review")
+        self.assertTrue(result["analysis_allowed"])
+        self.assertFalse(result["execution_review_allowed"])
 
 
 if __name__ == "__main__":
