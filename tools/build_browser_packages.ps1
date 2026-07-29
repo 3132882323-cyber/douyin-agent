@@ -40,8 +40,8 @@ if ($modernManifest.version -ne $compatManifest.version) {
 if ($modernManifest.side_panel -or $compatManifest.side_panel) {
     throw "Browser packages must use the standalone workbench"
 }
-if ($modernManifest.action.default_popup -or $compatManifest.action.default_popup) {
-    throw "Browser toolbar click must open the standalone workbench directly"
+if ($modernManifest.action.default_popup -ne "popup.html" -or $compatManifest.action.default_popup -ne "popup.html") {
+    throw "Browser toolbar click must open the lightweight sentinel popup"
 }
 
 Write-Host "Modern package: $modernDir"

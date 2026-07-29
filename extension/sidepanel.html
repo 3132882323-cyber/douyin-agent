@@ -28,6 +28,41 @@
         <span aria-hidden="true"></span><div><strong>正在连接本地 Agent</strong><p>读取抖店与千川脱敏快照</p></div>
       </section>
 
+      <section class="store-switcher" aria-label="多店铺模式">
+        <div class="store-switcher-copy">
+          <span class="store-mode-badge">多店铺模式</span>
+          <strong id="active-store-name">正在读取店铺</strong>
+          <small id="store-mode-summary">每个店铺的数据、建议和日志独立保存。</small>
+        </div>
+        <label>当前店铺
+          <select id="qianchuan-account-select">
+            <option value="">正在读取店铺列表</option>
+          </select>
+        </label>
+        <button id="current-qianchuan-button" class="current-page-button">绑定当前千川页</button>
+      </section>
+
+      <section id="operation-context" class="operation-context checking" aria-label="当前经营上下文" aria-live="polite">
+        <div class="context-heading">
+          <div>
+            <span class="context-eyebrow">操作前先确认</span>
+            <strong>当前经营上下文</strong>
+          </div>
+          <span id="context-state">正在核对</span>
+        </div>
+        <div class="context-grid">
+          <div><small>当前店铺</small><strong id="context-store">正在读取</strong></div>
+          <div><small>数据来源</small><strong id="context-source">正在读取</strong></div>
+          <div><small>最近更新</small><strong id="context-freshness">正在读取</strong></div>
+          <div><small>数据覆盖</small><strong id="context-coverage">正在读取</strong></div>
+        </div>
+        <div class="context-decision">
+          <p id="context-next-action">核对店铺、千川账户和数据质量后，才能进入今日任务。</p>
+          <button id="context-action" type="button">补齐经营数据</button>
+        </div>
+        <div id="context-warnings" class="context-warnings" hidden></div>
+      </section>
+
       <details id="oceanengine-oauth-card" class="fold-card oauth-card" open>
         <summary>官方 API 授权 <span id="oceanengine-oauth-state">尚未连接</span></summary>
         <section class="oauth-panel">
@@ -171,18 +206,8 @@
           <button id="retry-scan-button" hidden>按当前千川账号重试</button>
           <button id="cancel-scan-button" hidden>停止巡检</button>
         </div>
-        <div class="scan-controls">
-          <div class="scan-schedule account-choice">
-            <label>分析千川账号
-              <select id="qianchuan-account-select">
-                <option value="">当前千川页面（不校验账号）</option>
-              </select>
-            </label>
-          </div>
-          <button id="current-qianchuan-button" class="current-page-button">同步最近千川页面</button>
-        </div>
         <div class="scan-meta">
-          <small id="qianchuan-account-hint">多账号首次使用：先打开要分析的千川账号页面，再点“同步最近千川页面”。工作台会记住最近访问的千川标签页。</small>
+          <small id="qianchuan-account-hint">巡检、建议和日志只使用顶部“当前店铺”的数据，不会跨店混合。</small>
           <small id="scan-summary">手动巡检 · 覆盖经营、商品、订单、内容、直播、货架与千川核心页面</small>
         </div>
       </section>

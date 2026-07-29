@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v2.24.0) */
+/** 店策 Agent - MV3 service worker (v3.0.0) */
 
 importScripts("scan-policy.js");
 
@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
   autoFullScan: false,
   fullScanIntervalHours: 6,
   privacyMode: true,
+  operatingMode: "sentinel",
 };
 
 const FULL_SCAN_PAGES = [
@@ -68,7 +69,15 @@ function mutateLocalStorage(keys, mutator) {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   const stored = await chrome.storage.local.get("settings");
-  await chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS, ...(stored.settings || {}), autoSync: false, autoFullScan: false } });
+  await chrome.storage.local.set({
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...(stored.settings || {}),
+      autoSync: false,
+      autoFullScan: false,
+      operatingMode: "sentinel",
+    },
+  });
   await configureAlarm();
   await updateStatus("system", "扩展已就绪");
   // Open welcome page on first install
@@ -141,9 +150,15 @@ async function configureAlarm() {
   const settings = await getSettings();
   await chrome.alarms.clear(ALARM_NAME);
   await chrome.alarms.clear(FULL_SCAN_ALARM);
-  // Always run bridge health check every 2 minutes for auto-recovery
   await chrome.alarms.clear(BRIDGE_HEALTH_ALARM);
-  chrome.alarms.create(BRIDGE_HEALTH_ALARM, { delayInMinutes: 0.5, periodInMinutes: 2 });
+  // 轻量哨兵默认不轮询。只有用户显式切换到完整后台模式时，
+  // 才低频检查本地 Agent；页面扫描仍必须由用户手动触发。
+  if (settings.operatingMode === "full") {
+    chrome.alarms.create(BRIDGE_HEALTH_ALARM, {
+      delayInMinutes: 1,
+      periodInMinutes: 30,
+    });
+  }
   if (settings.autoSync) {
     chrome.alarms.create(ALARM_NAME, {
       delayInMinutes: 1,
@@ -798,6 +813,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const next = { ...(await getSettings()), ...(message.settings || {}) };
       next.intervalMinutes = Math.max(1, Number(next.intervalMinutes) || 5);
       next.fullScanIntervalHours = Math.max(1, Number(next.fullScanIntervalHours) || 6);
+      next.operatingMode = next.operatingMode === "full" ? "full" : "sentinel";
       await chrome.storage.local.set({ settings: next });
       await configureAlarm();
       sendResponse({ ok: true, settings: next });

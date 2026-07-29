@@ -101,7 +101,7 @@ class OceanEngineDataClient:
             headers={
                 "Access-Token": token,
                 "Accept": "application/json",
-                "User-Agent": "Dian-Agent/2.26 read-only",
+                "User-Agent": "Dian-Agent/2.27 read-only",
             },
         )
         try:
