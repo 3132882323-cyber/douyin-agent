@@ -114,3 +114,20 @@ h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .secondary:hover { background: var(--soft); }
 
 footer { display: flex; justify-content: space-between; gap: 10px; margin-top: 12px; color: #98a2b3; font-size: 9px; }
+
+/* v3.0.1: readable light-sentinel typography */
+.brand-row p,
+.overall p,
+.source-card p { font-size: 12px; line-height: 1.5; }
+.read-only,
+.tag,
+.text-button,
+.settings-row p,
+.api-heading p,
+.api-sentinel small,
+footer { font-size: 11px; line-height: 1.45; }
+.source-head strong,
+.settings-row strong,
+.api-heading strong { font-size: 13px; }
+.api-sentinel button,
+.actions button { font-size: 13px; }

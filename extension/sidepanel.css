@@ -636,3 +636,193 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
   .preflight-checks { grid-template-columns: 1fr; }
   .execution-preflight footer { display: grid; }
 }
+
+/* v3.0.1: larger, calmer typography for daily operator use */
+.context-eyebrow,
+.context-heading > span,
+.context-grid small,
+.context-decision p,
+.context-decision button,
+.context-warnings,
+.store-mode-badge,
+.oauth-intro p,
+.oauth-intro > span,
+.oauth-fields label,
+.oauth-accounts span,
+#oceanengine-oauth-result,
+.focus-toolbar small,
+.focus-toolbar button,
+.scan-head p,
+.scan-tag,
+.scan-meta small,
+.manager-heading small,
+.queue-heading-actions button,
+.queue-stat small,
+.task-meta,
+.task-card small,
+.task-chips span,
+.task-detail summary,
+.task-actions > span,
+.task-actions button,
+.module-jump-button,
+.metric-strip small,
+.section-intro,
+.recommendation-top span,
+.recommendation-card small,
+.plan-steps b,
+.plan-steps p,
+.plan-guardrail,
+.plan-task-actions span,
+.plan-task-actions button,
+.settings-grid label,
+.settings-status,
+.settings-intro,
+.custom-template-wrap,
+.integration-heading span,
+.integration-item ol,
+.integration-item label,
+.integration-actions button,
+.integration-actions a,
+.integration-item > small,
+.fold-card > summary span,
+.task-feedback > small:first-child,
+.fb-btn,
+.fb-status,
+.workbench-switcher small,
+.workbench-switcher label,
+.template-task p,
+.receipt-metrics small,
+.receipt-warning,
+.receipt-page small,
+.receipt-page .receipt-status,
+.receipt-page button,
+.passed-pages-fold > summary,
+.automation-path span,
+.automation-criteria li,
+.automation-ready-tag,
+.automation-change,
+.automation-next,
+.automation-blockers,
+.automation-card-actions button,
+.execution-preflight header small,
+.execution-preflight header > span,
+.preflight-check strong,
+.preflight-check small,
+.execution-preflight > p,
+.execution-preflight footer button,
+.shadow-status,
+.shadow-change,
+.shadow-detail,
+.shadow-card footer button {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.context-grid strong,
+.task-card p,
+.recommendation-card p,
+.plan-workbench-card h4,
+.alert-card p,
+.coverage-card p,
+.privacy-card p,
+.template-task strong,
+.receipt-page strong,
+.automation-candidate header strong,
+.execution-preflight header strong,
+.shadow-card header strong {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.task-card strong,
+.recommendation-top strong,
+.alert-card strong,
+.coverage-card strong,
+.privacy-card strong {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.role-nav button,
+.scan-actions button,
+.current-page-button,
+.settings-actions button,
+.integration-save,
+.hero-actions button {
+  font-size: 12px;
+}
+
+@media (min-width: 900px) {
+  .panel-shell { line-height: 1.55; }
+  .context-eyebrow,
+  .context-heading > span,
+  .context-grid small,
+  .context-decision p,
+  .context-decision button,
+  .context-warnings,
+  .manager-heading small,
+  .queue-heading-actions button,
+  .queue-stat small,
+  .task-meta,
+  .task-card small,
+  .task-chips span,
+  .task-detail summary,
+  .task-actions > span,
+  .task-actions button,
+  .module-jump-button,
+  .recommendation-top span,
+  .recommendation-card small,
+  .plan-guardrail,
+  .plan-task-actions span,
+  .plan-task-actions button,
+  .receipt-metrics small,
+  .receipt-page small,
+  .receipt-page .receipt-status,
+  .automation-path span,
+  .automation-ready-tag,
+  .automation-blockers,
+  .execution-preflight header small,
+  .execution-preflight header > span,
+  .preflight-check strong,
+  .preflight-check small,
+  .shadow-status {
+    font-size: 12px;
+  }
+
+  .context-grid strong,
+  .task-card p,
+  .task-card small,
+  .alert-card p,
+  .recommendation-card p,
+  .recommendation-card small,
+  .plan-steps p,
+  .plan-steps b,
+  .shadow-detail,
+  .automation-next,
+  .template-task p,
+  .coverage-card p,
+  .section-intro {
+    font-size: 13px;
+  }
+
+  .task-card strong,
+  .alert-card strong,
+  .recommendation-top strong,
+  .plan-workbench-card h4,
+  .shadow-card header strong,
+  .automation-candidate header strong,
+  .template-task strong,
+  .coverage-card strong {
+    font-size: 15px;
+  }
+
+  .section-heading h3 { font-size: 17px; }
+  .fold-card > summary { font-size: 15px; }
+  .role-nav button,
+  .hero-actions button,
+  .scan-actions button,
+  .current-page-button {
+    min-height: 42px;
+    font-size: 14px;
+  }
+}
