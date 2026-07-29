@@ -1331,9 +1331,12 @@ function renderExecutionPreflight(report = {}) {
   }));
   document.getElementById("preflight-next").textContent = report.next_step || "首批只检查降低预算动作，不开放自动放量。";
   const reread = document.getElementById("preflight-reread");
+  const authorize = document.getElementById("preflight-authorize");
   const stop = document.getElementById("preflight-stop");
-  reread.hidden = ["ready_for_final_confirmation", "stopped"].includes(state);
+  reread.hidden = ["ready_for_final_confirmation", "authorized", "stopped"].includes(state);
   reread.disabled = state === "expired";
+  authorize.hidden = state !== "ready_for_final_confirmation";
+  authorize.dataset.targetValue = action.target_value ?? "";
   stop.disabled = !currentPreflightSession || ["stopped", "expired"].includes(state);
 }
 
@@ -1777,6 +1780,40 @@ document.getElementById("preflight-stop").addEventListener("click", async (event
     button.disabled = false;
   } finally {
     button.textContent = "紧急停止";
+  }
+});
+
+document.getElementById("preflight-authorize").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  if (!currentPreflightSession?.session_id) return;
+  const confirmationText = `确认降低预算至${button.dataset.targetValue || ""}`;
+  const entered = window.prompt(`这是最后一次人工授权，不会立即修改千川。\n请输入：${confirmationText}`, "");
+  if (entered === null) return;
+  button.disabled = true;
+  try {
+    const response = await bridgeFetch("/actions/preflight/authorize", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: currentPreflightSession.session_id,
+        confirmation_text: entered,
+      }),
+    });
+    renderExecutionPreflight(response.preflight || {});
+    const authorizationId = response.preflight?.session?.authorization_id;
+    if (authorizationId) {
+      const execution = await chrome.runtime.sendMessage({
+        type: "run-authorized-execution",
+        authorization_id: authorizationId,
+      });
+      if (!execution?.ok) throw new Error(execution?.error || "预算受控执行失败");
+      document.getElementById("preflight-next").textContent = execution.result?.verification?.verified
+        ? "千川预算已提交，并通过执行后页面回读验收。"
+        : "平台已返回提交成功，但执行后页面回读尚未匹配；请勿重复执行，先重新同步当前千川页。";
+    }
+  } catch (error) {
+    document.getElementById("preflight-next").textContent = error.message || "最终授权失败";
+  } finally {
+    button.disabled = false;
   }
 });
 document.getElementById("full-scan-button").addEventListener("click", async () => {

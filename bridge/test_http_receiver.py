@@ -247,9 +247,47 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertTrue(all(item["passed"] for item in ready["checks"]))
         self.assertFalse(ready["write_enabled"])
 
-        stopped = http_receiver.stop_execution_preflight(ready["session"]["session_id"])
-        self.assertEqual("stopped", stopped["state"])
-        self.assertFalse(stopped["execution_enabled"])
+        with self.assertRaisesRegex(ValueError, "确认口令不一致"):
+            http_receiver.authorize_execution_preflight(ready["session"]["session_id"], "确认")
+        authorized = http_receiver.authorize_execution_preflight(
+            ready["session"]["session_id"],
+            "确认降低预算至400.0",
+        )
+        self.assertEqual("authorized", authorized["state"])
+        self.assertRegex(authorized["session"]["authorization_id"], r"^[a-f0-9]{32}$")
+        self.assertFalse(authorized["session"]["authorization_consumed"])
+        self.assertFalse(authorized["execution_enabled"])
+
+        preview = http_receiver.preview_execution_authorization(authorized["session"]["authorization_id"])
+        self.assertEqual(confirmed["action_id"], preview["action_id"])
+        self.assertEqual("supervised_submit", preview["execution_request"]["mode"])
+        self.assertFalse(http_receiver.load_execution_preflight()["session"]["authorization_consumed"])
+
+        consumed = http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
+        self.assertEqual("authorization_consumed", consumed["state"])
+        self.assertTrue(consumed["authorization_consumed"])
+        self.assertEqual("supervised_submit", consumed["execution_request"]["mode"])
+        self.assertEqual("plan_preflight1", consumed["execution_request"]["plan_id"])
+        self.assertEqual(400.0, consumed["execution_request"]["target_value"])
+        with self.assertRaisesRegex(ValueError, "已使用或已失效"):
+            http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
+        executed = http_receiver.record_execution_result(
+            confirmed["action_id"],
+            {
+                "submitted": True,
+                "platform_success_observed": True,
+                "plan_id": "plan_preflight1",
+                "target_value": 400.0,
+            },
+        )
+        self.assertEqual("succeeded", executed["state"])
+        snapshot["captured_at"] = executed["execution_reported_at_ms"] + 1000
+        snapshot["tables"][0]["rows"][0][2] = "400"
+        http_receiver.save_data("qianchuan", snapshot)
+        verification = http_receiver.verify_execution_result(confirmed["action_id"])
+        self.assertTrue(verification["verified"])
+        self.assertEqual("verified", verification["state"])
+        self.assertEqual(1, http_receiver.get_action_audit()["summary"]["executed"])
 
     def test_supervised_preflight_rejects_budget_increase(self) -> None:
         now_ms = int(time.time() * 1000)
