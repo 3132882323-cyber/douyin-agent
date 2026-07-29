@@ -3,87 +3,69 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>欢迎使用店策 Agent</title>
+    <title>店策 Agent 安装完成</title>
     <style>
-      * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #17202f; line-height: 1.6; }
-      .container { max-width: 680px; margin: 0 auto; padding: 40px 24px; }
-      .hero { text-align: center; padding: 48px 24px; background: linear-gradient(145deg, #172554, #1d4ed8); border-radius: 20px; color: white; margin-bottom: 32px; }
-      .hero .brand { display: inline-grid; place-items: center; width: 72px; height: 72px; border-radius: 20px; background: rgba(255,255,255,.15); font-size: 32px; font-weight: 800; margin-bottom: 16px; }
-      .hero h1 { font-size: 28px; margin-bottom: 8px; }
-      .hero p { color: #bfdbfe; font-size: 14px; max-width: 480px; margin: 0 auto; }
-      .step { display: grid; grid-template-columns: 48px 1fr; gap: 16px; padding: 24px; margin-bottom: 16px; background: white; border: 1px solid #e4e7ec; border-radius: 16px; }
-      .step-num { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: #eef4ff; color: #2563eb; font-size: 20px; font-weight: 800; }
-      .step h3 { font-size: 16px; margin-bottom: 6px; }
-      .step p { color: #667085; font-size: 13px; }
-      .step code { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #f2f4f7; font-size: 12px; color: #344054; }
-      .step .action { margin-top: 10px; }
-      .step .action button { padding: 10px 20px; border: 0; border-radius: 10px; background: #2563eb; color: white; font-size: 13px; font-weight: 700; cursor: pointer; }
-      .step .action button:disabled { opacity: .5; cursor: wait; }
-      .step .action .status { margin-left: 12px; font-size: 12px; }
-      .check-list { margin-top: 12px; padding: 12px; border-radius: 10px; background: #f8fafc; }
-      .check-list li { list-style: none; padding: 4px 0; color: #475467; font-size: 12px; }
-      .check-list li::before { content: "\2713  "; color: #12b76a; font-weight: 700; }
-      .footer { text-align: center; padding: 32px; color: #98a2b3; font-size: 12px; }
-      .footer a { color: #2563eb; text-decoration: none; }
-      .browsers { display: flex; gap: 12px; justify-content: center; margin-top: 16px; }
-      .browsers span { padding: 6px 14px; border-radius: 999px; background: rgba(255,255,255,.12); font-size: 11px; color: #dbeafe; }
+      *{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:#17202f;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}.shell{width:min(920px,calc(100% - 32px));margin:32px auto 56px}.hero{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center;padding:30px;border-radius:22px;background:linear-gradient(135deg,#172554,#2563eb);color:#fff;box-shadow:0 20px 50px rgba(37,99,235,.18)}.hero-copy{display:flex;gap:16px;align-items:center}.mark{display:grid;place-items:center;width:58px;height:58px;border-radius:17px;background:rgba(255,255,255,.15);font-size:25px;font-weight:800}.hero h1{margin:0;font-size:25px}.hero p{margin:6px 0 0;color:#dbeafe;font-size:13px}.mode{padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.14);font-size:12px;font-weight:800}.promise{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:18px 0}.promise article,.step{padding:18px;border:1px solid #e4e7ec;border-radius:15px;background:#fff}.promise strong{display:block;font-size:13px}.promise p,.step p{margin:5px 0 0;color:#667085;font-size:11px;line-height:1.65}.steps{display:grid;gap:12px}.step{display:grid;grid-template-columns:42px 1fr auto;gap:14px;align-items:center}.number{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#eef4ff;color:#1849a9;font-size:16px;font-weight:800}.step h2{margin:0;font-size:14px}.state{min-width:100px;text-align:right;color:#667085;font-size:11px}.state.ok{color:#067647}.state.warn{color:#b54708}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:11px}button{min-height:36px;padding:0 15px;border:1px solid #d0d5dd;border-radius:9px;background:#fff;color:#344054;cursor:pointer;font-size:12px;font-weight:700}button.primary{border-color:#2563eb;background:#2563eb;color:#fff}button:disabled{opacity:.55;cursor:wait}.finish{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-top:18px;padding:20px;border:1px solid #b2ccff;border-radius:15px;background:#f5f8ff}.finish strong{font-size:14px}.finish p{margin:4px 0 0;color:#667085;font-size:11px}.footer{margin-top:18px;text-align:center;color:#98a2b3;font-size:10px}@media(max-width:700px){.hero{grid-template-columns:1fr}.promise{grid-template-columns:1fr}.step{grid-template-columns:42px 1fr}.state{grid-column:2;text-align:left}.finish{align-items:stretch;flex-direction:column}}
     </style>
   </head>
   <body>
-    <div class="container">
-      <div class="hero">
-        <div class="brand">策</div>
-        <h1>欢迎使用店策 Agent</h1>
-        <p>你的抖店和巨量千川经营副驾已安装成功。按照以下 3 步完成设置，即可开始使用。</p>
-        <div class="browsers">
-          <span>Chrome</span><span>Edge</span><span>360</span><span>QQ 浏览器</span><span>更多 Chromium</span>
-        </div>
-        <p id="runtime-mode"></p>
-      </div>
-      <div class="step">
-        <div class="step-num">1</div>
-        <div>
-          <h3>启动本地 Agent</h3>
-          <p>本地 Agent 负责接收脱敏数据、生成建议和报告。首次使用需手动启动一次，之后会随系统自动启动。</p>
-          <div class="action">
-            <button id="check-bridge">检测本地 Agent</button>
-            <span id="bridge-status" class="status"></span>
-          </div>
-          <ul class="check-list" id="bridge-help" hidden>
-            <li>双击项目目录下的 bridge/enable_autostart.bat</li>
-            <li>启动后访问 http://127.0.0.1:8765/health 确认正常</li>
-          </ul>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-num">2</div>
-        <div>
-          <h3>登录抖店和千川</h3>
-          <p>在浏览器中打开并登录抖店和巨量千川后台。扩展只读取已登录页面的可见数据，不会保存账号密码。</p>
-          <div class="action">
-            <button id="open-doudian">打开抖店</button>
-            <button id="open-qianchuan" style="margin-left:8px;background:#475467;">打开千川</button>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="mark">策</div>
+          <div>
+            <h1>安装完成，轻量哨兵已启用</h1>
+            <p>平时只看连接状态；只有你点击时才读取数据或打开完整工作台。</p>
           </div>
         </div>
-      </div>
-      <div class="step">
-        <div class="step-num">3</div>
-        <div>
-          <h3>固定扩展并首次巡查</h3>
-          <p>将店策 Agent 固定到工具栏，点击扩展图标进入独立经营工作台，再启动全店巡查。系统会依次打开核心页面采集数据。</p>
-          <ul class="check-list">
-            <li>点击浏览器工具栏的拼图图标找到店策 Agent</li>
-            <li>点击图钉按钮将其固定在工具栏</li>
-            <li>点击扩展图标，独立经营工作台会在新标签页打开</li>
-            <li>在工作台点击自动获取全店数据，巡检完成后直接查看建议</li>
-          </ul>
-        </div>
-      </div>
-      <div class="footer">
-        <p>店策 Agent v2.24.0 | 最近千川页同步 | 多账号 ID 锁定 | 本地优先 | MIT License</p>
-      </div>
-    </div>
+        <span class="mode">默认安全模式</span>
+      </section>
+
+      <section class="promise" aria-label="轻量哨兵承诺">
+        <article><strong>零自动扫描</strong><p>不定时打开抖店或千川页面，不在后台轮询经营数据。</p></article>
+        <article><strong>多店数据隔离</strong><p>每家店铺独立保存快照、建议和日志，切换店铺后再分析。</p></article>
+        <article><strong>投放只读</strong><p>当前只读取官方 API 和页面数据，不启停计划、不修改预算。</p></article>
+      </section>
+
+      <section class="steps">
+        <article class="step">
+          <span class="number">1</span>
+          <div>
+            <h2>确认本地 Agent</h2>
+            <p>负责在本机加密保存 Token、店铺数据和分析结果。</p>
+            <div class="actions"><button id="check-bridge">重新检测</button></div>
+          </div>
+          <span id="bridge-status" class="state">检测中</span>
+        </article>
+        <article class="step">
+          <span class="number">2</span>
+          <div>
+            <h2>连接你的店铺</h2>
+            <p>官方 API 可一次同步多个已授权千川店铺；没有 API 时再绑定当前网页。</p>
+            <div class="actions">
+              <button id="open-workbench">配置官方 API</button>
+              <button id="open-doudian">打开抖店</button>
+              <button id="open-qianchuan">打开千川</button>
+            </div>
+          </div>
+          <span id="store-status" class="state">等待检测</span>
+        </article>
+        <article class="step">
+          <span class="number">3</span>
+          <div>
+            <h2>固定到工具栏</h2>
+            <p>点击浏览器“扩展”图标，把店策 Agent 固定。以后点击它先看到轻量哨兵。</p>
+          </div>
+          <span class="state ok">无需其他设置</span>
+        </article>
+      </section>
+
+      <section class="finish">
+        <div><strong>现在可以开始体验</strong><p>建议先打开轻量哨兵确认状态，再按需进入完整工作台。</p></div>
+        <button id="finish-setup" class="primary">打开完整工作台</button>
+      </section>
+      <p class="footer">店策 Agent v2.27.0 · 轻量哨兵 · 多店铺隔离 · 本地优先</p>
+    </main>
     <script src="welcome.js"></script>
   </body>
 </html>

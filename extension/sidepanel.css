@@ -44,6 +44,13 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .connection strong { display: block; font-size: 12px; }
 .connection p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
 .oauth-card { border-color: #b2ccff; background: linear-gradient(145deg, #f5f8ff, #fff); }
+.panel-shell > .store-switcher { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, .7fr) auto; gap: 12px; align-items: end; padding: 14px 16px; border: 1px solid #b2ccff; border-radius: 14px; background: linear-gradient(135deg, #f5f8ff, #fff); }
+.store-switcher-copy { display: grid; gap: 3px; }
+.store-switcher-copy strong { font-size: 14px; }
+.store-switcher-copy small { color: var(--muted); font-size: 10px; }
+.store-mode-badge { width: fit-content; padding: 3px 7px; border-radius: 999px; background: #e0eaff; color: #1849a9; font-size: 9px; font-weight: 800; }
+.store-switcher label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
+.store-switcher select { min-height: 38px; padding: 0 10px; border: 1px solid #b2ccff; border-radius: 9px; background: #fff; color: var(--ink); font-size: 12px; }
 .oauth-card > summary span.connected { color: var(--green); background: #ecfdf3; }
 .oauth-card > summary span.waiting { color: var(--amber); background: #fffaeb; }
 .oauth-panel { display: grid; gap: 12px; }
@@ -592,6 +599,7 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 }
 
 @media (max-width: 520px) {
+  .store-switcher { grid-template-columns: 1fr; }
   .oauth-fields { grid-template-columns: 1fr; }
   .oauth-actions { display: grid; grid-template-columns: 1fr; }
   .qianchuan-sync-dock { top: auto; right: 12px; bottom: 12px; transform: none; }

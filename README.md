@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-2.26.0-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-2.27.0-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v2.26.0 Beta`。巨量千川官方 API 已接通：可按“授权店铺 → 关联广告账户”自动识别多账号，并一键只读同步普通计划、全域推广、7 日经营报表、素材投放报表和视频素材库。App Secret 与 Token 使用 Windows 当前用户 DPAPI 加密并仅保存在本机；网页采集继续作为异常回退通道，当前仍不写入千川。
+> 当前版本：`v2.27.0 Beta`。默认启用“轻量哨兵”：工具栏只显示连接与店铺状态，后台零自动扫描，只有点击后才取数。新增多店铺模式，官方 API 可一次同步全部授权店铺，但经营分析、建议、巡检和日志按当前店铺独立保存，避免跨店串数。App Secret 与 Token 使用 Windows 当前用户 DPAPI 加密并仅保存在本机，当前仍不写入千川。
 
 ## 为什么做这个项目
 
@@ -168,11 +168,13 @@ cd douyin-agent
 
 ### 2. 安装浏览器扩展
 
+Windows 小白用户推荐直接双击根目录的 `install_dian_agent.bat`。它会启动本地 Agent、设置登录自动启动，并同时打开浏览器扩展管理页和正确的 `extension` 文件夹。由于 Chromium 的安全限制，最后仍需人工点击一次“加载已解压的扩展程序”并选择该文件夹。
+
 项目提供两个浏览器包：
 
 - 现代浏览器版：Chrome 116+、Edge、360 极速浏览器 X 等较新 Chromium 浏览器。
 - 多浏览器兼容版：360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等较旧 Chromium 内核。
-- 两个版本均点击扩展图标直接打开独立经营工作台，不再使用浏览器侧栏。
+- 两个版本点击扩展图标都会先打开轻量哨兵，需要深入分析时再进入独立经营工作台。
 
 Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-modern` 和 `dist/dian-agent-compatible`。随后：
 
@@ -182,7 +184,7 @@ Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-mode
 4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.26.0`。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `2.27.0`。首次安装会打开轻量引导页；点击工具栏图标先进入轻量哨兵，需要深入分析时再打开完整工作台。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
 
 完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
@@ -337,6 +339,8 @@ douyin-agent/
 - [x] 工作台侧边常驻同步千川、最近访问标签页记忆与独立工作台误判修复（v2.24.0）
 - [x] 千川官方 OAuth 授权、本机 DPAPI 密钥存储、state 校验与多账号授权状态（v2.25.0）
 - [x] 千川官方 API 多账号映射、Token 自动续期、计划/全域推广/报表/视频素材一键只读同步（v2.26.0）
+- [x] 轻量哨兵安装体验、零后台轮询、工具栏状态窗与欢迎页完整打包（v2.27.0）
+- [x] 多店铺切换、官方/网页状态标记、未关联账户提示与逐店数据隔离（v2.27.0）
 - [ ] 通过页面回读、操作前二次确认和操作后验收构建受控单步执行器
 - [ ] 在 OAuth 基础上补齐官方 API 数据适配层，与无 API 浏览器通道共用账号目录、数据模型和执行护栏
 

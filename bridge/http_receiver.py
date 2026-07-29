@@ -217,6 +217,74 @@ def list_qianchuan_accounts() -> list[dict[str, Any]]:
         return []
 
 
+def build_store_catalog() -> dict[str, Any]:
+    """Build a multi-store view without mixing one store's metrics into another."""
+    selected_key = str(load_agent_settings().get("qianchuan_account_key") or "")
+    sync_status = load_sync_status(DATA_DIR)
+    official_by_key = {
+        str(account.get("account_key") or ""): account
+        for account in sync_status.get("accounts", [])
+        if isinstance(account, dict)
+    }
+    stores: list[dict[str, Any]] = []
+    for account in list_qianchuan_accounts():
+        key = str(account.get("key") or "")
+        account_dir = DATA_DIR / "qianchuan_accounts" / key
+        snapshot_paths = list(account_dir.glob("*.json")) if account_dir.exists() else []
+        newest_timestamp = max(
+            (path.stat().st_mtime for path in snapshot_paths),
+            default=0.0,
+        )
+        official = official_by_key.get(key)
+        channel = "official_api" if official else "browser"
+        advertiser_count = (
+            int(official.get("advertiser_count") or 0) if official else None
+        )
+        if official and advertiser_count == 0:
+            state = "not_linked"
+            state_label = "未关联广告账户"
+        elif official:
+            state = "ready"
+            state_label = "官方 API 可用"
+        elif snapshot_paths:
+            state = "browser_only"
+            state_label = "网页数据"
+        else:
+            state = "empty"
+            state_label = "暂无数据"
+        stores.append(
+            {
+                **account,
+                "channel": channel,
+                "advertiser_count": advertiser_count,
+                "page_count": len(snapshot_paths),
+                "updated_at": int(newest_timestamp) if newest_timestamp else None,
+                "state": state,
+                "state_label": state_label,
+                "selected": key == selected_key,
+            }
+        )
+    stores.sort(
+        key=lambda item: (
+            0 if item.get("selected") else 1,
+            0 if item.get("state") == "ready" else 1,
+            -(int(item.get("updated_at") or 0)),
+        )
+    )
+    return {
+        "mode": "multi_store",
+        "stores": stores,
+        "accounts": stores,
+        "store_count": len(stores),
+        "official_store_count": sum(
+            item.get("channel") == "official_api" for item in stores
+        ),
+        "selected_store_key": selected_key,
+        "selected_account_key": selected_key,
+        "data_isolation": "per_store",
+    }
+
+
 def _remember_qianchuan_account(account: dict[str, Any]) -> None:
     key = str(account.get("key") or "").lower()
     if not SAFE_KEY.fullmatch(key):
@@ -2917,7 +2985,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/2.26.0"
+    server_version = "DianAgent/2.27.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -2969,7 +3037,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "2.26.0",
+                    "version": "2.27.0",
                     "mode": "proposal_only",
                     "execution_enabled": False,
                     "snapshot_count": len(catalog),
@@ -3053,7 +3121,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(_cached("creative", build_qianchuan_creative_analysis))
             return
         if path == "/qianchuan-accounts":
-            self._json({"accounts": list_qianchuan_accounts(), "selected_account_key": load_agent_settings().get("qianchuan_account_key", "")})
+            self._json(build_store_catalog())
+            return
+        if path == "/stores":
+            self._json(build_store_catalog())
             return
         if path == "/ops-manager":
             self._json(_cached("ops_manager", build_ops_manager))

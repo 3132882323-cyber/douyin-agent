@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>店策 Agent</title>
+    <title>店策轻量哨兵</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
@@ -11,29 +11,24 @@
       <header class="brand-row">
         <div class="brand-mark">策</div>
         <div>
-          <h1>店策 Agent</h1>
-          <p>抖店 × 千川经营副驾</p>
+          <h1>店策轻量哨兵</h1>
+          <p>只看状态 · 点击才取数</p>
         </div>
-        <span class="read-only">不执行</span>
+        <span class="read-only">零自动扫描</span>
       </header>
 
       <section id="overall" class="overall pending">
         <span class="pulse"></span>
         <div>
           <strong id="overall-title">正在检查连接</strong>
-          <p id="overall-detail">数据只保存在本机</p>
+          <p id="overall-detail">不会在后台巡查店铺页面</p>
         </div>
-      </section>
-
-      <section id="quick-metrics" class="quick-metrics" hidden>
-        <p id="qm-headline" class="qm-headline"></p>
-        <div id="qm-strip" class="qm-strip"></div>
       </section>
 
       <section class="source-grid" aria-label="数据源状态">
         <article class="source-card">
           <div class="source-head">
-            <div><span class="source-icon shop">店</span><strong>抖店后台</strong></div>
+            <div><span class="source-icon shop">店</span><strong>抖店</strong></div>
             <span id="doudian-state" class="tag idle">检测中</span>
           </div>
           <p id="doudian-detail">等待识别页面</p>
@@ -41,7 +36,7 @@
         </article>
         <article class="source-card">
           <div class="source-head">
-            <div><span class="source-icon ads">投</span><strong>巨量千川</strong></div>
+            <div><span class="source-icon ads">投</span><strong>千川</strong></div>
             <span id="qianchuan-state" class="tag idle">检测中</span>
           </div>
           <p id="qianchuan-detail">等待识别页面</p>
@@ -49,30 +44,34 @@
         </article>
       </section>
 
-      <section class="settings-row">
-        <div>
-          <strong>隐私脱敏</strong>
-          <p>手机号、证件号与邮箱默认掩码</p>
+      <section class="api-sentinel" aria-live="polite">
+        <div class="api-heading">
+          <div>
+            <strong>千川官方 API</strong>
+            <p id="api-detail">正在检查授权状态</p>
+          </div>
+          <span id="api-state" class="tag idle">检测中</span>
         </div>
-        <label class="switch" aria-label="隐私脱敏">
-          <input id="privacy-toggle" type="checkbox" checked>
-          <span></span>
-        </label>
+        <button id="api-sync-button" disabled>同步官方数据</button>
+        <small id="api-sync-note">只在点击时读取计划、报表与素材，不修改投放。</small>
       </section>
 
-      <section class="scan-action">
-        <button id="full-scan-button">自动获取全店数据</button>
-        <p id="scan-detail">自动巡检核心经营页面，完成后生成诊断</p>
+      <section class="settings-row">
+        <div>
+          <strong>隐私脱敏始终开启</strong>
+          <p>手机号、证件号、邮箱和账号标识默认掩码</p>
+        </div>
+        <span class="shield" aria-hidden="true">✓</span>
       </section>
 
       <section class="actions">
         <button id="sync-button" class="primary">同步当前页面</button>
-        <button id="panel-button" class="secondary">打开经营副驾</button>
+        <button id="panel-button" class="secondary">完整工作台</button>
       </section>
 
       <footer>
         <span id="last-sync">尚未同步</span>
-        <span id="browser-mode">正在识别浏览器</span>
+        <span>轻量哨兵 · 仅本机</span>
       </footer>
     </main>
     <script src="popup.js"></script>

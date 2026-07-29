@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "店策 Agent - 多浏览器兼容版",
-  "version": "2.26.0",
-  "description": "适配 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等 Chromium 浏览器；支持千川官方 OAuth 与网页采集双通道。",
+  "version": "2.27.0",
+  "description": "适配 360、QQ、搜狗、联想等 Chromium 浏览器；轻量哨兵默认零自动扫描，支持千川官方 API 与网页采集双通道。",
   "minimum_chrome_version": "109",
   "permissions": [
     "storage",
@@ -32,7 +32,8 @@
     }
   ],
   "action": {
-    "default_title": "打开店策 Agent 经营工作台"
+    "default_title": "打开店策 Agent 轻量哨兵",
+    "default_popup": "popup.html"
   },
   "icons": {
     "48": "icon48.png",

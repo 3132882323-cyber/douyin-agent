@@ -48,7 +48,7 @@ button, input { font: inherit; }
 
 h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .brand-row p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
-.read-only { margin-left: auto; padding: 4px 8px; border-radius: 999px; background: #eef4ff; color: #3538cd; font-size: 11px; font-weight: 700; }
+.read-only { margin-left: auto; padding: 4px 8px; border-radius: 999px; background: #eef4ff; color: #3538cd; font-size: 10px; font-weight: 700; }
 
 .overall {
   display: flex;
@@ -87,13 +87,17 @@ h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .tag.idle { color: var(--muted); background: #f2f4f7; }
 .text-button { border: 0; padding: 0; background: transparent; color: var(--brand); font-size: 10px; cursor: pointer; }
 
-.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfe; }
 .settings-row strong { display: block; font-size: 12px; }
 .settings-row p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
-.scan-action { margin-top: 12px; padding: 12px; border: 1px solid #b2ccff; border-radius: 12px; background: #f5f8ff; }
-.scan-action button { width: 100%; min-height: 38px; border: 0; border-radius: 9px; background: var(--brand); color: white; cursor: pointer; font-size: 12px; font-weight: 700; }
-.scan-action button:disabled { opacity: .65; cursor: wait; }
-.scan-action p { margin: 7px 0 0; color: var(--muted); text-align: center; font-size: 10px; }
+.shield { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--green-bg); color: var(--green); font-size: 13px; font-weight: 800; }
+.api-sentinel { margin-top: 12px; padding: 12px; border: 1px solid #b2ccff; border-radius: 12px; background: #f5f8ff; }
+.api-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.api-heading strong { display: block; font-size: 12px; }
+.api-heading p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+.api-sentinel button { width: 100%; min-height: 36px; margin-top: 10px; border: 0; border-radius: 9px; background: var(--brand); color: white; cursor: pointer; font-size: 12px; font-weight: 700; }
+.api-sentinel button:disabled { opacity: .5; cursor: not-allowed; }
+.api-sentinel small { display: block; margin-top: 7px; color: var(--muted); text-align: center; font-size: 9px; line-height: 1.45; }
 .switch { position: relative; flex: 0 0 auto; width: 38px; height: 22px; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch span { position: absolute; inset: 0; border-radius: 999px; background: #d0d5dd; cursor: pointer; transition: .2s; }
@@ -110,11 +114,3 @@ h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .secondary:hover { background: var(--soft); }
 
 footer { display: flex; justify-content: space-between; gap: 10px; margin-top: 12px; color: #98a2b3; font-size: 9px; }
-
-/* v2.8.2: quick metrics in popup */
-.quick-metrics { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
-.qm-headline { margin: 0 0 8px; color: var(--ink); font-size: 13px; font-weight: 700; line-height: 1.35; }
-.qm-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.qm-strip > div { padding: 8px; border-radius: 9px; background: #eef4ff; text-align: center; }
-.qm-strip strong { display: block; color: #1849a9; font-size: 16px; }
-.qm-strip small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }

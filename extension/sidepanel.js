@@ -1070,14 +1070,21 @@ function startOceanEngineStatusPolling() {
 
 function renderQianchuanAccounts(payload = {}) {
   const select = document.getElementById("qianchuan-account-select");
-  const accounts = payload.accounts || [];
+  const accounts = payload.stores || payload.accounts || [];
   const analysisAccountKey = String(payload.selected_account_key || "");
-  const analysisAccount = accounts.find((account) => account.key === analysisAccountKey);
+  const preferredKey = selectedQianchuanAccount || analysisAccountKey;
+  const fallbackAccount = accounts.find((account) => account.state === "ready") || accounts[0];
+  const activeKey = accounts.some((account) => account.key === preferredKey)
+    ? preferredKey
+    : String(fallbackAccount?.key || "");
+  const analysisAccount = accounts.find((account) => account.key === activeKey);
   select.replaceChildren();
-  const current = document.createElement("option");
-  current.value = "";
-  current.textContent = "自动识别当前登录账号（推荐）";
-  select.append(current);
+  if (!accounts.length) {
+    const current = document.createElement("option");
+    current.value = "";
+    current.textContent = "尚未识别店铺";
+    select.append(current);
+  }
   const labelCounts = accounts.reduce((counts, account) => {
     const label = String(account.label || "未命名账号");
     counts.set(label, (counts.get(label) || 0) + 1);
@@ -1088,22 +1095,22 @@ function renderQianchuanAccounts(payload = {}) {
     option.value = account.key;
     const duplicate = (labelCounts.get(String(account.label || "未命名账号")) || 0) > 1;
     const suffix = String(account.key || "").slice(-4).toUpperCase();
-    option.textContent = duplicate ? `${account.label} · 账号 ${suffix}` : account.label;
+    const accountLabel = duplicate ? `${account.label} · ${suffix}` : account.label;
+    const stateLabel = account.state_label || (account.channel === "official_api" ? "官方 API" : "网页");
+    option.textContent = `${accountLabel} · ${stateLabel}`;
     select.append(option);
   });
-  if (selectedQianchuanAccount && accounts.some((account) => account.key === selectedQianchuanAccount)) {
-    select.value = selectedQianchuanAccount;
-  } else {
-    selectedQianchuanAccount = "";
-    select.value = "";
-    chrome.storage.local.set({ scanAccountPreference: "" });
-  }
+  selectedQianchuanAccount = activeKey;
+  select.value = activeKey;
+  chrome.storage.local.set({ scanAccountPreference: activeKey });
   accountSelectionRequired = false;
-  document.getElementById("qianchuan-account-hint").textContent = selectedQianchuanAccount
-    ? "已固定本轮巡查账号；只有明确需要读取指定账号时才使用此模式。"
-    : analysisAccount
-      ? `本轮会自动锁定当前登录账号；最近分析账号：${analysisAccount.label}。`
-      : "本轮会在第一个千川页面自动识别并锁定当前登录账号，不需要提前选择。";
+  document.getElementById("active-store-name").textContent = analysisAccount?.label || "尚未识别店铺";
+  document.getElementById("store-mode-summary").textContent = analysisAccount
+    ? `${payload.store_count || accounts.length} 个店铺 · 当前${analysisAccount.state_label || "数据已隔离"} · 建议与日志仅使用本店数据`
+    : "授权官方 API 或绑定一个已登录千川页面后开始。";
+  document.getElementById("qianchuan-account-hint").textContent = analysisAccount
+    ? `当前巡检固定为“${analysisAccount.label}”；不会读取或混合其他店铺数据。`
+    : "尚未选择店铺，本次不会启动千川巡检。";
 }
 
 function renderHealthMonitor(health = {}) {
