@@ -1098,7 +1098,7 @@ def get_action_audit(limit: int = 100) -> dict[str, Any]:
             "total": len(audit["actions"]),
             "confirmed": sum(item.get("state") == "confirmed" for item in audit["actions"]),
             "cancelled": sum(item.get("state") == "cancelled" for item in audit["actions"]),
-            "executed": 0,
+            "executed": sum(item.get("state") in {"succeeded", "verified"} for item in audit["actions"]),
         },
     }
 
@@ -1351,6 +1351,187 @@ def stop_execution_preflight(session_id: str) -> dict[str, Any]:
     return build_execution_preflight_report()
 
 
+def authorize_execution_preflight(session_id: str, confirmation_text: str) -> dict[str, Any]:
+    """Issue a short-lived, single-use grant after an exact final confirmation.
+
+    The grant is deliberately not an execution command.  A future browser
+    executor must consume it atomically and perform its own final page checks.
+    """
+
+    session_id = str(session_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{24}", session_id):
+        raise ValueError("执行前检查会话编号无效。")
+    report = build_execution_preflight_report()
+    session = report.get("session") if isinstance(report.get("session"), dict) else {}
+    if session.get("session_id") != session_id:
+        raise ValueError("未找到对应的执行前检查会话。")
+    if report.get("state") != "ready_for_final_confirmation":
+        raise ValueError("执行前检查尚未全部通过，不能生成最终授权。")
+    action = report.get("action") if isinstance(report.get("action"), dict) else {}
+    expected_text = f"确认降低预算至{action.get('target_value')}"
+    if str(confirmation_text or "").strip() != expected_text:
+        raise ValueError(f"确认口令不一致，请完整输入：{expected_text}")
+
+    now_ms = int(time.time() * 1000)
+    grant_seed = f"{session_id}:{session.get('action_id')}:{now_ms}:{os.urandom(16).hex()}".encode("utf-8")
+    authorized = {
+        **session,
+        "state": "authorized",
+        "authorized_at_ms": now_ms,
+        "authorization_expires_at_ms": now_ms + 60 * 1000,
+        "authorization_id": hashlib.sha256(grant_seed).hexdigest()[:32],
+        "authorization_consumed": False,
+        "confirmation_text_hash": hashlib.sha256(expected_text.encode("utf-8")).hexdigest(),
+        "write_enabled": False,
+        "execution_enabled": False,
+    }
+    with _state_lock:
+        _save_execution_preflight(authorized)
+    return build_execution_preflight_report()
+
+
+def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
+    """Atomically consume a valid grant for a future in-process executor."""
+
+    authorization_id = str(authorization_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", authorization_id):
+        raise ValueError("执行授权编号无效。")
+    with _state_lock:
+        session = load_execution_preflight().get("session")
+        if not session or session.get("authorization_id") != authorization_id:
+            raise ValueError("未找到对应的执行授权。")
+        if session.get("state") != "authorized" or session.get("authorization_consumed"):
+            raise ValueError("执行授权已使用或已失效。")
+        now_ms = int(time.time() * 1000)
+        if int(session.get("authorization_expires_at_ms") or 0) <= now_ms:
+            _save_execution_preflight({**session, "state": "expired", "execution_enabled": False, "write_enabled": False})
+            raise ValueError("执行授权已过期。")
+        consumed = {
+            **session,
+            "state": "authorization_consumed",
+            "authorization_consumed": True,
+            "authorization_consumed_at_ms": now_ms,
+            "execution_enabled": False,
+            "write_enabled": False,
+        }
+        _save_execution_preflight(consumed)
+    action = next(
+        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == consumed.get("action_id")),
+        None,
+    )
+    if not action:
+        raise ValueError("授权对应的动作不存在。")
+    return {
+        **consumed,
+        "execution_request": _execution_request_for_action(action),
+    }
+
+
+def _execution_request_for_action(action: dict[str, Any]) -> dict[str, Any]:
+    target = action.get("target_ref") if isinstance(action.get("target_ref"), dict) else {}
+    change = action.get("change") if isinstance(action.get("change"), dict) else {}
+    return {
+        "operation_type": action.get("operation_type"),
+        "account_key": target.get("account_key"),
+        "plan_id": target.get("id"),
+        "plan_name": target.get("name"),
+        "field": change.get("field"),
+        "expected_current_value": change.get("current_value"),
+        "target_value": change.get("target_value"),
+        "mode": "supervised_submit",
+    }
+
+
+def preview_execution_authorization(authorization_id: str) -> dict[str, Any]:
+    """Return probe parameters without consuming or extending the grant."""
+
+    authorization_id = str(authorization_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", authorization_id):
+        raise ValueError("执行授权编号无效。")
+    session = load_execution_preflight().get("session")
+    if not session or session.get("authorization_id") != authorization_id:
+        raise ValueError("未找到对应的执行授权。")
+    if session.get("state") != "authorized" or session.get("authorization_consumed"):
+        raise ValueError("执行授权已使用或已失效。")
+    if int(session.get("authorization_expires_at_ms") or 0) <= int(time.time() * 1000):
+        raise ValueError("执行授权已过期。")
+    action = next(
+        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == session.get("action_id")),
+        None,
+    )
+    if not action or action.get("state") != "confirmed":
+        raise ValueError("授权对应的动作不可执行。")
+    return {
+        "action_id": session.get("action_id"),
+        "authorization_expires_at_ms": session.get("authorization_expires_at_ms"),
+        "execution_request": _execution_request_for_action(action),
+    }
+
+
+def record_execution_result(action_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Persist the browser executor receipt without trusting it as verification."""
+
+    action_id = str(action_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{24}", action_id) or not isinstance(result, dict):
+        raise ValueError("执行回执无效。")
+    submitted = result.get("submitted") is True
+    now_ms = int(time.time() * 1000)
+    with _state_lock:
+        audit = load_action_audit()
+        action = next((item for item in audit["actions"] if item.get("action_id") == action_id), None)
+        if not action or action.get("state") != "confirmed":
+            raise ValueError("执行动作不存在、已撤销或已记录。")
+        executing = transition_action(action, "executing", allow_execution=True)
+        updated = transition_action(executing, "succeeded" if submitted else "failed", allow_execution=True)
+        updated.update({
+            "execution_source": "qianchuan_browser_supervised",
+            "execution_reported_at_ms": now_ms,
+            "execution_receipt": {
+                "submitted": submitted,
+                "platform_success_observed": result.get("platform_success_observed") is True,
+                "plan_id": str(result.get("plan_id") or ""),
+                "target_value": result.get("target_value"),
+                "error": str(result.get("error") or "")[:300],
+            },
+            "execution_note": "浏览器已提交，等待页面重新读取验收。" if submitted else "浏览器执行未完成，未记录为成功。",
+        })
+        actions = [updated if item.get("action_id") == action_id else item for item in audit["actions"]]
+        _atomic_json_write(
+            _action_audit_path(),
+            {"schema_version": 1, "updated_at": _now_label(), "execution_enabled": True, "actions": actions},
+        )
+    return updated
+
+
+def verify_execution_result(action_id: str) -> dict[str, Any]:
+    action_id = str(action_id or "").lower()
+    with _state_lock:
+        audit = load_action_audit()
+        action = next((item for item in audit["actions"] if item.get("action_id") == action_id), None)
+        if not action or action.get("state") not in {"succeeded", "verified"}:
+            raise ValueError("只有已提交动作可以进行页面回读验收。")
+        readback = _find_plan_readback(action)
+        target_value = (action.get("change") or {}).get("target_value")
+        submitted_at = int(action.get("execution_reported_at_ms") or 0)
+        matched = bool(
+            readback
+            and int(readback.get("captured_at_ms") or 0) > submitted_at
+            and isinstance(readback.get("current_value"), (int, float))
+            and isinstance(target_value, (int, float))
+            and abs(float(readback["current_value"]) - float(target_value)) <= 0.01
+        )
+        if matched and action.get("state") != "verified":
+            action = transition_action(action, "verified")
+            action["verified_at_ms"] = int(time.time() * 1000)
+            action["verification_readback"] = readback
+            actions = [action if item.get("action_id") == action_id else item for item in audit["actions"]]
+            _atomic_json_write(
+                _action_audit_path(),
+                {"schema_version": 1, "updated_at": _now_label(), "execution_enabled": True, "actions": actions},
+            )
+    return {"action_id": action_id, "verified": matched, "state": action.get("state"), "readback": readback}
+
+
 def build_execution_preflight_report() -> dict[str, Any]:
     """Recheck a short-lived session against the latest Qianchuan page."""
 
@@ -1368,7 +1549,13 @@ def build_execution_preflight_report() -> dict[str, Any]:
 
     now_ms = int(time.time() * 1000)
     state = str(stored.get("state") or "awaiting_reread")
-    if state not in {"stopped", "expired"} and int(stored.get("expires_at_ms") or 0) <= now_ms:
+    authorization_expires_at_ms = int(stored.get("authorization_expires_at_ms") or 0)
+    if state == "authorized" and authorization_expires_at_ms <= now_ms:
+        state = "expired"
+        stored = {**stored, "state": state, "write_enabled": False, "execution_enabled": False}
+        with _state_lock:
+            _save_execution_preflight(stored)
+    elif state not in {"stopped", "expired", "authorized"} and int(stored.get("expires_at_ms") or 0) <= now_ms:
         state = "expired"
         stored = {**stored, "state": state, "write_enabled": False, "execution_enabled": False}
         with _state_lock:
@@ -1433,7 +1620,11 @@ def build_execution_preflight_report() -> dict[str, Any]:
         },
     ]
 
-    if state == "stopped":
+    if state == "authorization_consumed":
+        label = "授权凭证已使用"
+    elif state == "authorized":
+        label = "最终授权已生成"
+    elif state == "stopped":
         label = "已紧急停止"
     elif state == "expired":
         label = "检查会话已过期"
@@ -1474,7 +1665,13 @@ def build_execution_preflight_report() -> dict[str, Any]:
         "readback": readback,
         "checks": checks,
         "next_step": (
-            "全部闸门已通过；当前版本仍不会写入千川，下一版本将在此处增加最终确认与受控页面操作。"
+            "授权凭证已被原子消费，不能再次使用；请等待平台提交回执和执行后页面验收。"
+            if state == "authorization_consumed"
+            else
+            "已生成 60 秒单次授权凭证；受监督执行器将只提交本次降低预算动作。"
+            if state == "authorized"
+            else
+            "全部闸门已通过；输入与目标预算绑定的最终确认口令后，受监督执行器将提交本次降低预算动作。"
             if state == "ready_for_final_confirmation"
             else "重新读取当前千川页面，系统会自动复核账号、计划、预算和质量。"
             if state == "awaiting_reread"
@@ -3440,6 +3637,29 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/actions/preflight/stop":
                 report = stop_execution_preflight(str(payload.get("session_id") or ""))
                 self._json({"ok": True, "preflight": report, "executed": False, "execution_enabled": False})
+                return
+            if path == "/actions/preflight/authorize":
+                report = authorize_execution_preflight(
+                    str(payload.get("session_id") or ""),
+                    str(payload.get("confirmation_text") or ""),
+                )
+                self._json({"ok": True, "preflight": report, "executed": False, "execution_enabled": False})
+                return
+            if path == "/actions/preflight/consume":
+                consumed = consume_execution_authorization(str(payload.get("authorization_id") or ""))
+                self._json({"ok": True, "grant": consumed, "executed": False, "mode": "supervised_submit"})
+                return
+            if path == "/actions/preflight/preview":
+                preview = preview_execution_authorization(str(payload.get("authorization_id") or ""))
+                self._json({"ok": True, "preview": preview})
+                return
+            if path == "/actions/execution/result":
+                action = record_execution_result(str(payload.get("action_id") or ""), payload.get("result") or {})
+                self._json({"ok": True, "action": action})
+                return
+            if path == "/actions/execution/verify":
+                verification = verify_execution_result(str(payload.get("action_id") or ""))
+                self._json({"ok": True, "verification": verification})
                 return
             if path == "/scan-status":
                 self._json({"ok": True, "scan": save_scan_status(payload)})

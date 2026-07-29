@@ -269,7 +269,7 @@
 
       <section class="module-section wide-module automation-section" data-owner="投放运营">
         <div class="section-heading"><h3>自动化投放准备度</h3><span id="automation-status">影子模式</span></div>
-        <p class="section-intro">先筛出可进入自动执行器的计划，再完成账号、计划 ID、数据质量、人工授权和执行前回读。当前版本推进到执行前检查，不会自动修改千川。</p>
+        <p class="section-intro">先筛出可进入执行器的计划，再完成账号、计划 ID、数据质量、人工授权和执行前回读。首批只允许受监督降低单计划预算，并在提交后自动回读验收。</p>
         <div class="automation-path" aria-label="自动化投放演进路径">
           <div class="done" data-automation-stage="diagnosis"><strong>1</strong><span>诊断建议</span></div>
           <div class="current" data-automation-stage="qualification"><strong>2</strong><span>资格校验</span></div>
@@ -291,6 +291,7 @@
           <p id="preflight-next">首批只检查降低预算动作，不开放自动放量。</p>
           <footer>
             <button id="preflight-reread" type="button">读取当前千川页并复核</button>
+            <button id="preflight-authorize" type="button" hidden>最终确认并生成授权</button>
             <button id="preflight-stop" type="button" class="danger">紧急停止</button>
           </footer>
         </article>

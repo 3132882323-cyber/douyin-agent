@@ -132,12 +132,155 @@
     return { ok: true, page_type: data.page_type, quality: data.quality, account: data.account, bridge: response };
   }
 
+  function normalizedNumber(value) {
+    const parsed = Number(String(value ?? "").replace(/[^\d.-]/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function visible(element) {
+    return Boolean(element && element.getClientRects().length > 0);
+  }
+
+  async function waitFor(check, timeoutMs = 8000, intervalMs = 200) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const value = check();
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return null;
+  }
+
+  function probeBudgetExecution(request) {
+    if (request?.operation_type !== "adjust_budget" || request?.mode !== "supervised_submit") {
+      throw new Error("当前页面执行器只支持受监督降低预算。");
+    }
+    const account = detectAccountContext();
+    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    const planId = String(request.plan_id || "").trim();
+    const planName = String(request.plan_name || "").trim();
+    const expected = Number(request.expected_current_value);
+    const target = Number(request.target_value);
+    if (!planId || !planName || !Number.isFinite(expected)) throw new Error("授权缺少计划身份或当前预算。");
+    if (!Number.isFinite(target) || target <= 0 || target >= expected || (expected - target) / expected > 0.30) {
+      throw new Error("目标预算不符合首批止损范围。");
+    }
+    const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']"))
+      .filter(visible);
+    const matches = rows.filter((row) => {
+      const text = String(row.innerText || "").replace(/\s+/g, " ");
+      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
+      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+    });
+    if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止执行。" : "当前页面未找到授权计划，请打开对应计划列表。");
+    const row = matches[0];
+    const budgetInputs = Array.from(row.querySelectorAll("input")).filter((input) => {
+      if (!visible(input) || input.disabled) return false;
+      const label = `${input.getAttribute("aria-label") || ""} ${input.getAttribute("placeholder") || ""}`;
+      return /预算/.test(label) && Math.abs((normalizedNumber(input.value) ?? NaN) - expected) <= 0.01;
+    });
+    if (budgetInputs.length !== 1) throw new Error(budgetInputs.length ? "发现多个预算输入框，已停止执行。" : "未找到与授权当前预算一致的输入框。");
+    const scope = budgetInputs[0].closest("[role='dialog'], [class*='modal'], [class*='drawer']") || row;
+    const submitButtons = Array.from(scope.querySelectorAll("button")).filter((button) => (
+      visible(button)
+      && /^(确认|确定|保存|提交)$/.test(String(button.innerText || button.textContent || "").trim())
+      && !button.disabled
+      && button.getAttribute("aria-disabled") !== "true"
+    ));
+    if (submitButtons.length !== 1) throw new Error(submitButtons.length ? "发现多个提交按钮，已停止执行。" : "未找到唯一提交按钮。");
+    return { ok: true, ready: true, plan_id: planId, current_value: expected, target_value: target };
+  }
+
+  async function supervisedBudgetSubmit(request) {
+    probeBudgetExecution(request);
+    if (request?.operation_type !== "adjust_budget" || request?.mode !== "supervised_submit") {
+      throw new Error("当前页面执行器只支持受监督降低预算。");
+    }
+    const account = detectAccountContext();
+    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    const planId = String(request.plan_id || "").trim();
+    const planName = String(request.plan_name || "").trim();
+    if (!planId || !planName) throw new Error("授权缺少计划唯一 ID 或名称。");
+    const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']"))
+      .filter((row) => row.getClientRects().length > 0);
+    const matches = rows.filter((row) => {
+      const text = String(row.innerText || "").replace(/\s+/g, " ");
+      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
+      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+    });
+    if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止辅助填写。" : "当前页面未找到授权计划，请打开对应计划列表。");
+    const row = matches[0];
+    const inputs = Array.from(row.querySelectorAll("input")).filter((input) => input.getClientRects().length > 0 && !input.disabled);
+    const expected = Number(request.expected_current_value);
+    const budgetInput = inputs.find((input) => {
+      const label = `${input.getAttribute("aria-label") || ""} ${input.getAttribute("placeholder") || ""}`;
+      return /预算/.test(label) && Math.abs((normalizedNumber(input.value) ?? NaN) - expected) <= 0.01;
+    });
+    if (!budgetInput) throw new Error("未找到与授权当前预算一致的输入框，页面未做任何修改。");
+    const target = Number(request.target_value);
+    if (!Number.isFinite(target) || target <= 0 || target >= expected || (expected - target) / expected > 0.30) {
+      throw new Error("目标预算不符合首批止损范围。");
+    }
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) throw new Error("浏览器不支持安全填写预算。");
+    setter.call(budgetInput, String(target));
+    budgetInput.dispatchEvent(new Event("input", { bubbles: true }));
+    budgetInput.dispatchEvent(new Event("change", { bubbles: true }));
+    budgetInput.focus();
+    budgetInput.style.outline = "3px solid #f59e0b";
+    budgetInput.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const submitScope = budgetInput.closest("[role='dialog'], [class*='modal'], [class*='drawer']") || row;
+    const buttons = Array.from(submitScope.querySelectorAll("button")).filter(visible);
+    const submitButtons = buttons.filter((button) => /^(确认|确定|保存|提交)$/.test(String(button.innerText || button.textContent || "").trim())
+      && !button.disabled && button.getAttribute("aria-disabled") !== "true");
+    if (submitButtons.length !== 1) {
+      setter.call(budgetInput, String(expected));
+      budgetInput.dispatchEvent(new Event("input", { bubbles: true }));
+      throw new Error(submitButtons.length ? "发现多个提交按钮，已恢复原预算并停止。" : "未找到唯一提交按钮，已恢复原预算并停止。");
+    }
+    submitButtons[0].click();
+    const successObserved = await waitFor(() => {
+      const notices = Array.from(document.querySelectorAll(
+        "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
+      )).filter(visible);
+      return notices.some((item) => /成功|已保存|修改完成|设置完成/.test(String(item.innerText || item.textContent || "")));
+    });
+    if (!successObserved) {
+      throw new Error("已点击平台提交，但未读取到成功回执；请立即在千川核对，系统不会重复提交。");
+    }
+    return {
+      ok: true,
+      mode: "supervised_submit",
+      plan_id: planId,
+      target_value: target,
+      submitted: true,
+      platform_success_observed: true,
+    };
+  }
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type !== "collect-now") return false;
-    capture(message.reason || "manual")
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
-    return true;
+    if (message.type === "collect-now") {
+      capture(message.reason || "manual")
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+      return true;
+    }
+    if (message.type === "qianchuan-supervised-submit") {
+      supervisedBudgetSubmit(message.request)
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, error: error.message || String(error), submitted: false }));
+      return true;
+    }
+    if (message.type === "qianchuan-execution-probe") {
+      try {
+        sendResponse(probeBudgetExecution(message.request));
+      } catch (error) {
+        sendResponse({ ok: false, ready: false, error: error.message || String(error) });
+      }
+      return true;
+    }
+    return false;
   });
 
   setTimeout(() => capture("page-load").catch(() => {}), RENDER_DELAY);

@@ -14,6 +14,8 @@ Please open a GitHub security advisory for vulnerabilities involving data exposu
 
 ## Execution boundary
 
-The open-source version may create and locally confirm Qianchuan operation drafts, but its execution layer is disabled. Confirmation only writes a local audit record. It does not click or submit Qianchuan pages, or change budgets, inventory, plan status, orders, refunds, or account funds.
+The supervised executor is limited to a single Qianchuan budget reduction. It requires a fresh page reread, an exact final confirmation phrase, a 60-second single-use grant, a unique account and plan match, a readable current budget, and a reduction of no more than 30%. It submits only when exactly one supported platform confirmation button is present, records the platform receipt, then rereads the page to verify the target value.
+
+Budget increases, bulk changes, plan pause/resume, bids, inventory, orders, refunds and account funds remain disabled. A missing or ambiguous selector, account, plan, value, button or success receipt stops the executor rather than guessing or retrying.
 
 Budget drafts are blocked unless they bind a selected account, a platform plan ID, a fresh high-quality snapshot, a readable current value, and a policy-compliant target value. A missing budget must never fall back to a pause action.

@@ -655,6 +655,65 @@ async function syncCurrentPage(sourceOnly = "") {
   };
 }
 
+async function runAuthorizedExecution(authorizationId) {
+  const [tabs, stored] = await Promise.all([
+    querySourceTabs("qianchuan"),
+    chrome.storage.local.get(["recentQianchuanTab", "qianchuanSeed"]),
+  ]);
+  const selection = DianAgentScanPolicy.selectQianchuanSyncTab(
+    tabs,
+    null,
+    Number(stored.recentQianchuanTab?.tab_id),
+    Number(stored.qianchuanSeed?.tab_id),
+  );
+  if (!selection.tab?.id) throw new Error("未找到千川标签页，请打开对应计划列表");
+  const previewResponse = await fetch(`${BRIDGE_URL}/actions/preflight/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+    body: JSON.stringify({ authorization_id: authorizationId }),
+  });
+  const preview = await previewResponse.json();
+  if (!previewResponse.ok) throw new Error(preview.error || "执行授权预检失败");
+  const probe = await chrome.tabs.sendMessage(selection.tab.id, {
+    type: "qianchuan-execution-probe",
+    request: preview.preview?.execution_request,
+  });
+  if (!probe?.ok || !probe?.ready) throw new Error(probe?.error || "当前千川页面尚未满足执行条件");
+  const consumedResponse = await fetch(`${BRIDGE_URL}/actions/preflight/consume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+    body: JSON.stringify({ authorization_id: authorizationId }),
+  });
+  const consumed = await consumedResponse.json();
+  if (!consumedResponse.ok) throw new Error(consumed.error || "一次性授权消费失败");
+  const request = consumed.grant?.execution_request;
+  if (!request) throw new Error("授权中缺少执行参数");
+  let result;
+  try {
+    result = await chrome.tabs.sendMessage(selection.tab.id, { type: "qianchuan-supervised-submit", request });
+  } catch (error) {
+    result = { ok: false, submitted: false, error: error.message || String(error) };
+  }
+  await fetch(`${BRIDGE_URL}/actions/execution/result`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+    body: JSON.stringify({ action_id: consumed.grant.action_id, result }),
+  });
+  if (!result?.ok) throw new Error(result?.error || "预算提交失败");
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await collectFromTab("qianchuan", selection.tab, "post-execution-readback");
+  const verificationResponse = await fetch(`${BRIDGE_URL}/actions/execution/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+    body: JSON.stringify({ action_id: consumed.grant.action_id }),
+  });
+  const verification = await verificationResponse.json();
+  if (!verificationResponse.ok) throw new Error(verification.error || "执行后验收失败");
+  await chrome.tabs.update(selection.tab.id, { active: true });
+  if (Number.isInteger(selection.tab.windowId)) await chrome.windows.update(selection.tab.windowId, { focused: true });
+  return { ...result, verification: verification.verification };
+}
+
 async function storeAndPush(source, snapshot) {
   if (!SOURCE_PATTERNS[source] || !snapshot || typeof snapshot !== "object") {
     throw new Error("无效的数据快照");
@@ -775,6 +834,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "sync-current-qianchuan") {
       sendResponse({ ok: true, result: await syncCurrentPage("qianchuan") });
+      return;
+    }
+    if (message.type === "run-authorized-execution") {
+      sendResponse({ ok: true, result: await runAuthorizedExecution(String(message.authorization_id || "")) });
       return;
     }
     if (message.type === "start-full-scan") {
