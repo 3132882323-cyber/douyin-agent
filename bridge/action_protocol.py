@@ -128,7 +128,7 @@ def build_action_draft(
     blocked: list[dict[str, str]] = []
 
     if operation_type not in EXECUTABLE_OPERATIONS:
-        blocked.append(_block("NON_EXECUTABLE_ACTION", "该建议属于运营任务，当前不是可执行的千川资金动作。"))
+        blocked.append(_block("NON_EXECUTABLE_ACTION", "该建议属于运营任务，当前不是可执行的千川投放动作。"))
     if not account_key:
         blocked.append(_block("ACCOUNT_NOT_LOCKED", "未锁定千川账号，不能生成可确认的投放动作。"))
     if not target_id:
@@ -140,9 +140,9 @@ def build_action_draft(
     elif now_ms - captured_at_ms > ACTION_DRAFT_TTL_SECONDS * 1000:
         blocked.append(_block("DATA_STALE", "计划数据已超过 10 分钟，请重新同步后再确认。"))
     if int(quality_score or 0) < 70:
-        blocked.append(_block("DATA_QUALITY_LOW", "页面采集质量不足 70 分，暂不允许确认资金动作。"))
+        blocked.append(_block("DATA_QUALITY_LOW", "页面采集质量不足 70 分，暂不允许确认投放动作。"))
     if pagination_truncated:
-        blocked.append(_block("SNAPSHOT_TRUNCATED", "列表分页被截断，完整数据未采齐前禁止确认资金动作。"))
+        blocked.append(_block("SNAPSHOT_TRUNCATED", "列表分页被截断，完整数据未采齐前禁止确认投放动作。"))
     if confidence != "high":
         blocked.append(_block("CONFIDENCE_NOT_HIGH", "当前判断置信度不足，需补齐消耗、成交和 ROI 数据。"))
 
@@ -167,6 +167,8 @@ def build_action_draft(
     elif operation_type == "pause_plan":
         if str(current_value or "") not in {"投放中", "启用", "生效中", "运行中"}:
             blocked.append(_block("CURRENT_STATUS_UNVERIFIED", "未确认计划当前处于投放状态，禁止生成暂停动作。"))
+        if str(target_value or "") != "暂停":
+            blocked.append(_block("TARGET_STATUS_INVALID", "暂停动作的目标状态必须是「暂停」。"))
 
     risk_level = "high" if operation_type in {"pause_plan", "restore_budget"} or (change_percent or 0) > 0 else "medium"
     action: dict[str, Any] = {

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from action_protocol import build_action_draft, transition_action, validate_action_draft
-from insights import _clean_entity_name, _entity_identifier, _evidence_value
+from insights import _clean_entity_name, _entity_identifier, _evidence_value, _pick
 from storage import _atomic_json_write, _now_label, load_data
 import state
 
@@ -222,6 +222,12 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
             spend = _evidence_value(record, ("消耗", "总消耗", "广告消耗"))
             roi = _evidence_value(record, ("支付roi", "roi", "整体roi"))
             orders = _evidence_value(record, ("成交订单", "支付订单", "成交订单数", "订单数"))
+            _, status_raw = _pick(record, ("投放状态", "计划状态", "状态"))
+            status_text = str(status_raw or "")
+            status = next(
+                (label for label in ("投放中", "启用", "生效中", "运行中", "暂停", "已暂停", "未投放") if label in status_text),
+                status_text.strip().splitlines()[0] if status_text.strip() else "",
+            )
             captured_at_ms = int(
                 data.get("captured_at")
                 or (float((snapshot or {}).get("timestamp", 0)) * 1000)
@@ -233,6 +239,7 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
                 "plan_id": plan_id,
                 "plan_name": _clean_entity_name(next(iter(record.values()), ""), str(target.get("name") or plan_id)),
                 "current_value": budget,
+                "status": status,
                 "spend": spend,
                 "roi": roi,
                 "orders": orders,
@@ -305,9 +312,14 @@ def assess_execution_quota(action: dict[str, Any], *, now_ms: int | None = None)
     cooldown_ms = int(settings["execution_cooldown_minutes"]) * 60 * 1000
     blockers: list[dict[str, str]] = []
     recovery_exemption = action.get("operation_type") == "restore_budget"
+    pause_plan = action.get("operation_type") == "pause_plan"
     if not recovery_exemption and len(completed) >= int(settings["max_daily_execution_count"]):
         blockers.append({"code": "DAILY_EXECUTION_COUNT_LIMIT", "message": "该账户今日执行次数已达到上限。"})
-    if not recovery_exemption and sum(reductions) + proposed_reduction > float(settings["max_daily_budget_reduction"]):
+    if (
+        not recovery_exemption
+        and not pause_plan
+        and sum(reductions) + proposed_reduction > float(settings["max_daily_budget_reduction"])
+    ):
         blockers.append({"code": "DAILY_BUDGET_REDUCTION_LIMIT", "message": "该账户今日累计预算影响金额将超过上限。"})
     if not recovery_exemption and last_execution_ms and now_ms - last_execution_ms < cooldown_ms:
         remaining = max(1, int((cooldown_ms - (now_ms - last_execution_ms) + 59_999) // 60_000))
@@ -401,14 +413,20 @@ def start_execution_preflight(action_id: str) -> dict[str, Any]:
     current_value = change.get("current_value")
     target_value = change.get("target_value")
     operation_type = str(action.get("operation_type") or "")
-    if operation_type not in {"adjust_budget", "restore_budget"}:
-        raise ValueError("首批受监督执行只开放降低预算和恢复原预算。")
-    if not isinstance(current_value, (int, float)) or not isinstance(target_value, (int, float)):
-        raise ValueError("预算数据不完整，不能执行。")
-    if operation_type == "adjust_budget" and float(target_value) >= float(current_value):
-        raise ValueError("降低预算动作不能增加预算。")
-    if operation_type == "restore_budget" and float(target_value) <= float(current_value):
-        raise ValueError("恢复预算动作必须回到更高的原预算。")
+    if operation_type not in {"adjust_budget", "restore_budget", "pause_plan"}:
+        raise ValueError("受监督执行只开放降低预算、恢复原预算或单计划暂停。")
+    if operation_type == "pause_plan":
+        if str(current_value or "") not in {"投放中", "启用", "生效中", "运行中"}:
+            raise ValueError("计划当前状态未确认投放中，不能暂停。")
+        if str(target_value or "") != "暂停":
+            raise ValueError("暂停动作目标状态无效。")
+    else:
+        if not isinstance(current_value, (int, float)) or not isinstance(target_value, (int, float)):
+            raise ValueError("预算数据不完整，不能执行。")
+        if operation_type == "adjust_budget" and float(target_value) >= float(current_value):
+            raise ValueError("降低预算动作不能增加预算。")
+        if operation_type == "restore_budget" and float(target_value) <= float(current_value):
+            raise ValueError("恢复预算动作必须回到更高的原预算。")
     quota = assess_execution_quota(action)
     if not quota["allowed"]:
         raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
@@ -421,7 +439,7 @@ def start_execution_preflight(action_id: str) -> dict[str, Any]:
         "state": "awaiting_reread",
         "started_at_ms": now_ms,
         "expires_at_ms": now_ms + 3 * 60 * 1000,
-        "pilot_scope": "reduce_or_restore_budget",
+        "pilot_scope": "pause_plan" if operation_type == "pause_plan" else "reduce_or_restore_budget",
         "operation_type": operation_type,
         "current_value": current_value,
         "target_value": target_value,
@@ -468,8 +486,13 @@ def authorize_execution_preflight(session_id: str, confirmation_text: str) -> di
     if report.get("state") != "ready_for_final_confirmation":
         raise ValueError("执行前检查尚未全部通过，不能生成最终授权。")
     action = report.get("action") if isinstance(report.get("action"), dict) else {}
-    verb = "恢复预算" if session.get("operation_type") == "restore_budget" else "降低预算"
-    expected_text = f"确认{verb}至{action.get('target_value')}"
+    operation_type = str(session.get("operation_type") or action.get("operation_type") or "")
+    if operation_type == "pause_plan":
+        expected_text = f"确认暂停计划{action.get('plan_name') or ''}"
+    elif operation_type == "restore_budget":
+        expected_text = f"确认恢复预算至{action.get('target_value')}"
+    else:
+        expected_text = f"确认降低预算至{action.get('target_value')}"
     if str(confirmation_text or "").strip() != expected_text:
         raise ValueError(f"确认口令不一致，请完整输入：{expected_text}")
 
@@ -628,13 +651,22 @@ def verify_execution_result(action_id: str) -> dict[str, Any]:
         readback = _find_plan_readback(action)
         target_value = (action.get("change") or {}).get("target_value")
         submitted_at = int(action.get("execution_reported_at_ms") or 0)
-        matched = bool(
-            readback
-            and int(readback.get("captured_at_ms") or 0) > submitted_at
-            and isinstance(readback.get("current_value"), (int, float))
-            and isinstance(target_value, (int, float))
-            and abs(float(readback["current_value"]) - float(target_value)) <= 0.01
-        )
+        operation_type = str(action.get("operation_type") or "")
+        if operation_type == "pause_plan":
+            status = str((readback or {}).get("status") or "")
+            matched = bool(
+                readback
+                and int(readback.get("captured_at_ms") or 0) > submitted_at
+                and ("暂停" in status or status in {"未投放"})
+            )
+        else:
+            matched = bool(
+                readback
+                and int(readback.get("captured_at_ms") or 0) > submitted_at
+                and isinstance(readback.get("current_value"), (int, float))
+                and isinstance(target_value, (int, float))
+                and abs(float(readback["current_value"]) - float(target_value)) <= 0.01
+            )
         if matched and action.get("state") != "verified":
             action = transition_action(action, "verified")
             action["verified_at_ms"] = int(time.time() * 1000)
@@ -784,7 +816,50 @@ def build_execution_preflight_report() -> dict[str, Any]:
     started_at_ms = int(stored.get("started_at_ms") or 0)
     current_value = change.get("current_value")
     target_value = change.get("target_value")
-    observed = (readback or {}).get("current_value")
+    operation_type = str((action or {}).get("operation_type") if isinstance(action, dict) else "") or str(stored.get("operation_type") or "")
+    observed = (readback or {}).get("status" if operation_type == "pause_plan" else "current_value")
+    if operation_type == "pause_plan":
+        value_check = {
+            "id": "current_value_match",
+            "label": "当前投放状态未被其他人修改",
+            "passed": bool(observed and str(observed) == str(current_value or "")),
+            "detail": f"方案值 {current_value if current_value is not None else '--'}，页面值 {observed if observed is not None else '--'}",
+        }
+        scope_check = {
+            "id": "pilot_scope",
+            "label": "符合单计划暂停范围",
+            "passed": bool(
+                str(current_value or "") in {"投放中", "启用", "生效中", "运行中"}
+                and str(target_value or "") == "暂停"
+            ),
+            "detail": "仅允许暂停单个已投放计划；批量启停与放量仍关闭。",
+        }
+    else:
+        value_check = {
+            "id": "current_value_match",
+            "label": "当前预算未被其他人修改",
+            "passed": bool(
+                isinstance(observed, (int, float))
+                and isinstance(current_value, (int, float))
+                and abs(float(observed) - float(current_value)) <= 0.01
+            ),
+            "detail": f"方案值 {current_value if current_value is not None else '--'}，页面值 {observed if observed is not None else '--'}",
+        }
+        scope_check = {
+            "id": "pilot_scope",
+            "label": "符合止损、回滚或暂停范围",
+            "passed": bool(
+                isinstance(current_value, (int, float))
+                and isinstance(target_value, (int, float))
+                and float(current_value) > 0
+                and (
+                    0 < (float(current_value) - float(target_value)) / float(current_value) <= 0.30
+                    if action and action.get("operation_type") == "adjust_budget"
+                    else 0 < (float(target_value) - float(current_value)) / float(current_value) <= 0.50
+                )
+            ),
+            "detail": "降低预算不超过 30%；恢复预算必须绑定原执行记录且增幅不超过 50%。",
+        }
     checks = [
         {
             "id": "fresh_reread",
@@ -816,31 +891,8 @@ def build_execution_preflight_report() -> dict[str, Any]:
             "passed": bool(readback and not readback.get("pagination_truncated")),
             "detail": "列表超过采集页数上限，请补采后再执行。" if (readback or {}).get("pagination_truncated") else "列表完整或无需分页。",
         },
-        {
-            "id": "current_value_match",
-            "label": "当前预算未被其他人修改",
-            "passed": bool(
-                isinstance(observed, (int, float))
-                and isinstance(current_value, (int, float))
-                and abs(float(observed) - float(current_value)) <= 0.01
-            ),
-            "detail": f"方案值 {current_value if current_value is not None else '--'}，页面值 {observed if observed is not None else '--'}",
-        },
-        {
-            "id": "pilot_scope",
-            "label": "符合首批止损或回滚范围",
-            "passed": bool(
-                isinstance(current_value, (int, float))
-                and isinstance(target_value, (int, float))
-                and float(current_value) > 0
-                and (
-                    0 < (float(current_value) - float(target_value)) / float(current_value) <= 0.30
-                    if action and action.get("operation_type") == "adjust_budget"
-                    else 0 < (float(target_value) - float(current_value)) / float(current_value) <= 0.50
-                )
-            ),
-            "detail": "降低预算不超过 30%；恢复预算必须绑定原执行记录且增幅不超过 50%。",
-        },
+        value_check,
+        scope_check,
     ]
 
     if state == "authorization_consumed":
@@ -884,13 +936,13 @@ def build_execution_preflight_report() -> dict[str, Any]:
             "field": change.get("field"),
             "current_value": current_value,
             "target_value": target_value,
-            "operation_type": action.get("operation_type") if isinstance(action, dict) else "",
+            "operation_type": operation_type,
             "impact_preview": {
                 "budget_change": round(float(target_value) - float(current_value), 2) if isinstance(current_value, (int, float)) and isinstance(target_value, (int, float)) else None,
                 "change_percent": round((float(target_value) - float(current_value)) / float(current_value) * 100, 1) if isinstance(current_value, (int, float)) and isinstance(target_value, (int, float)) and float(current_value) else None,
                 "today_spend": ((action or {}).get("evidence_ref") or {}).get("spend") if isinstance((action or {}).get("evidence_ref"), dict) else None,
                 "daily_budget_impact_limit": load_agent_settings().get("max_daily_budget_reduction"),
-                "rollback_condition": "执行后页面验收成功，且当前预算仍等于本次目标值。",
+                "rollback_condition": "暂停后需在千川人工恢复；预算动作可在页面验收后生成原值回滚。",
             },
         },
         "readback": readback,
@@ -899,12 +951,12 @@ def build_execution_preflight_report() -> dict[str, Any]:
             "授权凭证已被原子消费，不能再次使用；请等待平台提交回执和执行后页面验收。"
             if state == "authorization_consumed"
             else
-            "已生成 60 秒单次授权凭证；受监督执行器将只提交本次降低预算动作。"
+            ("已生成 60 秒单次授权凭证；受监督执行器将只提交本次单计划暂停。" if operation_type == "pause_plan" else "已生成 60 秒单次授权凭证；受监督执行器将只提交本次降低预算动作。")
             if state == "authorized"
             else
-            "全部闸门已通过；输入与目标预算绑定的最终确认口令后，受监督执行器将提交本次降低预算动作。"
+            ("全部闸门已通过；输入与计划名称绑定的最终确认口令后，受监督执行器将提交暂停。" if operation_type == "pause_plan" else "全部闸门已通过；输入与目标预算绑定的最终确认口令后，受监督执行器将提交本次降低预算动作。")
             if state == "ready_for_final_confirmation"
-            else "重新读取当前千川页面，系统会自动复核账号、计划、预算和质量。"
+            else ("重新读取当前千川页面，系统会自动复核账号、计划、投放状态和质量。" if operation_type == "pause_plan" else "重新读取当前千川页面，系统会自动复核账号、计划、预算和质量。")
             if state == "awaiting_reread"
             else "停止当前会话后重新生成方案。"
             if state in {"blocked", "expired"}
@@ -941,25 +993,46 @@ def build_shadow_execution_report() -> dict[str, Any]:
                 status_label = "等待重新读取"
                 detail = "已记录人工执行声明；请打开对应千川计划页面并重新读取。"
             else:
-                observed = readback.get("current_value")
-                current = change.get("current_value")
-                target_value = change.get("target_value")
-                if isinstance(observed, (int, float)) and isinstance(target_value, (int, float)) and abs(float(observed) - float(target_value)) <= 0.01:
-                    status = "matched"
-                    status_label = "回读已匹配"
-                    detail = f"最新页面预算为 {observed:g}，与确认目标一致。"
-                elif isinstance(observed, (int, float)) and isinstance(current, (int, float)) and abs(float(observed) - float(current)) <= 0.01:
-                    status = "not_changed"
-                    status_label = "页面尚未变化"
-                    detail = f"最新页面预算仍为 {observed:g}，尚未观察到确认方案生效。"
-                elif isinstance(observed, (int, float)):
-                    status = "changed_differently"
-                    status_label = "检测到其他修改"
-                    detail = f"最新页面预算为 {observed:g}，与确认目标 {target_value} 不一致，请人工核对。"
+                if action.get("operation_type") == "pause_plan":
+                    observed_status = str(readback.get("status") or "")
+                    target_value = change.get("target_value")
+                    current = change.get("current_value")
+                    if "暂停" in observed_status or observed_status == str(target_value or ""):
+                        status = "matched"
+                        status_label = "回读已匹配"
+                        detail = f"最新页面投放状态为 {observed_status}，与确认目标一致。"
+                    elif observed_status == str(current or ""):
+                        status = "not_changed"
+                        status_label = "页面尚未变化"
+                        detail = f"最新页面投放状态仍为 {observed_status or '--'}。"
+                    elif observed_status:
+                        status = "changed_differently"
+                        status_label = "检测到其他修改"
+                        detail = f"最新页面投放状态为 {observed_status}，与确认目标 {target_value} 不一致。"
+                    else:
+                        status = "unverifiable"
+                        status_label = "无法核验"
+                        detail = "已读取计划，但没有获得可比较的投放状态。"
                 else:
-                    status = "unverifiable"
-                    status_label = "无法核验"
-                    detail = "已读取计划，但没有获得可比较的当前预算。"
+                    observed = readback.get("current_value")
+                    current = change.get("current_value")
+                    target_value = change.get("target_value")
+                    if isinstance(observed, (int, float)) and isinstance(target_value, (int, float)) and abs(float(observed) - float(target_value)) <= 0.01:
+                        status = "matched"
+                        status_label = "回读已匹配"
+                        detail = f"最新页面预算为 {observed:g}，与确认目标一致。"
+                    elif isinstance(observed, (int, float)) and isinstance(current, (int, float)) and abs(float(observed) - float(current)) <= 0.01:
+                        status = "not_changed"
+                        status_label = "页面尚未变化"
+                        detail = f"最新页面预算仍为 {observed:g}，尚未观察到确认方案生效。"
+                    elif isinstance(observed, (int, float)):
+                        status = "changed_differently"
+                        status_label = "检测到其他修改"
+                        detail = f"最新页面预算为 {observed:g}，与确认目标 {target_value} 不一致，请人工核对。"
+                    else:
+                        status = "unverifiable"
+                        status_label = "无法核验"
+                        detail = "已读取计划，但没有获得可比较的当前预算。"
         items.append(
             {
                 "action_id": action_id,

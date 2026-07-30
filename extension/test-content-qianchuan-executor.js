@@ -31,10 +31,25 @@ const submitButton = {
   getAttribute: () => null,
   click() { submitted = true; },
 };
-const row = {
-  innerText: "计划ID plan_123 春季止损计划 日预算 500",
+const pauseButton = {
+  innerText: "暂停",
+  textContent: "暂停",
+  disabled: false,
   getClientRects: () => [1],
-  querySelectorAll: (selector) => selector === "input" ? [input] : selector === "button" ? [submitButton] : [],
+  getAttribute: () => null,
+  click() { submitted = true; },
+};
+const row = {
+  innerText: "计划ID plan_123 春季止损计划 日预算 500 投放中",
+  getClientRects: () => [1],
+  querySelectorAll: (selector) => {
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton, pauseButton];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, pauseButton];
+    }
+    return [];
+  },
 };
 const context = {
   URLSearchParams,
@@ -120,6 +135,25 @@ function send(request, type = "qianchuan-supervised-submit") {
   assert.equal(mismatch.ok, false);
   assert.match(mismatch.error, /当前预算一致/);
   assert.equal(input.value, "450");
+
+  submitted = false;
+  const pauseRequest = {
+    operation_type: "pause_plan",
+    mode: "supervised_submit",
+    account_key: accountKey,
+    plan_id: "plan_123",
+    plan_name: "春季止损计划",
+    expected_current_value: "投放中",
+    target_value: "暂停",
+  };
+  const pauseProbe = await send(pauseRequest, "qianchuan-execution-probe");
+  assert.equal(pauseProbe.ready, true);
+  const pauseResult = await send(pauseRequest);
+  assert.equal(pauseResult.ok, true);
+  assert.equal(pauseResult.submitted, true);
+  assert.equal(pauseResult.platform_success_observed, true);
+  assert.equal(pauseResult.target_value, "暂停");
+
   console.log("content-qianchuan executor tests passed");
 })().catch((error) => {
   console.error(error);

@@ -370,25 +370,39 @@ def _action_params_for_plan(
     record = evidence.get("_record") if isinstance(evidence.get("_record"), dict) else {}
     budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
     plan_id = _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id"))
+    _, status_raw = _pick(record, ("投放状态", "计划状态", "状态"))
+    status_text = str(status_raw or "")
+    active_status = next((label for label in ("投放中", "启用", "生效中", "运行中") if label in status_text), "")
     operation_type = "replace_creative"
     operation_label = "优化素材"
     field = "素材"
+    current_value: Any = None
     target_value: Any = None
 
-    if action_type in {"stop_loss", "reduce_budget", "scale_cautiously"}:
+    if action_type == "stop_loss" and active_status:
+        # Hard stop-loss prefers pausing the single plan when status is verified.
+        operation_type = "pause_plan"
+        operation_label = "暂停计划"
+        field = "投放状态"
+        current_value = active_status
+        target_value = "暂停"
+    elif action_type in {"stop_loss", "reduce_budget", "scale_cautiously"}:
         operation_type = "adjust_budget"
         field = "预算"
         percent = -30 if action_type == "stop_loss" else -20 if action_type == "reduce_budget" else 10
         operation_label = f"{'降低' if percent < 0 else '增加'}预算 {abs(percent)}%"
+        current_value = budget
         target_value = round(budget * (1 + percent / 100), 2) if budget and budget > 0 else None
 
-    current_label = f"{budget:g}" if budget and budget > 0 else "待重新读取"
-    target_label = f"{target_value:g}" if isinstance(target_value, (int, float)) else "待重新计算"
-    copy_text = (
-        f"{plan} | 预算 {current_label} → {target_label}"
-        if operation_type == "adjust_budget"
-        else f"{plan} | 优化前 3 秒表达与卖点"
-    )
+    if operation_type == "pause_plan":
+        copy_text = f"{plan} | 投放状态 {current_value} → 暂停"
+    elif operation_type == "adjust_budget":
+        current_label = f"{budget:g}" if budget and budget > 0 else "待重新读取"
+        target_label = f"{target_value:g}" if isinstance(target_value, (int, float)) else "待重新计算"
+        copy_text = f"{plan} | 预算 {current_label} → {target_label}"
+    else:
+        copy_text = f"{plan} | 优化前 3 秒表达与卖点"
+        current_value = budget
     compact_evidence = {
         key: evidence.get(key)
         for key in ("spend", "roi", "roi_target", "orders", "ctr")
@@ -404,7 +418,7 @@ def _action_params_for_plan(
         account_key=str(entry.get("account_key") or ""),
         account_label=str(entry.get("account_label") or ""),
         field=field,
-        current_value=budget,
+        current_value=current_value,
         target_value=target_value,
         source=str(entry.get("source") or ""),
         page_type=str(entry.get("page_type") or ""),
@@ -595,7 +609,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
                     **base,
                     "level": "high",
                     "action_type": "stop_loss",
-                    "suggestion": "先降预算 30% 或暂停新增消耗，检查素材、人群和商品承接后再恢复。",
+                    "suggestion": "建议暂停该计划，停止新增消耗后再检查素材、人群和商品承接。",
                     "reason": f"消耗已达到 {spend:g}，但当前未观察到成交。",
                     "action_params": _action_params_for_plan(plan, "stop_loss", evidence, entry, confidence),
                 }
@@ -713,10 +727,17 @@ def build_automation_readiness(recommendations: list[dict[str, Any]] | None = No
         current_value = change.get("current_value")
         target_value = change.get("target_value")
         pilot_eligible = (
-            action.get("operation_type") == "adjust_budget"
-            and isinstance(current_value, (int, float))
-            and isinstance(target_value, (int, float))
-            and float(target_value) < float(current_value)
+            (
+                action.get("operation_type") == "adjust_budget"
+                and isinstance(current_value, (int, float))
+                and isinstance(target_value, (int, float))
+                and float(target_value) < float(current_value)
+            )
+            or (
+                action.get("operation_type") == "pause_plan"
+                and str(current_value or "") in {"投放中", "启用", "生效中", "运行中"}
+                and str(target_value or "") == "暂停"
+            )
         )
         if readiness["status"] in {"confirmable", "preflight_ready"} and not pilot_eligible:
             readiness = {
@@ -724,11 +745,11 @@ def build_automation_readiness(recommendations: list[dict[str, Any]] | None = No
                 "status": "blocked",
                 "status_label": "试运行暂不开放",
                 "stage": "qualification",
-                "next_step": "首批受监督执行只开放降低预算止损；放量和其他动作继续人工处理。",
+                "next_step": "受监督执行只开放降低预算止损或单计划暂停；放量和批量动作继续人工处理。",
                 "can_enter_preflight": False,
                 "blocked_reasons": [
                     *readiness.get("blocked_reasons", []),
-                    {"code": "PILOT_SCOPE_RESTRICTED", "message": "首批只允许降低预算，不开放自动放量。"},
+                    {"code": "PILOT_SCOPE_RESTRICTED", "message": "试运行只允许降低预算或暂停单计划，不开放自动放量。"},
                 ],
             }
         items.append(
@@ -1368,7 +1389,8 @@ def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, A
             "estimated_savings_high": saving_high,
             "estimated_savings_label": f"预计可避免继续无效消耗 ¥{saving_low:g}–¥{saving_high:g}" if saving_high else "暂不估算可避免消耗",
             "execution_mode": mode,
-            "can_start_execution": mode == "supervised" and action_type in {"stop_loss", "reduce_budget"},
+            "can_start_execution": mode == "supervised" and action_type in {"stop_loss", "reduce_budget"}
+            and str((item.get("action_params") or {}).get("operation_type") or "") in {"adjust_budget", "pause_plan"},
         })
     bucket_order = {"must_handle": 0, "observe": 1, "data_missing": 2}
     queue.sort(key=lambda item: (bucket_order[item["bucket"]], -item["risk_score"], -(item.get("evidence", {}).get("spend") or 0)))

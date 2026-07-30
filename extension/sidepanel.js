@@ -828,7 +828,7 @@ function renderExecutionPreflight(report = {}) {
     body.append(title, detail); row.append(mark, body);
     return row;
   }));
-  document.getElementById("preflight-next").textContent = report.next_step || "首批只检查降低预算动作，不开放自动放量。";
+  document.getElementById("preflight-next").textContent = report.next_step || "只检查降低预算或单计划暂停，不开放自动放量。";
   const reread = document.getElementById("preflight-reread");
   const authorize = document.getElementById("preflight-authorize");
   const stop = document.getElementById("preflight-stop");
@@ -836,6 +836,7 @@ function renderExecutionPreflight(report = {}) {
   reread.disabled = state === "expired";
   authorize.hidden = state !== "ready_for_final_confirmation";
   authorize.dataset.targetValue = action.target_value ?? "";
+  authorize.dataset.planName = action.plan_name || "";
   authorize.dataset.operationType = action.operation_type || "adjust_budget";
   stop.disabled = !currentPreflightSession || ["stopped", "expired"].includes(state);
 }
@@ -1352,8 +1353,12 @@ document.getElementById("preflight-stop").addEventListener("click", async (event
 document.getElementById("preflight-authorize").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   if (!currentPreflightSession?.session_id) return;
-  const verb = button.dataset.operationType === "restore_budget" ? "恢复预算" : "降低预算";
-  const confirmationText = `确认${verb}至${button.dataset.targetValue || ""}`;
+  const verb = button.dataset.operationType === "pause_plan"
+    ? "暂停计划"
+    : button.dataset.operationType === "restore_budget" ? "恢复预算" : "降低预算";
+  const confirmationText = button.dataset.operationType === "pause_plan"
+    ? `确认暂停计划${button.dataset.planName || ""}`
+    : `确认${verb}至${button.dataset.targetValue || ""}`;
   const entered = window.prompt(`这是最后一次人工授权，不会立即修改千川。\n请输入：${confirmationText}`, "");
   if (entered === null) return;
   button.disabled = true;
@@ -1372,9 +1377,10 @@ document.getElementById("preflight-authorize").addEventListener("click", async (
         type: "run-authorized-execution",
         authorization_id: authorizationId,
       });
-      if (!execution?.ok) throw new Error(execution?.error || "预算受监督执行失败");
+      if (!execution?.ok) throw new Error(execution?.error || "受监督执行失败");
+      const pause = button.dataset.operationType === "pause_plan";
       document.getElementById("preflight-next").textContent = execution.result?.verification?.verified
-        ? "千川预算已提交，并通过执行后页面回读验收。"
+        ? (pause ? "千川计划已暂停，并通过执行后页面回读验收。" : "千川预算已提交，并通过执行后页面回读验收。")
         : "平台已返回提交成功，但执行后页面回读尚未匹配；请勿重复执行，先重新同步当前千川页。";
     }
   } catch (error) {

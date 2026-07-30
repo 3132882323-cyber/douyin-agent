@@ -152,9 +152,86 @@
     return null;
   }
 
+  function findAuthorizedPlanRow(request) {
+    const planId = String(request.plan_id || "").trim();
+    const planName = String(request.plan_name || "").trim();
+    if (!planId || !planName) throw new Error("授权缺少计划唯一 ID 或名称。");
+    const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']"))
+      .filter(visible);
+    const matches = rows.filter((row) => {
+      const text = String(row.innerText || "").replace(/\s+/g, " ");
+      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
+      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+    });
+    if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止执行。" : "当前页面未找到授权计划，请打开对应计划列表。");
+    return matches[0];
+  }
+
+  function findPauseControl(row, expectedStatus) {
+    const switches = Array.from(row.querySelectorAll("button, [role='switch'], input[type='checkbox']")).filter((node) => {
+      if (!visible(node) || node.disabled || node.getAttribute("aria-disabled") === "true") return false;
+      const label = `${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`;
+      const pressed = node.getAttribute("aria-checked") === "true" || node.getAttribute("aria-pressed") === "true" || node.checked === true;
+      if (/暂停|停用/.test(label)) return true;
+      if (/启用|投放|开启/.test(label) && pressed) return true;
+      if ((node.getAttribute("role") === "switch" || node.type === "checkbox") && pressed) return true;
+      return false;
+    });
+    if (expectedStatus && !String(row.innerText || "").includes(expectedStatus)) {
+      throw new Error("当前计划投放状态与授权不一致。");
+    }
+    if (switches.length !== 1) {
+      throw new Error(switches.length ? "发现多个启停控件，已停止执行。" : "未找到唯一暂停控件。");
+    }
+    return switches[0];
+  }
+
+  function probePauseExecution(request) {
+    if (request?.operation_type !== "pause_plan" || request?.mode !== "supervised_submit") {
+      throw new Error("当前页面执行器只支持受监督单计划暂停。");
+    }
+    const account = detectAccountContext();
+    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    if (String(request.target_value || "") !== "暂停") throw new Error("暂停目标状态无效。");
+    const expected = String(request.expected_current_value || "");
+    if (!["投放中", "启用", "生效中", "运行中"].includes(expected)) {
+      throw new Error("授权缺少已投放状态。");
+    }
+    const row = findAuthorizedPlanRow(request);
+    findPauseControl(row, expected);
+    return { ok: true, ready: true, plan_id: String(request.plan_id || ""), current_value: expected, target_value: "暂停" };
+  }
+
+  async function supervisedPauseSubmit(request) {
+    probePauseExecution(request);
+    const account = detectAccountContext();
+    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    const row = findAuthorizedPlanRow(request);
+    const control = findPauseControl(row, String(request.expected_current_value || ""));
+    control.click();
+    const successObserved = await waitFor(() => {
+      const notices = Array.from(document.querySelectorAll(
+        "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
+      )).filter(visible);
+      return notices.some((item) => /成功|已保存|已暂停|修改完成|设置完成/.test(String(item.innerText || item.textContent || "")));
+    });
+    if (!successObserved) {
+      throw new Error("已点击平台暂停，但未读取到成功回执；请立即在千川核对，系统不会重复提交。");
+    }
+    return {
+      ok: true,
+      mode: "supervised_submit",
+      plan_id: String(request.plan_id || ""),
+      target_value: "暂停",
+      submitted: true,
+      platform_success_observed: true,
+    };
+  }
+
   function probeBudgetExecution(request) {
+    if (request?.operation_type === "pause_plan") return probePauseExecution(request);
     if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
-      throw new Error("当前页面执行器只支持受监督降低预算或恢复原预算。");
+      throw new Error("当前页面执行器只支持受监督降低预算、恢复原预算或单计划暂停。");
     }
     const account = detectAccountContext();
     if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
@@ -196,9 +273,10 @@
   }
 
   async function supervisedBudgetSubmit(request) {
+    if (request?.operation_type === "pause_plan") return supervisedPauseSubmit(request);
     probeBudgetExecution(request);
     if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
-      throw new Error("当前页面执行器只支持受监督降低预算或恢复原预算。");
+      throw new Error("当前页面执行器只支持受监督降低预算、恢复原预算或单计划暂停。");
     }
     const account = detectAccountContext();
     if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");

@@ -408,6 +408,85 @@ class SnapshotStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不能增加预算"):
             http_receiver.start_execution_preflight(confirmed["action_id"])
 
+    def test_supervised_pause_plan_preflight_uses_status_gates(self) -> None:
+        http_receiver.save_agent_settings({"execution_mode": "supervised"})
+        captured_at = int(time.time() * 1000)
+        snapshot = {
+            "schema_version": 2,
+            "page_type": "campaigns",
+            "captured_at": captured_at,
+            "account": {"key": "acct_pause1", "label": "暂停试运行账号"},
+            "quality": {"score": 92, "row_count": 1},
+            "tables": [
+                {
+                    "headers": ["计划ID", "计划名称", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_pause1", "暂停检查计划", "投放中", "500", "300", "0.20", "0"]],
+                }
+            ],
+        }
+        http_receiver.save_data("qianchuan", snapshot)
+        draft = http_receiver.build_action_draft(
+            operation_type="pause_plan",
+            operation_label="暂停计划",
+            target_kind="qianchuan_plan",
+            target_id="plan_pause1",
+            target_name="暂停检查计划",
+            account_key="acct_pause1",
+            account_label="暂停试运行账号",
+            field="投放状态",
+            current_value="投放中",
+            target_value="暂停",
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=captured_at,
+            quality_score=92,
+            confidence="high",
+            evidence={"spend": 300.0, "roi": 0.2, "orders": 0.0},
+        )
+        confirmed = http_receiver.confirm_action_draft(draft)
+        awaiting = http_receiver.start_execution_preflight(confirmed["action_id"])
+        self.assertEqual("pause_plan", awaiting["session"]["pilot_scope"])
+        later = {
+            **snapshot,
+            "captured_at": captured_at + 5_000,
+            "tables": [
+                {
+                    "headers": ["计划ID", "计划名称", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_pause1", "暂停检查计划", "投放中", "500", "300", "0.20", "0"]],
+                }
+            ],
+        }
+        http_receiver.save_data("qianchuan", later)
+        ready = http_receiver.build_execution_preflight_report()
+        self.assertEqual("ready_for_final_confirmation", ready["state"])
+        self.assertTrue(all(item["passed"] for item in ready["checks"]))
+        authorized = http_receiver.authorize_execution_preflight(
+            ready["session"]["session_id"],
+            "确认暂停计划暂停检查计划",
+        )
+        self.assertEqual("authorized", authorized["state"])
+        consumed = http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
+        self.assertEqual("pause_plan", consumed["execution_request"]["operation_type"])
+        self.assertEqual("暂停", consumed["execution_request"]["target_value"])
+        http_receiver.record_execution_result(
+            confirmed["action_id"],
+            {"ok": True, "submitted": True, "platform_success_observed": True, "target_value": "暂停"},
+        )
+        paused = {
+            **later,
+            "captured_at": captured_at + 10_000,
+            "tables": [
+                {
+                    "headers": ["计划ID", "计划名称", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_pause1", "暂停检查计划", "已暂停", "500", "300", "0.20", "0"]],
+                }
+            ],
+        }
+        http_receiver.save_data("qianchuan", paused)
+        verification = http_receiver.verify_execution_result(confirmed["action_id"])
+        self.assertTrue(verification["verified"])
+        self.assertEqual("verified", verification["state"])
+
     def test_execution_quota_blocks_daily_count_budget_impact_and_cooldown(self) -> None:
         now_ms = int(time.time() * 1000)
         http_receiver.save_agent_settings({
