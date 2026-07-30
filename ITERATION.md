@@ -163,4 +163,4 @@ python -m unittest discover -s . -p "test_*.py"
 | 2026-07-30 | `136d238` | P0：截断阻断、Bridge Bearer、工作台补采 |
 | 2026-07-30 | `8d5754f` | P1：可配置深度页数、fixture 契约、连续质量骤降告警、CI |
 | 2026-07-30 | `071bfef` | P2 首刀：storage 拆分、网页/API 预算对账降置信度 |
-| 2026-07-30 | `7476f98` | P2 续：抽出 `insights.py` + `sidepanel-scan.js` |
+| 2026-07-30 | `1e9b6fb` | P2 续：抽出 `insights.py` + `sidepanel-scan.js` |
