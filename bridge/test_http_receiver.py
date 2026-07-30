@@ -203,6 +203,7 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual("preflight_ready", report["items"][0]["status"])
 
     def test_supervised_preflight_requires_new_readback_and_can_be_stopped(self) -> None:
+        http_receiver.save_agent_settings({"execution_mode": "supervised"})
         captured_at = int(time.time() * 1000)
         snapshot = {
             "schema_version": 2,
@@ -307,6 +308,7 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertTrue(rollback_preflight["session"]["quota"]["recovery_exemption"])
 
     def test_supervised_preflight_rejects_budget_increase(self) -> None:
+        http_receiver.save_agent_settings({"execution_mode": "supervised"})
         now_ms = int(time.time() * 1000)
         draft = http_receiver.build_action_draft(
             operation_type="adjust_budget",

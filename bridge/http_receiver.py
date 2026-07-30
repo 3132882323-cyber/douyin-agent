@@ -73,6 +73,7 @@ DEFAULT_AGENT_SETTINGS = {
     "max_daily_execution_count": 3,
     "max_daily_budget_reduction": 300.0,
     "execution_cooldown_minutes": 30,
+    "execution_mode": "observe",
 }
 
 # Thread-safe state mutation lock (prevents concurrent read-modify-write races)
@@ -782,6 +783,10 @@ def save_agent_settings(values: dict[str, Any]) -> dict[str, Any]:
         max(1.0, float(next_settings["max_daily_budget_reduction"])),
     )
     next_settings["execution_cooldown_minutes"] = min(1440, max(0, int(next_settings["execution_cooldown_minutes"])))
+    execution_mode = str(next_settings.get("execution_mode") or "observe")
+    if execution_mode not in {"observe", "shadow", "supervised"}:
+        raise ValueError("execution_mode must be observe, shadow or supervised")
+    next_settings["execution_mode"] = execution_mode
     account_key = str(next_settings.get("qianchuan_account_key") or "").lower()
     if account_key and not SAFE_KEY.fullmatch(account_key):
         raise ValueError("invalid qianchuan_account_key")
@@ -1411,6 +1416,13 @@ def create_budget_rollback_draft(action_id: str) -> dict[str, Any]:
 def start_execution_preflight(action_id: str) -> dict[str, Any]:
     """Start a short-lived, read-only supervised-execution preflight."""
 
+    execution_mode = load_agent_settings().get("execution_mode", "observe")
+    if execution_mode == "observe":
+        raise ValueError("当前账户处于观察模式，只生成诊断和建议，不能启动执行。")
+    if execution_mode == "shadow":
+        raise ValueError("当前账户处于影子模式，请在千川人工操作后回到插件核验结果。")
+    if execution_mode != "supervised":
+        raise ValueError("账户运行模式无效，不能启动执行。")
     action_id = str(action_id or "").lower()
     if not re.fullmatch(r"[a-f0-9]{24}", action_id):
         raise ValueError("动作编号无效。")
@@ -3243,6 +3255,62 @@ def build_action_center() -> dict[str, Any]:
     }
 
 
+def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Turn plan diagnostics into a ranked, operator-friendly loss-control queue."""
+
+    settings = settings or load_agent_settings()
+    mode = str(settings.get("execution_mode") or "observe")
+    min_spend = max(1.0, float(settings.get("min_spend_for_action") or 100))
+    queue: list[dict[str, Any]] = []
+    for item in build_plan_recommendations(settings):
+        action_type = str(item.get("action_type") or "")
+        if action_type not in {"stop_loss", "reduce_budget", "optimize", "inspect_plans"}:
+            continue
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+        spend = float(evidence.get("spend") or 0)
+        roi = evidence.get("roi")
+        target = float(evidence.get("roi_target") or settings.get("roi_target") or 1.5)
+        roi_gap = 0.0 if not isinstance(roi, (int, float)) or target <= 0 else max(0.0, (target - float(roi)) / target)
+        severity = {"stop_loss": 45, "reduce_budget": 35, "optimize": 18, "inspect_plans": 10}.get(action_type, 0)
+        risk_score = min(100, round(severity + min(30.0, spend / min_spend * 12.0) + min(25.0, roi_gap * 25.0)))
+        reduction = 0.30 if action_type == "stop_loss" else 0.20 if action_type == "reduce_budget" else 0.0
+        saving_high = round(spend * reduction, 2)
+        saving_low = round(saving_high * 0.5, 2)
+        if item.get("confidence") == "low" or action_type == "inspect_plans":
+            bucket = "data_missing"
+        elif action_type in {"stop_loss", "reduce_budget"} and risk_score >= 60:
+            bucket = "must_handle"
+        else:
+            bucket = "observe"
+        queue.append({
+            **item,
+            "risk_score": risk_score,
+            "bucket": bucket,
+            "bucket_label": {"must_handle": "必须处理", "observe": "继续观察", "data_missing": "补齐数据"}[bucket],
+            "estimated_savings_low": saving_low,
+            "estimated_savings_high": saving_high,
+            "estimated_savings_label": f"预计减少无效消耗 ¥{saving_low:g}–¥{saving_high:g}" if saving_high else "暂不估算节省金额",
+            "execution_mode": mode,
+            "can_start_execution": mode == "supervised" and action_type in {"stop_loss", "reduce_budget"},
+        })
+    bucket_order = {"must_handle": 0, "observe": 1, "data_missing": 2}
+    queue.sort(key=lambda item: (bucket_order[item["bucket"]], -item["risk_score"], -(item.get("evidence", {}).get("spend") or 0)))
+    return {
+        "generated_at": _now_label(),
+        "execution_mode": mode,
+        "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}[mode],
+        "items": queue[:10],
+        "summary": {
+            "must_handle": sum(1 for item in queue if item["bucket"] == "must_handle"),
+            "observe": sum(1 for item in queue if item["bucket"] == "observe"),
+            "data_missing": sum(1 for item in queue if item["bucket"] == "data_missing"),
+            "estimated_savings_low": round(sum(item["estimated_savings_low"] for item in queue), 2),
+            "estimated_savings_high": round(sum(item["estimated_savings_high"] for item in queue), 2),
+        },
+        "estimate_note": "节省金额按当前消耗与建议降幅保守估算，不代表实际结算结果。",
+    }
+
+
 def _atomic_text_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -3605,7 +3673,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "3.2.0",
+                    "version": "3.3.0",
                     "mode": "supervised_execution",
                     "execution_enabled": True,
                     "snapshot_count": len(catalog),
@@ -3728,6 +3796,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/actions/readiness":
             self._json(build_automation_readiness())
+            return
+        if path == "/actions/stop-loss-queue":
+            self._json(build_stop_loss_queue())
             return
         if path == "/actions/preflight":
             self._json(build_execution_preflight_report())

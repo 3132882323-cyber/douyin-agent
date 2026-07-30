@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-3.0.1-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-3.3.0-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v3.2.0 Beta`。默认启用“轻量哨兵”：工具栏只显示连接与店铺状态，后台零自动扫描，只有点击后才取数。受监督执行器首批只开放单计划降低预算：二次确认后生成 60 秒单次授权，提交后必须重新读取页面验收；新增单账户每日执行次数、预算影响金额和执行冷却限制。
+> 当前版本：`v3.3.0 Beta`。新增今日止损队列、风险评分、预计减少无效消耗区间，以及观察、影子、受控执行三种账户运行模式。账户默认处于观察模式；只有运营主动切换到受控执行后，才可启动单计划降低预算的逐次授权流程。
 
 ## 为什么做这个项目
 
@@ -198,7 +198,7 @@ bridge/enable_autostart.bat
 
 脚本会创建独立的 Python 运行环境、安装依赖、立即启动本地 Agent，并将其加入当前用户的 Windows 登录启动项。以后登录 Windows 后无需再次手动启动。
 
-随后访问 <http://127.0.0.1:8765/health>。看到 `"status": "ok"` 即表示本地服务正常。需要临时手动启动时仍可运行 `bridge/start_bridge.bat`；需要关闭自动启动时运行 `bridge/disable_autostart.bat`。
+随后访问 <http://127.0.0.1:8765/health>。看到 `"status": "ok"` 即表示本地服务正常。安装程序会同时创建登录启动快捷方式和每 5 分钟检查一次的本地保活任务；Agent 因休眠、更新或异常退出后会自动恢复。需要临时手动启动时仍可运行 `bridge/start_bridge.bat`；需要关闭自动启动时运行 `bridge/disable_autostart.bat`。
 
 > 抖店和千川账号登录由平台官方登录页面及当前浏览器登录状态管理。本项目不会保存账号密码，也不会绕过验证码或平台风控。
 

@@ -9,7 +9,8 @@ $venvPython = Join-Path $venvDir "Scripts\python.exe"
 $startupDir = [Environment]::GetFolderPath("Startup")
 $shortcutPath = Join-Path $startupDir "DianAgent.lnk"
 $legacyShortcutPath = Join-Path $startupDir "抖店千川数据桥-Bridge.lnk"
-$autostartScript = Join-Path $bridgeDir "autostart.vbs"
+$watchdogScript = Join-Path $bridgeDir "watchdog.ps1"
+$watchdogTaskName = "DianAgentKeepAlive"
 $manifestPath = Join-Path (Split-Path -Parent $bridgeDir) "extension\manifest.json"
 $expectedVersion = (Get-Content -Raw -Encoding UTF8 $manifestPath | ConvertFrom-Json).version
 
@@ -44,14 +45,31 @@ if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. Check the netw
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = (Join-Path $env:WINDIR "System32\wscript.exe")
-$shortcut.Arguments = '"' + $autostartScript + '"'
+$shortcut.TargetPath = (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe")
+$shortcut.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watchdogScript + '"'
 $shortcut.WorkingDirectory = $bridgeDir
 $shortcut.Description = "Dian Agent - start automatically after Windows sign-in"
 $shortcut.Save()
 if (Test-Path -LiteralPath $legacyShortcutPath) {
   Remove-Item -LiteralPath $legacyShortcutPath -Force
 }
+
+# The Startup shortcut handles normal sign-in. The scheduled watchdog also
+# repairs an Agent that exits later because of sleep, updates or a crash.
+$taskAction = New-ScheduledTaskAction `
+  -Execute (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe") `
+  -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watchdogScript + '"')
+$taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+  -RepetitionInterval (New-TimeSpan -Minutes 5) `
+  -RepetitionDuration (New-TimeSpan -Days 3650)
+$taskSettings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
+  -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName $watchdogTaskName -Action $taskAction -Trigger $taskTrigger `
+  -Settings $taskSettings -Description "Keeps the Dian Agent local service available." -Force | Out-Null
 
 try {
   $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2
@@ -66,8 +84,9 @@ try {
     throw "Restart the local Agent after an update."
   }
 } catch {
-  Start-Process -FilePath (Join-Path $env:WINDIR "System32\wscript.exe") -ArgumentList ('"' + $autostartScript + '"') -WindowStyle Hidden
-  Start-Sleep -Seconds 2
+  & (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe") `
+    -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $watchdogScript
+  Start-Sleep -Milliseconds 500
   $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 5
 }
 
@@ -77,4 +96,5 @@ if ([string]$health.version -ne [string]$expectedVersion) { throw "The local Age
 Write-Host ""
 Write-Host "Setup complete. Dian Agent is running and will start after Windows sign-in." -ForegroundColor Green
 Write-Host "Startup shortcut: $shortcutPath"
+Write-Host "Recovery watchdog: $watchdogTaskName (every 5 minutes)"
 Write-Host "Health check: http://127.0.0.1:8765/health"
