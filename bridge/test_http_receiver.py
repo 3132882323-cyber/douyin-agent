@@ -159,10 +159,39 @@ class SnapshotStoreTests(unittest.TestCase):
             },
         )
         http_receiver.save_agent_settings({"qianchuan_account_key": "acct_safe1234"})
-        draft = http_receiver.build_plan_recommendations()[0]["action_params"]
+        item = http_receiver.build_plan_recommendations()[0]
+        draft = item["action_params"]
         self.assertEqual(draft["operation_type"], "adjust_budget")
+        self.assertIn("降预算", item["suggestion"])
+        self.assertNotIn("建议暂停该计划", item["suggestion"])
         self.assertFalse(draft["can_confirm"])
         self.assertIn("CURRENT_VALUE_MISSING", {item["code"] for item in draft["blocked_reasons"]})
+
+    def test_stop_loss_with_active_status_builds_pause_plan(self) -> None:
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": int(time.time() * 1000),
+                "account": {"key": "acct_pause_rec", "label": "暂停推荐账号", "confidence": "high"},
+                "quality": {"score": 92, "row_count": 1},
+                "tables": [
+                    {
+                        "headers": ["计划ID", "计划名称", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                        "rows": [["plan_pause_rec", "无成交暂停计划", "投放中", "500", "300", "0", "0"]],
+                    }
+                ],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_pause_rec", "min_spend_for_action": 100})
+        item = http_receiver.build_plan_recommendations()[0]
+        self.assertEqual(item["action_type"], "stop_loss")
+        self.assertEqual(item["action_params"]["operation_type"], "pause_plan")
+        self.assertEqual(item["action_params"]["change"]["current_value"], "投放中")
+        self.assertEqual(item["action_params"]["change"]["target_value"], "暂停")
+        self.assertIn("暂停该计划", item["suggestion"])
+        self.assertTrue(item["action_params"]["can_confirm"])
 
     def test_truncated_campaign_snapshot_blocks_confirmable_budget_draft(self) -> None:
         http_receiver.save_data(

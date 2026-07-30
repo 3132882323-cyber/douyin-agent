@@ -604,14 +604,20 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
         }
 
         if spend is not None and spend >= min_spend and (orders == 0 or orders is None and roi == 0):
+            action_params = _action_params_for_plan(plan, "stop_loss", evidence, entry, confidence)
+            pause_plan = action_params.get("operation_type") == "pause_plan"
             results.append(
                 {
                     **base,
                     "level": "high",
                     "action_type": "stop_loss",
-                    "suggestion": "建议暂停该计划，停止新增消耗后再检查素材、人群和商品承接。",
+                    "suggestion": (
+                        "建议暂停该计划，停止新增消耗后再检查素材、人群和商品承接。"
+                        if pause_plan
+                        else "建议先降预算 30% 止损；当前未读到投放状态，补采计划列表后再考虑暂停。"
+                    ),
                     "reason": f"消耗已达到 {spend:g}，但当前未观察到成交。",
-                    "action_params": _action_params_for_plan(plan, "stop_loss", evidence, entry, confidence),
+                    "action_params": action_params,
                 }
             )
         elif roi is not None and spend is not None and spend >= min_spend and roi < effective_roi_target * 0.8:

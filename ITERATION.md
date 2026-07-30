@@ -70,7 +70,21 @@
 1. 设置页「受控执行」文案已统一为「受监督执行」，语义不变  
 2. 若自建 OAuth 回调域名，启动 Companion 前设置 `DIAN_AGENT_OAUTH_CALLBACK_URL`  
 3. `/health` 新增 `secret_files` 数组，仅含权限过宽提醒  
-4. 无成交硬止损建议会优先生成「暂停计划」而非降预算（状态可读时）  
+4. 无成交硬止损：读到「投放中」等状态 → 生成暂停；**读不到状态 → 文案与动作均为降预算 30%**（勿再写「建议暂停」却执行降预算）  
+
+---
+
+## 已知遗留问题（历史问题，非本轮引入）
+
+> 审查于 2026-07-30。下列项在改暂停/拆分之前已存在，**本轮仅记录，未改行为**。后续可单独立项。
+
+| ID | 问题 | 影响 | 建议方向 |
+| --- | --- | --- | --- |
+| LEGACY-1 | 已确认方案启动 preflight 时仍走完整 `validate_action_draft`，含 `ACTION_EXPIRED`（采集时间 +10 分钟） | 确认后稍慢再执行会报草稿过期，与「确认后再重读」不一致 | 对 `state=confirmed` 跳过草稿 TTL，新鲜度交给 preflight 的 `fresh_reread` |
+| LEGACY-2 | `runAuthorizedExecution` 不像 `collectFromTab` 那样在 `sendMessage` 失败后重注入 content script | 扩展更新后未刷新的千川页，执行探针直接失败 | probe/submit 复用采集重注入逻辑 |
+| LEGACY-3 | `consume_execution_authorization` 在锁外做配额检查 | 极端并发可能突破日次数/冷却 | 锁内复核 `assess_execution_quota` |
+| LEGACY-4 | 默认 OAuth 回调指向第三方公网域 | 未设环境变量时授权码经外部域名 | 生产强制 `DIAN_AGENT_OAUTH_CALLBACK_URL`；文档已提示 |
+| LEGACY-5 | `http_receiver.set_data_dir` 不同步清空 `_analysis_cache`；facade `DATA_DIR` 与 `state.DATA_DIR` 双源 | 测试/热切换偶发脏缓存 | `set_data_dir` 调 `_invalidate_cache()`；统一只读 `state.DATA_DIR` |
 
 ---
 
@@ -93,3 +107,4 @@
 | 2026-07-30 | `1e9b6fb` | P2 续：抽出 `insights.py` + `sidepanel-scan.js` |
 | 2026-07-30 | `4b6424f` | P2 收尾 + P3 首刀：actions/reports 拆分、文案三态、OAuth 回调可配 |
 | 2026-07-30 | `e52613a` | P3：单计划暂停接入受监督闸门与页面执行器 |
+| 2026-07-30 | （待提交） | 完善本次暂停引入项；记录 LEGACY-1～5 历史问题 |

@@ -168,22 +168,35 @@
   }
 
   function findPauseControl(row, expectedStatus) {
-    const switches = Array.from(row.querySelectorAll("button, [role='switch'], input[type='checkbox']")).filter((node) => {
-      if (!visible(node) || node.disabled || node.getAttribute("aria-disabled") === "true") return false;
-      const label = `${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`;
-      const pressed = node.getAttribute("aria-checked") === "true" || node.getAttribute("aria-pressed") === "true" || node.checked === true;
-      if (/暂停|停用/.test(label)) return true;
-      if (/启用|投放|开启/.test(label) && pressed) return true;
-      if ((node.getAttribute("role") === "switch" || node.type === "checkbox") && pressed) return true;
-      return false;
-    });
     if (expectedStatus && !String(row.innerText || "").includes(expectedStatus)) {
       throw new Error("当前计划投放状态与授权不一致。");
     }
-    if (switches.length !== 1) {
-      throw new Error(switches.length ? "发现多个启停控件，已停止执行。" : "未找到唯一暂停控件。");
-    }
-    return switches[0];
+    const candidates = Array.from(row.querySelectorAll("button, [role='switch'], input[type='checkbox']")).filter((node) => {
+      if (!visible(node) || node.disabled || node.getAttribute("aria-disabled") === "true") return false;
+      const label = `${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`.trim();
+      // Never treat budget confirm buttons as pause controls.
+      if (/^(确认|确定|保存|提交)$/.test(label) || /预算/.test(label)) return false;
+      return true;
+    });
+    const explicitPause = candidates.filter((node) => {
+      const label = `${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`;
+      return /暂停|停用/.test(label);
+    });
+    if (explicitPause.length === 1) return explicitPause[0];
+    if (explicitPause.length > 1) throw new Error("发现多个暂停控件，已停止执行。");
+
+    // Fallback: only labeled, currently-on switches — not every pressed checkbox.
+    const toggles = candidates.filter((node) => {
+      const label = `${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`;
+      const pressed = node.getAttribute("aria-checked") === "true"
+        || node.getAttribute("aria-pressed") === "true"
+        || node.checked === true;
+      const isSwitch = node.getAttribute("role") === "switch" || node.type === "checkbox";
+      return pressed && isSwitch && /启用|投放|开启|状态|开关/.test(label);
+    });
+    if (toggles.length === 1) return toggles[0];
+    if (toggles.length > 1) throw new Error("发现多个启停控件，已停止执行。");
+    throw new Error("未找到唯一暂停控件。");
   }
 
   function probePauseExecution(request) {
@@ -213,7 +226,7 @@
       const notices = Array.from(document.querySelectorAll(
         "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
       )).filter(visible);
-      return notices.some((item) => /成功|已保存|已暂停|修改完成|设置完成/.test(String(item.innerText || item.textContent || "")));
+      return notices.some((item) => /成功|已保存|已暂停|操作完成|修改完成|设置完成|暂停成功/.test(String(item.innerText || item.textContent || "")));
     });
     if (!successObserved) {
       throw new Error("已点击平台暂停，但未读取到成功回执；请立即在千川核对，系统不会重复提交。");

@@ -727,7 +727,7 @@ async function runAuthorizedExecution(authorizationId) {
     result = { ok: false, submitted: false, error: error.message || String(error) };
   }
   await bridgePost("/actions/execution/result", { action_id: consumed.grant.action_id, result });
-  if (!result?.ok) throw new Error(result?.error || "预算提交失败");
+  if (!result?.ok) throw new Error(result?.error || "受监督提交失败");
   await new Promise((resolve) => setTimeout(resolve, 1500));
   await collectFromTab("qianchuan", selection.tab, "post-execution-readback");
   const verification = await bridgePost("/actions/execution/verify", { action_id: consumed.grant.action_id });

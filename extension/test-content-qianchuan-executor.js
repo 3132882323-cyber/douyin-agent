@@ -154,6 +154,27 @@ function send(request, type = "qianchuan-supervised-submit") {
   assert.equal(pauseResult.platform_success_observed, true);
   assert.equal(pauseResult.target_value, "暂停");
 
+  // Two explicit pause controls must fail closed.
+  const pauseButton2 = {
+    innerText: "停用",
+    textContent: "停用",
+    disabled: false,
+    getClientRects: () => [1],
+    getAttribute: () => null,
+    click() {},
+  };
+  row.querySelectorAll = (selector) => {
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton, pauseButton, pauseButton2];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, pauseButton, pauseButton2];
+    }
+    return [];
+  };
+  const dualPause = await send(pauseRequest, "qianchuan-execution-probe");
+  assert.equal(dualPause.ok, false);
+  assert.match(dualPause.error, /多个暂停/);
+
   console.log("content-qianchuan executor tests passed");
 })().catch((error) => {
   console.error(error);
