@@ -61,34 +61,35 @@
 | 提案 | `stop_loss` 且能读到投放中状态 → `operation_type=pause_plan` |
 | 口令 | `确认暂停计划{计划名称}` |
 | 预检 | 账号 / 计划 ID / 质量 / 截断 / **投放状态一致** / 单计划范围 |
-| 执行器 | `content-qianchuan` 唯一点击启停控件，不做批量 |
-| 验收 | 回读状态含「暂停」 |
+| 执行器 | `content-qianchuan` 唯一点击启停控件；若有二次确认弹窗则点唯一确认 |
+| 验收 | 回读状态归一为已暂停（拒绝「未暂停」等否定文案） |
 | 仍关闭 | 放量、批量启停、出价、改排期 |
 
 ### 升级注意
 
 1. 设置页「受控执行」文案已统一为「受监督执行」，语义不变  
 2. 若自建 OAuth 回调域名，启动 Companion 前设置 `DIAN_AGENT_OAUTH_CALLBACK_URL`  
-3. `/health` 新增 `secret_files` 数组，仅含权限过宽提醒  
+3. `/health.secret_files` 含权限过宽提醒，以及默认 OAuth 回调告警  
 4. 无成交硬止损：读到「投放中」等状态 → 生成暂停；**读不到状态 → 文案与动作均为降预算 30%**（勿再写「建议暂停」却执行降预算）  
+5. 执行失败且**未改动平台**时，授权可通过 `/actions/preflight/restore` 恢复；已点击平台控件则不恢复  
 
 ---
 
-## 已知遗留问题（历史问题，非本轮引入）
+## 历史遗留（LEGACY）处理进度
 
-> 审查于 2026-07-30。下列项在改暂停/拆分之前已存在，**本轮仅记录，未改行为**。后续可单独立项。
+> 初审于 2026-07-30；下列项原为暂停前既有债务，本轮已逐项收敛。
 
-| ID | 问题 | 影响 | 建议方向 |
-| --- | --- | --- | --- |
-| LEGACY-1 | 已确认方案启动 preflight 时仍走完整 `validate_action_draft`，含 `ACTION_EXPIRED`（采集时间 +10 分钟） | 确认后稍慢再执行会报草稿过期，与「确认后再重读」不一致 | 对 `state=confirmed` 跳过草稿 TTL，新鲜度交给 preflight 的 `fresh_reread` |
-| LEGACY-2 | `runAuthorizedExecution` 不像 `collectFromTab` 那样在 `sendMessage` 失败后重注入 content script | 扩展更新后未刷新的千川页，执行探针直接失败 | probe/submit 复用采集重注入逻辑 |
-| LEGACY-3 | `consume_execution_authorization` 在锁外做配额检查 | 极端并发可能突破日次数/冷却 | 锁内复核 `assess_execution_quota` |
-| LEGACY-4 | 默认 OAuth 回调指向第三方公网域 | 未设环境变量时授权码经外部域名 | 生产强制 `DIAN_AGENT_OAUTH_CALLBACK_URL`；文档已提示 |
-| LEGACY-5 | `http_receiver.set_data_dir` 不同步清空 `_analysis_cache`；facade `DATA_DIR` 与 `state.DATA_DIR` 双源 | 测试/热切换偶发脏缓存 | `set_data_dir` 调 `_invalidate_cache()`；统一只读 `state.DATA_DIR` |
-| LEGACY-6 | `runAuthorizedExecution` 在 submit 成功前就 `consume` 授权 | 点击/网络失败后授权已废，需整段重来 | 成功后再 consume，或失败自动恢复会话 |
-| LEGACY-7 | 官方对账仅按计划名归一化，同名后者覆盖 | 重名计划可能错配预算/消耗 | 优先 plan_id；重名标 `ambiguous` |
-| LEGACY-8 | `build_plan_recommendations` 对 doudian 嵌入千川表未按选中账号过滤 | 多店并存时可能串号建议 | `selected_account` 非空时过滤 `entry.account_key` |
-| LEGACY-9 | `list_snapshots` 读全局目录，业务读账号分区 | 侧栏显示有数据但 readback 可能缺失 | 目录列举与 load 路径对齐 |
+| ID | 状态 | 处理说明 |
+| --- | --- | --- |
+| LEGACY-1 | ✅ | `confirmed` 校验跳过 `ACTION_EXPIRED`；新鲜度交给 preflight 重读 |
+| LEGACY-2 | ✅ | `sendTabMessage`：probe/submit/采集统一失败后重注入 content script |
+| LEGACY-3 | ✅ | `consume_execution_authorization` 在锁内复核配额 |
+| LEGACY-4 | ⚠️ | `/health.secret_files` 增加默认第三方回调告警；仍需生产自设 `DIAN_AGENT_OAUTH_CALLBACK_URL` |
+| LEGACY-5 | ✅ | `set_data_dir` 清空 `_analysis_cache` |
+| LEGACY-6 | ✅ | 平台未改动失败时 `/actions/preflight/restore` 恢复授权；已点击则不恢复 |
+| LEGACY-7 | ✅ | 对账优先 `plan_id`；同名标 `ambiguous_plan_name` |
+| LEGACY-8 | ✅ | 选中账号非空时按 `entry.account_key` 过滤建议 |
+| LEGACY-9 | ✅ | `list_snapshots` 优先读选中账号分区 |
 
 ---
 
@@ -114,4 +115,5 @@
 | 2026-07-30 | `c2d9d5a` | 完善本次暂停引入项；记录 LEGACY-1～5 历史问题 |
 | 2026-07-30 | `9b4a62d` | 暂停验收与影子核验统一成功态；效果复查仅预算；补充 LEGACY-6～9 |
 | 2026-07-30 | `c596224` | 投放状态归一化：拒绝「未暂停」子串误判 |
-| 2026-07-30 | 8f98cb9 | 否定状态/错列字段/暂停控件与 toast 收紧 |
+| 2026-07-30 | `8f98cb9` | 否定状态/错列字段/暂停控件与 toast 收紧 |
+| 2026-07-30 | （待提交） | 收敛 LEGACY-1～9；暂停二次确认弹窗；授权失败可恢复 |

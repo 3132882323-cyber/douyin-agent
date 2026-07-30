@@ -90,6 +90,15 @@ class ActionProtocolTests(unittest.TestCase):
         draft["action_id"] = "0" * 24
         self.assertIn("ACTION_ID_MISMATCH", {item["code"] for item in validate_action_draft(draft, now_ms=1_001_000)})
 
+    def test_confirmed_action_skips_draft_ttl(self):
+        draft = self._draft(captured_at_ms=1_000_000, now_ms=1_001_000)
+        confirmed = transition_action(draft, "confirmed")
+        codes = {item["code"] for item in validate_action_draft(confirmed, now_ms=1_001_000 + 11 * 60 * 1000)}
+        self.assertNotIn("ACTION_EXPIRED", codes)
+
+        draft_codes = {item["code"] for item in validate_action_draft(draft, now_ms=1_001_000 + 11 * 60 * 1000)}
+        self.assertIn("ACTION_EXPIRED", draft_codes)
+
     def test_execution_transition_is_disabled(self):
         confirmed = transition_action(self._draft(), "confirmed")
         with self.assertRaisesRegex(ValueError, "execution is disabled"):

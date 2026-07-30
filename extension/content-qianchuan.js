@@ -245,6 +245,7 @@
     const row = findAuthorizedPlanRow(request);
     const control = findPauseControl(row, String(request.expected_current_value || ""));
     control.click();
+    await dismissPauseConfirmationIfPresent();
     const expected = String(request.expected_current_value || "");
     const successObserved = await waitFor(() => {
       const notices = Array.from(document.querySelectorAll(
@@ -266,7 +267,14 @@
       return false;
     });
     if (!successObserved) {
-      throw new Error("已点击平台暂停，但未读取到成功回执；请立即在千川核对，系统不会重复提交。");
+      return {
+        ok: false,
+        submitted: false,
+        platform_mutation_attempted: true,
+        plan_id: String(request.plan_id || ""),
+        target_value: "暂停",
+        error: "已点击平台暂停，但未读取到成功回执；请立即在千川核对，系统不会重复提交。",
+      };
     }
     return {
       ok: true,
@@ -276,6 +284,29 @@
       submitted: true,
       platform_success_observed: true,
     };
+  }
+
+  async function dismissPauseConfirmationIfPresent() {
+    const dialog = await waitFor(() => {
+      const nodes = Array.from(document.querySelectorAll(
+        "[role='dialog'], [class*='modal'], [class*='Modal'], [class*='dialog'], [class*='confirm']",
+      )).filter(visible);
+      return nodes.find((node) => /暂停|停用|确认/.test(String(node.innerText || node.textContent || ""))) || null;
+    }, 1800);
+    if (!dialog) return false;
+    const buttons = Array.from(dialog.querySelectorAll("button")).filter((button) => (
+      visible(button)
+      && !button.disabled
+      && button.getAttribute("aria-disabled") !== "true"
+    ));
+    const confirms = buttons.filter((button) => {
+      const label = String(button.innerText || button.textContent || "").trim();
+      if (/取消|关闭|再想想/.test(label)) return false;
+      return /^(确认|确定|暂停|停用)$/.test(label);
+    });
+    if (confirms.length !== 1) return false;
+    confirms[0].click();
+    return true;
   }
 
   function probeBudgetExecution(request) {
@@ -382,7 +413,14 @@
       return notices.some((item) => /成功|已保存|修改完成|设置完成/.test(String(item.innerText || item.textContent || "")));
     });
     if (!successObserved) {
-      throw new Error("已点击平台提交，但未读取到成功回执；请立即在千川核对，系统不会重复提交。");
+      return {
+        ok: false,
+        submitted: false,
+        platform_mutation_attempted: true,
+        plan_id: planId,
+        target_value: target,
+        error: "已点击平台提交，但未读取到成功回执；请立即在千川核对，系统不会重复提交。",
+      };
     }
     return {
       ok: true,

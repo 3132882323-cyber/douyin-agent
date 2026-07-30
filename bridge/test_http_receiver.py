@@ -379,6 +379,11 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(400.0, consumed["execution_request"]["target_value"])
         with self.assertRaisesRegex(ValueError, "已使用或已失效"):
             http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
+        restored = http_receiver.restore_execution_authorization(authorized["session"]["authorization_id"])
+        self.assertEqual("authorized", restored["state"])
+        self.assertFalse(restored["session"]["authorization_consumed"])
+        consumed = http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
+        self.assertEqual("authorization_consumed", consumed["state"])
         executed = http_receiver.record_execution_result(
             confirmed["action_id"],
             {

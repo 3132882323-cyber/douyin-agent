@@ -587,7 +587,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
     results: list[dict[str, Any]] = []
     records = _table_records("doudian", {"qianchuan_campaigns", "qianchuan_live", "qianchuan_report"})
     records.extend(_table_records("qianchuan", {"campaigns", "qianchuan_live", "report"}))
-    selected_account = str(settings.get("qianchuan_account_key") or "")
+    selected_account = str(settings.get("qianchuan_account_key") or "").lower()
     official_index = official_plan_index(
         load_data("qianchuan", "plans", account_key=selected_account or None)
         if selected_account
@@ -598,6 +598,8 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
         official_index = official_plan_index(load_data("qianchuan", "plans", account_key=selected_account))
 
     for entry in records:
+        if selected_account and str(entry.get("account_key") or "").lower() != selected_account:
+            continue
         record = entry["record"]
         _, plan_value = _pick(record, ("计划名称", "计划", "项目名称", "广告组", "单元名称", "抖音号"))
         plan_lines = [line.strip() for line in str(plan_value or "").splitlines() if line.strip() and line.strip() not in {"设置直播规划", "素材"}]
@@ -641,6 +643,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
         reconcile_name = str(named_plan or plan).strip() or plan
         reconcile = reconcile_plan_against_official(
             plan_name=reconcile_name,
+            plan_id=_entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id")),
             browser_budget=browser_budget,
             browser_spend=spend,
             official_index=official_index,

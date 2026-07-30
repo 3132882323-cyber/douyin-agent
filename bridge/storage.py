@@ -357,13 +357,22 @@ def load_data(source: str, page_type: str | None = None, account_key: str | None
 
 
 def list_snapshots() -> list[dict[str, Any]]:
+    from http_receiver import load_agent_settings  # late import to avoid cycle
+
     items: list[dict[str, Any]] = []
+    selected_account = str(load_agent_settings().get("qianchuan_account_key") or "").lower()
     for source in sorted(state.ALLOWED_SOURCES):
-        source_dir = state.DATA_DIR / source
-        if not source_dir.exists():
-            continue
-        for path in sorted(source_dir.glob("*.json")):
-            snapshot = load_data(source, path.stem, account_key="")
+        paths: list[tuple[Path, str | None]] = []
+        if source == "qianchuan" and selected_account and SAFE_KEY.fullmatch(selected_account):
+            account_dir = state.DATA_DIR / "qianchuan_accounts" / selected_account
+            if account_dir.exists():
+                paths = [(path, selected_account) for path in sorted(account_dir.glob("*.json"))]
+        if not paths:
+            source_dir = state.DATA_DIR / source
+            if source_dir.exists():
+                paths = [(path, "" if source == "qianchuan" else None) for path in sorted(source_dir.glob("*.json"))]
+        for path, account_key in paths:
+            snapshot = load_data(source, path.stem, account_key=account_key)
             if not snapshot:
                 continue
             data = snapshot.get("data", {})
@@ -373,6 +382,7 @@ def list_snapshots() -> list[dict[str, Any]]:
                 {
                     "source": source,
                     "page_type": snapshot.get("page_type", path.stem),
+                    "account_key": str(((data.get("account") or {}) if isinstance(data, dict) else {}).get("key") or account_key or ""),
                     "saved_at": snapshot.get("saved_at"),
                     "age_seconds": age,
                     "fresh": age < state.STALE_SECONDS,

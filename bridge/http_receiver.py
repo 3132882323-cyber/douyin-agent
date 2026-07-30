@@ -46,6 +46,7 @@ def set_data_dir(path: Path) -> Path:
     """Keep facade DATA_DIR and shared state.DATA_DIR in sync for tests."""
     global DATA_DIR
     DATA_DIR = state.set_data_dir(path)
+    _invalidate_cache()
     return DATA_DIR
 DEFAULT_AGENT_SETTINGS = {
     "roi_target": 1.5,
@@ -143,6 +144,22 @@ def _secret_file_hints() -> list[dict[str, str]]:
                 }
             )
     return hints
+
+
+def _oauth_callback_hints() -> list[dict[str, str]]:
+    """Warn when OAuth still uses the bundled third-party default callback."""
+    try:
+        from oceanengine_oauth import PUBLIC_CALLBACK_URL
+    except Exception:
+        return []
+    default_marker = "chatgpt.site"
+    if default_marker in str(PUBLIC_CALLBACK_URL or ""):
+        return [{
+            "key": "oauth_callback_default",
+            "label": "OAuth 回调",
+            "message": "当前仍使用默认第三方 OAuth 回调域名；生产环境请设置 DIAN_AGENT_OAUTH_CALLBACK_URL。",
+        }]
+    return []
 
 
 def _schema_version_check() -> list[str]:
@@ -270,6 +287,7 @@ from actions import (
     mark_action_manually_applied,
     preview_execution_authorization,
     record_execution_result,
+    restore_execution_authorization,
     start_execution_preflight,
     stop_execution_preflight,
     verify_execution_result,
@@ -957,7 +975,7 @@ class Handler(BaseHTTPRequestHandler):
                     "execution_mode_label": execution_mode_label(execution_mode),
                     "execution_enabled": execution_mode == "supervised",
                     "auth_required": True,
-                    "secret_files": _secret_file_hints(),
+                    "secret_files": _secret_file_hints() + _oauth_callback_hints(),
                     "snapshot_count": len(catalog),
                     "schema_warnings": schema_warnings,
                     "disk": disk_info,
@@ -1258,6 +1276,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/actions/preflight/consume":
                 consumed = consume_execution_authorization(str(payload.get("authorization_id") or ""))
                 self._json({"ok": True, "grant": consumed, "executed": False, "mode": "supervised_submit"})
+                return
+            if path == "/actions/preflight/restore":
+                report = restore_execution_authorization(str(payload.get("authorization_id") or ""))
+                self._json({"ok": True, "preflight": report, "executed": False, "execution_enabled": False})
                 return
             if path == "/actions/preflight/preview":
                 preview = preview_execution_authorization(str(payload.get("authorization_id") or ""))

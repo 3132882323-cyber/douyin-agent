@@ -242,7 +242,10 @@ def validate_action_draft(action: dict[str, Any], *, now_ms: int | None = None) 
     if action.get("action_id") != expected_hash[:24] or action.get("idempotency_key") != f"dian-action-{expected_hash[:32]}":
         errors.append(_block("ACTION_ID_MISMATCH", "动作编号与参数不一致，请重新生成方案。"))
     if int(action.get("expires_at_ms") or 0) <= now_ms:
-        errors.append(_block("ACTION_EXPIRED", "动作草稿已过期，请重新同步并生成方案。"))
+        # Confirmed actions re-validate freshness in preflight reread; draft TTL
+        # should not block starting supervised execution after human confirmation.
+        if action.get("state") != "confirmed":
+            errors.append(_block("ACTION_EXPIRED", "动作草稿已过期，请重新同步并生成方案。"))
     if action.get("blocked_reasons"):
         errors.extend(action["blocked_reasons"])
     if not action.get("can_confirm"):

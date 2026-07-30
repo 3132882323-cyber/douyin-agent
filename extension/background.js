@@ -590,16 +590,24 @@ async function querySourceTabs(source) {
 
 async function collectFromTab(source, tab, reason) {
   try {
-    return await chrome.tabs.sendMessage(tab.id, { type: "collect-now", reason });
+    return await sendTabMessage(tab.id, { type: "collect-now", reason }, source);
+  } catch (error) {
+    throw new Error(error.message || String(error));
+  }
+}
+
+async function sendTabMessage(tabId, message, source = "qianchuan") {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
   } catch (firstError) {
     const platformScript = source === "doudian" ? "content-doudian.js" : "content-qianchuan.js";
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId },
       files: ["content-common.js", platformScript],
     });
     await new Promise((resolve) => setTimeout(resolve, 250));
     try {
-      return await chrome.tabs.sendMessage(tab.id, { type: "collect-now", reason: `${reason}-reinjected` });
+      return await chrome.tabs.sendMessage(tabId, message);
     } catch (secondError) {
       throw new Error(`${firstError.message || firstError}; 重新注入后仍失败：${secondError.message || secondError}`);
     }
@@ -712,28 +720,39 @@ async function runAuthorizedExecution(authorizationId) {
   );
   if (!selection.tab?.id) throw new Error("未找到千川标签页，请打开对应计划列表");
   const preview = await bridgePost("/actions/preflight/preview", { authorization_id: authorizationId });
-  const probe = await chrome.tabs.sendMessage(selection.tab.id, {
+  const probe = await sendTabMessage(selection.tab.id, {
     type: "qianchuan-execution-probe",
     request: preview.preview?.execution_request,
-  });
+  }, "qianchuan");
   if (!probe?.ok || !probe?.ready) throw new Error(probe?.error || "当前千川页面尚未满足执行条件");
   const consumed = await bridgePost("/actions/preflight/consume", { authorization_id: authorizationId });
   const request = consumed.grant?.execution_request;
   if (!request) throw new Error("授权中缺少执行参数");
   let result;
   try {
-    result = await chrome.tabs.sendMessage(selection.tab.id, { type: "qianchuan-supervised-submit", request });
+    result = await sendTabMessage(selection.tab.id, { type: "qianchuan-supervised-submit", request }, "qianchuan");
   } catch (error) {
     result = { ok: false, submitted: false, error: error.message || String(error) };
   }
-  await bridgePost("/actions/execution/result", { action_id: consumed.grant.action_id, result });
-  if (!result?.ok) throw new Error(result?.error || "受监督提交失败");
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-  await collectFromTab("qianchuan", selection.tab, "post-execution-readback");
-  const verification = await bridgePost("/actions/execution/verify", { action_id: consumed.grant.action_id });
-  await chrome.tabs.update(selection.tab.id, { active: true });
-  if (Number.isInteger(selection.tab.windowId)) await chrome.windows.update(selection.tab.windowId, { focused: true });
-  return { ...result, verification: verification.verification };
+  if (result?.ok && result?.submitted === true) {
+    await bridgePost("/actions/execution/result", { action_id: consumed.grant.action_id, result });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await collectFromTab("qianchuan", selection.tab, "post-execution-readback");
+    const verification = await bridgePost("/actions/execution/verify", { action_id: consumed.grant.action_id });
+    await chrome.tabs.update(selection.tab.id, { active: true });
+    if (Number.isInteger(selection.tab.windowId)) await chrome.windows.update(selection.tab.windowId, { focused: true });
+    return { ...result, verification: verification.verification };
+  }
+  if (result?.platform_mutation_attempted) {
+    await bridgePost("/actions/execution/result", { action_id: consumed.grant.action_id, result });
+    throw new Error(result?.error || "受监督提交失败");
+  }
+  try {
+    await bridgePost("/actions/preflight/restore", { authorization_id: authorizationId });
+  } catch {
+    // Best-effort: expired grants stay consumed.
+  }
+  throw new Error(result?.error || "受监督提交失败");
 }
 
 async function storeAndPush(source, snapshot) {

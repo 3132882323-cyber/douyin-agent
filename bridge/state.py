@@ -25,4 +25,5 @@ def set_data_dir(path: Path) -> Path:
     global DATA_DIR
     DATA_DIR = Path(path)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _analysis_cache.clear()
     return DATA_DIR

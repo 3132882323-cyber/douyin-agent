@@ -523,16 +523,6 @@ def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
     authorization_id = str(authorization_id or "").lower()
     if not re.fullmatch(r"[a-f0-9]{32}", authorization_id):
         raise ValueError("执行授权编号无效。")
-    session_before = load_execution_preflight().get("session")
-    action_before = next(
-        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == (session_before or {}).get("action_id")),
-        None,
-    )
-    if not action_before:
-        raise ValueError("授权对应的动作不存在。")
-    quota = assess_execution_quota(action_before)
-    if not quota["allowed"]:
-        raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
     with _state_lock:
         session = load_execution_preflight().get("session")
         if not session or session.get("authorization_id") != authorization_id:
@@ -543,25 +533,64 @@ def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
         if int(session.get("authorization_expires_at_ms") or 0) <= now_ms:
             _save_execution_preflight({**session, "state": "expired", "execution_enabled": False, "write_enabled": False})
             raise ValueError("执行授权已过期。")
+        action = next(
+            (item for item in load_action_audit().get("actions", []) if item.get("action_id") == session.get("action_id")),
+            None,
+        )
+        if not action:
+            raise ValueError("授权对应的动作不存在。")
+        quota = assess_execution_quota(action, now_ms=now_ms)
+        if not quota["allowed"]:
+            raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
         consumed = {
             **session,
             "state": "authorization_consumed",
             "authorization_consumed": True,
             "authorization_consumed_at_ms": now_ms,
+            "quota": quota,
             "execution_enabled": False,
             "write_enabled": False,
         }
         _save_execution_preflight(consumed)
-    action = next(
-        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == consumed.get("action_id")),
-        None,
-    )
-    if not action:
-        raise ValueError("授权对应的动作不存在。")
     return {
         **consumed,
         "execution_request": _execution_request_for_action(action),
     }
+
+
+def restore_execution_authorization(authorization_id: str) -> dict[str, Any]:
+    """Restore a consumed grant when the browser never completed a platform write."""
+
+    authorization_id = str(authorization_id or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", authorization_id):
+        raise ValueError("执行授权编号无效。")
+    with _state_lock:
+        session = load_execution_preflight().get("session")
+        if not session or session.get("authorization_id") != authorization_id:
+            raise ValueError("未找到对应的执行授权。")
+        if session.get("state") != "authorization_consumed" or not session.get("authorization_consumed"):
+            raise ValueError("当前授权不是已消费状态，无法恢复。")
+        action = next(
+            (item for item in load_action_audit().get("actions", []) if item.get("action_id") == session.get("action_id")),
+            None,
+        )
+        if not action or action.get("state") != "confirmed":
+            raise ValueError("动作已进入执行结果阶段，不能恢复授权。")
+        now_ms = int(time.time() * 1000)
+        if int(session.get("authorization_expires_at_ms") or 0) <= now_ms:
+            _save_execution_preflight({**session, "state": "expired", "execution_enabled": False, "write_enabled": False})
+            raise ValueError("执行授权已过期，无法恢复。")
+        restored = {
+            **session,
+            "state": "authorized",
+            "authorization_consumed": False,
+            "authorization_restored_at_ms": now_ms,
+            "execution_enabled": False,
+            "write_enabled": False,
+        }
+        restored.pop("authorization_consumed_at_ms", None)
+        _save_execution_preflight(restored)
+    return build_execution_preflight_report()
 
 
 def _execution_request_for_action(action: dict[str, Any]) -> dict[str, Any]:
