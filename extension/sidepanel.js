@@ -856,7 +856,8 @@ function renderExecutionEffectiveness(report = {}) {
     const tag = document.createElement("span"); tag.className = "shadow-status"; tag.textContent = item.status_label || "待复查";
     head.append(title, tag);
     const change = document.createElement("p"); change.className = "shadow-change";
-    change.textContent = `预算 ${item.change?.from ?? "--"} → ${item.change?.to ?? "--"}`;
+    const fieldLabel = item.field || (item.operation_type === "pause_plan" ? "投放状态" : "预算");
+    change.textContent = `${fieldLabel} ${item.change?.from ?? "--"} → ${item.change?.to ?? "--"}`;
     const metrics = document.createElement("small");
     metrics.textContent = item.after
       ? `调整前 ROI ${item.before?.roi ?? "--"} / 订单 ${item.before?.orders ?? "--"}；最新 ROI ${item.after?.roi ?? "--"} / 订单 ${item.after?.orders ?? "--"}`
@@ -866,7 +867,7 @@ function renderExecutionEffectiveness(report = {}) {
     const minutes = item.observation_window_minutes || 120;
     windowHint.textContent = `复查窗口：${minutes >= 60 ? `${minutes / 60} 小时` : `${minutes} 分钟`}`;
     card.append(head, change, metrics, windowHint, verdict);
-    if (item.rollback_available) {
+    if (item.rollback_available && item.operation_type !== "pause_plan") {
       const rollback = document.createElement("button");
       rollback.type = "button";
       rollback.textContent = "生成恢复原预算方案";

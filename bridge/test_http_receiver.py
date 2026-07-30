@@ -515,6 +515,66 @@ class SnapshotStoreTests(unittest.TestCase):
         verification = http_receiver.verify_execution_result(confirmed["action_id"])
         self.assertTrue(verification["verified"])
         self.assertEqual("verified", verification["state"])
+        effectiveness = http_receiver.build_execution_effectiveness_report(
+            now_ms=captured_at + 3 * 60 * 60 * 1000,
+        )
+        self.assertFalse(
+            any(item.get("action_id") == confirmed["action_id"] for item in effectiveness.get("items", [])),
+            "pause_plan must not appear in budget effectiveness / rollback review",
+        )
+
+    def test_pause_verify_rejects_inactive_but_not_paused_status(self) -> None:
+        http_receiver.save_agent_settings({"execution_mode": "supervised"})
+        captured_at = int(time.time() * 1000)
+        snapshot = {
+            "schema_version": 2,
+            "page_type": "campaigns",
+            "captured_at": captured_at,
+            "account": {"key": "acct_pause2", "label": "暂停验收账号"},
+            "quality": {"score": 92, "row_count": 1},
+            "tables": [
+                {
+                    "headers": ["计划ID", "计划名称", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_pause2", "未投放误判计划", "投放中", "500", "300", "0.20", "0"]],
+                }
+            ],
+        }
+        http_receiver.save_data("qianchuan", snapshot)
+        draft = http_receiver.build_action_draft(
+            operation_type="pause_plan",
+            operation_label="暂停计划",
+            target_kind="qianchuan_plan",
+            target_id="plan_pause2",
+            target_name="未投放误判计划",
+            account_key="acct_pause2",
+            account_label="暂停验收账号",
+            field="投放状态",
+            current_value="投放中",
+            target_value="暂停",
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=captured_at,
+            quality_score=92,
+            confidence="high",
+        )
+        confirmed = http_receiver.confirm_action_draft(draft)
+        http_receiver.record_execution_result(
+            confirmed["action_id"],
+            {"ok": True, "submitted": True, "platform_success_observed": True, "target_value": "暂停"},
+        )
+        inactive = {
+            **snapshot,
+            "captured_at": captured_at + 10_000,
+            "tables": [
+                {
+                    "headers": ["计划ID", "计划名称", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_pause2", "未投放误判计划", "未投放", "500", "300", "0.20", "0"]],
+                }
+            ],
+        }
+        http_receiver.save_data("qianchuan", inactive)
+        verification = http_receiver.verify_execution_result(confirmed["action_id"])
+        self.assertFalse(verification["verified"])
 
     def test_execution_quota_blocks_daily_count_budget_impact_and_cooldown(self) -> None:
         now_ms = int(time.time() * 1000)

@@ -85,6 +85,10 @@
 | LEGACY-3 | `consume_execution_authorization` 在锁外做配额检查 | 极端并发可能突破日次数/冷却 | 锁内复核 `assess_execution_quota` |
 | LEGACY-4 | 默认 OAuth 回调指向第三方公网域 | 未设环境变量时授权码经外部域名 | 生产强制 `DIAN_AGENT_OAUTH_CALLBACK_URL`；文档已提示 |
 | LEGACY-5 | `http_receiver.set_data_dir` 不同步清空 `_analysis_cache`；facade `DATA_DIR` 与 `state.DATA_DIR` 双源 | 测试/热切换偶发脏缓存 | `set_data_dir` 调 `_invalidate_cache()`；统一只读 `state.DATA_DIR` |
+| LEGACY-6 | `runAuthorizedExecution` 在 submit 成功前就 `consume` 授权 | 点击/网络失败后授权已废，需整段重来 | 成功后再 consume，或失败自动恢复会话 |
+| LEGACY-7 | 官方对账仅按计划名归一化，同名后者覆盖 | 重名计划可能错配预算/消耗 | 优先 plan_id；重名标 `ambiguous` |
+| LEGACY-8 | `build_plan_recommendations` 对 doudian 嵌入千川表未按选中账号过滤 | 多店并存时可能串号建议 | `selected_account` 非空时过滤 `entry.account_key` |
+| LEGACY-9 | `list_snapshots` 读全局目录，业务读账号分区 | 侧栏显示有数据但 readback 可能缺失 | 目录列举与 load 路径对齐 |
 
 ---
 
@@ -108,3 +112,4 @@
 | 2026-07-30 | `4b6424f` | P2 收尾 + P3 首刀：actions/reports 拆分、文案三态、OAuth 回调可配 |
 | 2026-07-30 | `e52613a` | P3：单计划暂停接入受监督闸门与页面执行器 |
 | 2026-07-30 | `c2d9d5a` | 完善本次暂停引入项；记录 LEGACY-1～5 历史问题 |
+| 2026-07-30 | （待提交） | 暂停验收与影子核验统一成功态；效果复查仅预算；补充 LEGACY-6～9 |

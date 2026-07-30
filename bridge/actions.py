@@ -20,9 +20,20 @@ import state
 logger = logging.getLogger("dian-agent-http")
 _state_lock = state._state_lock
 
+PAUSE_SUCCESS_STATUSES = ("暂停", "已暂停")
+
 
 def _data_dir() -> Path:
     return state.DATA_DIR
+
+
+def _pause_plan_succeeded(status: Any, *, target_value: Any = "暂停") -> bool:
+    text = str(status or "").strip()
+    if not text:
+        return False
+    if text == str(target_value or "暂停"):
+        return True
+    return any(token in text for token in PAUSE_SUCCESS_STATUSES)
 
 
 def _facade():
@@ -657,7 +668,7 @@ def verify_execution_result(action_id: str) -> dict[str, Any]:
             matched = bool(
                 readback
                 and int(readback.get("captured_at_ms") or 0) > submitted_at
-                and ("暂停" in status or status in {"未投放"})
+                and _pause_plan_succeeded(status, target_value=target_value)
             )
         else:
             matched = bool(
@@ -698,6 +709,9 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
     items: list[dict[str, Any]] = []
     for action in load_action_audit().get("actions", []):
         if action.get("state") not in {"succeeded", "verified"}:
+            continue
+        # Budget effectiveness / rollback UI only applies to budget writes.
+        if str(action.get("operation_type") or "") not in {"adjust_budget", "restore_budget"}:
             continue
         executed_at_ms = int(action.get("execution_reported_at_ms") or 0)
         if executed_at_ms <= 0:
@@ -761,7 +775,13 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
                 "from": change.get("current_value"),
                 "to": change.get("target_value"),
             },
-            "rollback_available": status == "review" and action.get("state") == "verified",
+            "rollback_available": (
+                status == "review"
+                and action.get("state") == "verified"
+                and action.get("operation_type") == "adjust_budget"
+            ),
+            "operation_type": action.get("operation_type"),
+            "field": change.get("field"),
         })
     items.sort(key=lambda item: (0 if item["status"] in {"review", "needs_reread"} else 1, -item["executed_at_ms"]))
     return {
@@ -997,7 +1017,7 @@ def build_shadow_execution_report() -> dict[str, Any]:
                     observed_status = str(readback.get("status") or "")
                     target_value = change.get("target_value")
                     current = change.get("current_value")
-                    if "暂停" in observed_status or observed_status == str(target_value or ""):
+                    if _pause_plan_succeeded(observed_status, target_value=target_value):
                         status = "matched"
                         status_label = "回读已匹配"
                         detail = f"最新页面投放状态为 {observed_status}，与确认目标一致。"
