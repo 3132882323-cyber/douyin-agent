@@ -316,6 +316,9 @@
         <div class="section-heading"><h3>今日投放调整</h3><span id="plan-count">0 项</span></div>
         <p class="section-intro">按优先级逐项处理；每条建议都包含判断依据、调整范围和验收指标。</p>
         <div id="plans" class="stack empty-state">同步千川计划和报表后，这里会生成今天的止损、观察和放量清单。</div>
+        <div class="section-heading"><h3>今日止损队列</h3><span id="stop-loss-count">0 项</span></div>
+        <p class="section-intro" id="stop-loss-summary">按风险和预计可减少的无效消耗排序。</p>
+        <div id="stop-loss-queue" class="stack empty-state">同步千川计划和报表后，这里会生成今日止损优先级。</div>
       </section>
 
       <section class="module-section inventory-section" data-owner="商品运营">
@@ -354,6 +357,13 @@
       <section class="settings-card inner-card">
         <div class="section-heading"><h3>策略阈值</h3><span>本机设置</span></div>
         <div class="settings-grid">
+          <label>账户运行模式
+            <select id="execution-mode">
+              <option value="observe">观察模式（只给建议）</option>
+              <option value="shadow">影子模式（人工操作后核验）</option>
+              <option value="supervised">受控执行（逐次授权）</option>
+            </select>
+          </label>
           <label>ROI 目标<input id="roi-target" type="number" min="0.1" max="20" step="0.1"></label>
           <label>判断消耗门槛<input id="spend-threshold" type="number" min="0" step="10"></label>
           <label>低库存阈值<input id="stock-threshold" type="number" min="0" step="1"></label>

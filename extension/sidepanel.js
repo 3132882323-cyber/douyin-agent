@@ -565,6 +565,32 @@ function renderPlans(items = []) {
   container.replaceChildren(...items.slice(0, 8).map(planWorkbenchCard));
 }
 
+function renderStopLossQueue(report = {}) {
+  const items = report.items || [];
+  const summary = report.summary || {};
+  const container = document.getElementById("stop-loss-queue");
+  document.getElementById("stop-loss-count").textContent = `${summary.must_handle || 0} 项必须处理`;
+  document.getElementById("stop-loss-summary").textContent =
+    `${report.execution_mode_label || "观察模式"} · 预计减少无效消耗 ¥${summary.estimated_savings_low || 0}–¥${summary.estimated_savings_high || 0}。${report.estimate_note || ""}`;
+  if (!items.length) return empty(container, "当前没有需要止损的计划；若尚未巡检，请先同步千川计划和报表。");
+  container.className = "stack";
+  container.replaceChildren(...items.slice(0, 6).map((item) => {
+    const card = document.createElement("article");
+    card.className = `plan-workbench-card ${item.level || "info"}`;
+    const top = document.createElement("div"); top.className = "recommendation-top";
+    const title = document.createElement("strong"); title.textContent = item.plan || "千川计划";
+    const tag = document.createElement("span"); tag.textContent = `${item.bucket_label} · 风险 ${item.risk_score}`;
+    top.append(title, tag);
+    const reason = document.createElement("p"); reason.textContent = item.reason || item.diagnosis || "计划需要复核";
+    const saving = document.createElement("b"); saving.textContent = item.estimated_savings_label || "暂不估算节省金额";
+    const action = document.createElement("small");
+    action.textContent = item.can_start_execution ? "可进入逐次授权的受控执行" : `当前为${report.execution_mode_label || "观察模式"}，先由运营复核`;
+    card.append(top, reason, saving, action);
+    appendCopyAction(card, item.action_params);
+    return card;
+  }));
+}
+
 function planWorkbenchCard(item) {
   const card = document.createElement("article");
   card.className = `plan-workbench-card ${item.level || "info"}`;
@@ -945,6 +971,7 @@ function renderCoverage(coverage = []) {
 }
 
 function renderSettings(settings) {
+  document.getElementById("execution-mode").value = settings.execution_mode || "observe";
   document.getElementById("roi-target").value = settings.roi_target;
   document.getElementById("spend-threshold").value = settings.min_spend_for_action;
   document.getElementById("stock-threshold").value = settings.low_inventory_threshold;
@@ -1501,7 +1528,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, preflightR, shadowR, executionEffectivenessR, integrationsR, oceanengineR, oceanengineSyncR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, stopLossR, preflightR, shadowR, executionEffectivenessR, integrationsR, oceanengineR, oceanengineSyncR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1514,6 +1541,7 @@ async function loadDashboard() {
     bridgeFetch("/health-monitor"),
     bridgeFetch("/effectiveness"),
     bridgeFetch("/actions/readiness"),
+    bridgeFetch("/actions/stop-loss-queue"),
     bridgeFetch("/actions/preflight"),
     bridgeFetch("/actions/shadow"),
     bridgeFetch("/actions/effectiveness"),
@@ -1534,6 +1562,7 @@ async function loadDashboard() {
   const health = val(healthR, {});
   const effectiveness = val(effectivenessR, {});
   const readiness = val(readinessR, { items: [], summary: {}, criteria: [] });
+  const stopLoss = val(stopLossR, { items: [], summary: {} });
   const preflight = val(preflightR, { state: "idle", session: null, checks: [] });
   const shadow = val(shadowR, { items: [], summary: {} });
   const executionEffectiveness = val(executionEffectivenessR, { items: [], summary: {} });
@@ -1571,6 +1600,7 @@ async function loadDashboard() {
   renderHealthMonitor(health);
   renderEffectiveness(effectiveness);
   renderAutomationReadiness(readiness);
+  renderStopLossQueue(stopLoss);
   renderExecutionPreflight(preflight);
   renderShadowExecution(shadow);
   renderExecutionEffectiveness(executionEffectiveness);
@@ -1967,6 +1997,7 @@ document.getElementById("save-settings").addEventListener("click", async () => {
   const status = document.getElementById("settings-status");
   try {
     const payload = {
+      execution_mode: document.getElementById("execution-mode").value,
       roi_target: Number(document.getElementById("roi-target").value),
       min_spend_for_action: Number(document.getElementById("spend-threshold").value),
       low_inventory_threshold: Number(document.getElementById("stock-threshold").value),
