@@ -361,7 +361,7 @@
             <select id="execution-mode">
               <option value="observe">观察模式（只给建议）</option>
               <option value="shadow">影子模式（人工操作后核验）</option>
-              <option value="supervised">受控执行（逐次授权）</option>
+              <option value="supervised">受监督执行（逐次授权）</option>
             </select>
           </label>
           <label>ROI 目标<input id="roi-target" type="number" min="0.1" max="20" step="0.1"></label>
@@ -421,6 +421,8 @@
       </section>
     </main>
     <script src="sidepanel.js"></script>
+    <script src="sidepanel-plans.js"></script>
+    <script src="sidepanel-tasks.js"></script>
     <script src="sidepanel-scan.js"></script>
   </body>
 </html>

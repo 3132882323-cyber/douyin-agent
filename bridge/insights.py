@@ -9,6 +9,7 @@ from typing import Any
 
 from action_protocol import assess_automation_readiness, build_action_draft
 from reconcile import official_plan_index, reconcile_plan_against_official
+from execution_modes import execution_mode_label, normalize_execution_mode
 
 
 def _facade():
@@ -1326,7 +1327,7 @@ def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, A
     """Turn plan diagnostics into a ranked, operator-friendly loss-control queue."""
 
     settings = settings or load_agent_settings()
-    mode = str(settings.get("execution_mode") or "observe")
+    mode = normalize_execution_mode(settings.get("execution_mode"))
     min_spend = max(1.0, float(settings.get("min_spend_for_action") or 100))
     queue: list[dict[str, Any]] = []
     for item in build_plan_recommendations(settings):
@@ -1374,7 +1375,7 @@ def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, A
     return {
         "generated_at": _now_label(),
         "execution_mode": mode,
-        "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}[mode],
+        "execution_mode_label": execution_mode_label(mode),
         "items": queue[:10],
         "summary": {
             "must_handle": sum(1 for item in queue if item["bucket"] == "must_handle"),

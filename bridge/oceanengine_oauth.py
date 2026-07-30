@@ -24,7 +24,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 DEFAULT_APP_ID = "1871942906223351"
-PUBLIC_CALLBACK_URL = (
+PUBLIC_CALLBACK_URL = os.environ.get(
+    "DIAN_AGENT_OAUTH_CALLBACK_URL",
+    "https://dian-agent-oauth-3132882323.abuzz-cod-4955.chatgpt.site"
+    "/api/oauth/oceanengine/callback",
+).strip() or (
     "https://dian-agent-oauth-3132882323.abuzz-cod-4955.chatgpt.site"
     "/api/oauth/oceanengine/callback"
 )
