@@ -582,10 +582,12 @@ function renderStopLossQueue(report = {}) {
     const tag = document.createElement("span"); tag.textContent = `${item.bucket_label} · 风险 ${item.risk_score}`;
     top.append(title, tag);
     const reason = document.createElement("p"); reason.textContent = item.reason || item.diagnosis || "计划需要复核";
-    const saving = document.createElement("b"); saving.textContent = item.estimated_savings_label || "暂不估算节省金额";
+    const components = document.createElement("small");
+    components.textContent = (item.risk_components || []).map((part) => `${part.label} ${part.score}`).join(" · ");
+    const saving = document.createElement("b"); saving.textContent = item.estimated_savings_label || "暂不估算可避免消耗";
     const action = document.createElement("small");
     action.textContent = item.can_start_execution ? "可进入逐次授权的受控执行" : `当前为${report.execution_mode_label || "观察模式"}，先由运营复核`;
-    card.append(top, reason, saving, action);
+    card.append(top, reason, components, saving, action);
     appendCopyAction(card, item.action_params);
     return card;
   }));
@@ -1349,6 +1351,11 @@ function renderExecutionPreflight(report = {}) {
   document.getElementById("preflight-target").textContent = action.plan_name
     ? `${action.account_label || "千川账号"} · ${action.plan_name} · ${action.field || "预算"} ${action.current_value ?? "--"} → ${action.target_value ?? "--"}`
     : "等待选择已授权的止损方案";
+  const impact = action.impact_preview || {};
+  if (action.plan_name && impact.change_percent != null) {
+    document.getElementById("preflight-target").textContent +=
+      ` · 影响 ${impact.change_percent}% · 今日消耗 ¥${impact.today_spend ?? "--"} · 单日额度 ¥${impact.daily_budget_impact_limit ?? "--"} · 回滚条件：${impact.rollback_condition}`;
+  }
   const checks = document.getElementById("preflight-checks");
   checks.replaceChildren(...(report.checks || []).map((item) => {
     const row = document.createElement("div"); row.className = `preflight-check${item.passed ? " passed" : ""}`;
@@ -1376,7 +1383,7 @@ function renderExecutionEffectiveness(report = {}) {
   const summary = report.summary || {};
   document.getElementById("execution-effectiveness-status").textContent = `${items.length} 项`;
   const container = document.getElementById("execution-effectiveness");
-  if (!items.length) return empty(container, "完成一次受监督执行后，这里会生成 2 小时复查任务。");
+  if (!items.length) return empty(container, "完成一次受监督执行后，这里会按消耗速度生成动态复查任务。");
   container.classList.remove("empty-state");
   container.replaceChildren(...items.map((item) => {
     const card = document.createElement("article");
@@ -1392,7 +1399,10 @@ function renderExecutionEffectiveness(report = {}) {
       ? `调整前 ROI ${item.before?.roi ?? "--"} / 订单 ${item.before?.orders ?? "--"}；最新 ROI ${item.after?.roi ?? "--"} / 订单 ${item.after?.orders ?? "--"}`
       : "等待新的计划数据";
     const verdict = document.createElement("p"); verdict.className = "shadow-detail"; verdict.textContent = item.verdict || "";
-    card.append(head, change, metrics, verdict);
+    const windowHint = document.createElement("small");
+    const minutes = item.observation_window_minutes || 120;
+    windowHint.textContent = `复查窗口：${minutes >= 60 ? `${minutes / 60} 小时` : `${minutes} 分钟`}`;
+    card.append(head, change, metrics, windowHint, verdict);
     if (item.rollback_available) {
       const rollback = document.createElement("button");
       rollback.type = "button";
