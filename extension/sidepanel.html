@@ -334,7 +334,7 @@
       <details class="fold-card">
         <summary>采集健康度 <span id="health-count">检测中</span></summary>
         <section>
-        <div id="health-alerts" class="stack empty-state">积累足够数据后开始监测（至少 5 次巡查）</div>
+        <div id="health-alerts" class="stack empty-state">积累足够数据后开始监测；同页质量连续骤降时会提示「疑似平台改版」</div>
         </section>
       </details>
 
@@ -370,7 +370,9 @@
           <label>单账户每日最多执行<input id="daily-execution-limit" type="number" min="1" max="50" step="1"></label>
           <label>每日预算影响上限<input id="daily-budget-limit" type="number" min="1" step="10"></label>
           <label>同账户执行冷却（分钟）<input id="execution-cooldown" type="number" min="0" max="1440" step="5"></label>
+          <label>深度巡查最大页数<input id="max-deep-scan-pages" type="number" min="1" max="20" step="1" title="列表页最多翻几页；超出仍会标记截断并禁止确认资金动作"></label>
         </div>
+        <p class="settings-intro">深度巡查页数保存在当前浏览器扩展中；截断数据仍不可确认预算方案。</p>
         <div class="settings-actions">
           <button id="save-settings" class="small-primary">保存设置</button>
         </div>

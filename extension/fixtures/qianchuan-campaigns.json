@@ -1,0 +1,14 @@
+{
+  "id": "qianchuan-campaigns",
+  "source": "qianchuan",
+  "expected_page_type": "campaigns",
+  "min_rows": 2,
+  "required_headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI"],
+  "account": {
+    "key": "acct_demo1234",
+    "label": "演示投放账号",
+    "confidence": "high",
+    "identity_source": "platform_id"
+  },
+  "html": "<!doctype html><html><body><main><h1>商品推广</h1><div role=\"tab\" aria-selected=\"true\">商品全域推广</div><div class=\"metric\"><span class=\"label\">消耗</span><span class=\"value\">1280.5</span></div><div class=\"metric\"><span class=\"label\">支付ROI</span><span class=\"value\">0.86</span></div><table><thead><tr><th>计划ID</th><th>计划名称</th><th>日预算</th><th>消耗</th><th>支付 ROI</th><th>成交订单</th></tr></thead><tbody><tr><td>plan_1001</td><td>夏季测新计划</td><td>500</td><td>320</td><td>0.72</td><td>2</td></tr><tr><td>plan_1002</td><td>直播放量计划</td><td>800</td><td>640</td><td>1.10</td><td>5</td></tr></tbody></table></main></body></html>"
+}

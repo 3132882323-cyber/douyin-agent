@@ -2819,46 +2819,89 @@ def update_health_baseline(source: str, page_type: str, quality: dict[str, Any])
         _atomic_json_write(_health_baselines_path(), baselines)
 
 
+def _consecutive_quality_drops(samples: list[dict[str, Any]], *, min_drops: int = 2, drop_points: int = 15) -> dict[str, Any] | None:
+    """Detect consecutive quality declines on the same page."""
+    recent = [item for item in samples if isinstance(item, dict)][-(min_drops + 1) :]
+    if len(recent) < min_drops + 1:
+        return None
+    for index in range(1, len(recent)):
+        previous = int(recent[index - 1].get("quality_score", 0) or 0)
+        current = int(recent[index].get("quality_score", 0) or 0)
+        if previous - current < drop_points:
+            return None
+    return {
+        "from_score": int(recent[0].get("quality_score", 0) or 0),
+        "to_score": int(recent[-1].get("quality_score", 0) or 0),
+        "drop_count": min_drops,
+    }
+
+
 def check_selector_health() -> dict[str, Any]:
     baselines = load_health_baselines()
     alerts: list[dict[str, Any]] = []
     snapshots = list_snapshots()
+    snapshot_map = {f"{item['source']}/{item['page_type']}": item for item in snapshots}
+    for key, value in baselines.items():
+        if not isinstance(value, dict):
+            continue
+        samples = [item for item in value.get("samples", []) if isinstance(item, dict)]
+        baseline = value.get("baseline") if isinstance(value.get("baseline"), dict) else {}
+        consecutive = _consecutive_quality_drops(samples)
+        if consecutive:
+            avg_score = float(baseline.get("avg_quality_score") or 0)
+            latest = int(consecutive["to_score"])
+            if avg_score <= 0 or latest < avg_score * 0.7 or consecutive["drop_count"] >= 2:
+                alerts.append({
+                    "level": "high",
+                    "page": key,
+                    "title": "疑似平台改版",
+                    "detail": (
+                        f"{key} 质量分连续 {consecutive['drop_count']} 次下降"
+                        f"（{consecutive['from_score']} → {consecutive['to_score']}）"
+                        + (f"，低于历史均值 {avg_score:.0f}。" if avg_score else "。")
+                    ),
+                    "action": "请打开该页面补采核对字段；如结构已变，优先更新选择器并补充 fixture 契约测试。",
+                })
+
     for item in snapshots:
         key = f"{item['source']}/{item['page_type']}"
-        baseline = baselines.get(key, {}).get("baseline")
+        baseline = baselines.get(key, {}).get("baseline") if isinstance(baselines.get(key), dict) else None
         if not baseline or baseline.get("sample_count", 0) < 3:
+            continue
+        if any(alert.get("page") == key and alert.get("title") == "疑似平台改版" for alert in alerts):
             continue
         current_score = item.get("quality_score", 0)
         avg_score = baseline.get("avg_quality_score", 0)
-        current_rows = item.get("quality_score", 0)  # Use quality score as proxy
+        current_rows = item.get("row_count", 0)
         avg_rows = baseline.get("avg_row_count", 0)
-        # Alert if quality dropped significantly
+        # Alert if quality dropped significantly vs historical mean
         if avg_score > 30 and current_score < avg_score * 0.5:
             alerts.append({
                 "level": "high",
-                "page": f"{item['source']}/{item['page_type']}",
+                "page": key,
                 "title": f"{item['page_type']} 采集质量异常下降",
                 "detail": f"当前质量分 {current_score}，历史均值 {avg_score:.0f}。页面结构可能已改版。",
                 "action": "请打开该页面检查字段是否正确识别，如需更新选择器请提交 Issue。",
             })
-        elif avg_rows > 5 and item.get("row_count", 0) < avg_rows * 0.3:
+        elif avg_rows > 5 and current_rows < avg_rows * 0.3:
             alerts.append({
                 "level": "warning",
-                "page": f"{item['source']}/{item['page_type']}",
+                "page": key,
                 "title": f"{item['page_type']} 采集行数偏低",
-                "detail": f"当前 {item.get('row_count', 0)} 行，历史均值 {avg_rows:.0f} 行。可能是虚拟滚动未触发或列表缩短。",
+                "detail": f"当前 {current_rows} 行，历史均值 {avg_rows:.0f} 行。可能是虚拟滚动未触发或列表缩短。",
                 "action": "刷新页面后重试；如仍偏低，平台可能调整了分页或列表结构。",
             })
     # Overall health score
     total_pages = len(baselines)
-    healthy = sum(1 for key, value in baselines.items() if value.get("baseline", {}).get("sample_count", 0) >= 3)
+    healthy = sum(1 for _key, value in baselines.items() if isinstance(value, dict) and value.get("baseline", {}).get("sample_count", 0) >= 3)
     return {
         "generated_at": _now_label(),
         "total_tracked_pages": total_pages,
         "pages_with_baseline": healthy,
         "alerts": alerts,
-        "baselines": {key: value.get("baseline", {}) for key, value in baselines.items()},
+        "baselines": {key: value.get("baseline", {}) for key, value in baselines.items() if isinstance(value, dict)},
         "mode": "read_only",
+        "snapshot_pages": len(snapshot_map),
     }
 
 

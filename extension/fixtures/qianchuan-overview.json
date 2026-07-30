@@ -1,0 +1,14 @@
+{
+  "id": "qianchuan-overview",
+  "source": "qianchuan",
+  "expected_page_type": "overview",
+  "min_metrics": 2,
+  "required_metric_labels": ["消耗", "支付ROI"],
+  "account": {
+    "key": "acct_demo1234",
+    "label": "演示投放账号",
+    "confidence": "high",
+    "identity_source": "platform_id"
+  },
+  "html": "<!doctype html><html><body><main><h1>千川经营首页</h1><div class=\"overview-card metric\"><span class=\"label\">消耗</span><span class=\"value\">2560</span></div><div class=\"overview-card metric\"><span class=\"label\">支付ROI</span><span class=\"value\">1.25</span></div><div class=\"overview-card metric\"><span class=\"label\">成交订单</span><span class=\"value\">18</span></div><p>账户余额与今日投放概览</p></main></body></html>"
+}

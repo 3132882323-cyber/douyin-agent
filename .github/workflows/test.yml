@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  push:
+    branches: [main, zjt_dev]
+  pull_request:
+
+jobs:
+  bridge-and-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install bridge dependency
+        run: pip install -r bridge/requirements.txt
+      - name: Run test suite
+        run: bash run-tests.sh

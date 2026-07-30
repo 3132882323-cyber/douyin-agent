@@ -1013,7 +1013,7 @@ function renderCoverage(coverage = []) {
   }));
 }
 
-function renderSettings(settings) {
+function renderSettings(settings, extensionSettings = {}) {
   document.getElementById("execution-mode").value = settings.execution_mode || "observe";
   document.getElementById("roi-target").value = settings.roi_target;
   document.getElementById("spend-threshold").value = settings.min_spend_for_action;
@@ -1021,6 +1021,7 @@ function renderSettings(settings) {
   document.getElementById("daily-execution-limit").value = settings.max_daily_execution_count ?? 3;
   document.getElementById("daily-budget-limit").value = settings.max_daily_budget_reduction ?? 300;
   document.getElementById("execution-cooldown").value = settings.execution_cooldown_minutes ?? 30;
+  document.getElementById("max-deep-scan-pages").value = extensionSettings.maxDeepScanPages ?? 5;
   document.getElementById("report-time").value = settings.daily_report_time;
   document.getElementById("report-enabled").checked = settings.daily_report_enabled;
   const template = REPORT_TEMPLATE_LABELS[settings.report_template] ? settings.report_template : "default";
@@ -1642,7 +1643,7 @@ async function loadDashboard() {
   renderOperations(ops, actionCenter.shelf_analysis || {}, actionCenter.live_analysis || {}, actionCenter.creative_analysis || {}, insights.coverage || []);
   renderAlerts(insights.alerts || []);
   renderCoverage(insights.coverage || []);
-  renderSettings(settings);
+  renderSettings(settings, extensionResponse.dashboard?.settings || {});
   renderIntegrations(integrations);
   renderOceanEngineOAuth(oceanengine);
   renderOceanEngineSync(oceanengineSync);
@@ -2062,7 +2063,13 @@ document.getElementById("save-settings").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
       body: JSON.stringify(payload),
     });
-    status.textContent = "设置已保存，建议已按新阈值刷新。";
+    const pages = Math.max(1, Math.min(20, Number(document.getElementById("max-deep-scan-pages").value) || 5));
+    const extensionSettings = await chrome.runtime.sendMessage({
+      type: "update-settings",
+      settings: { maxDeepScanPages: pages },
+    });
+    if (!extensionSettings?.ok) throw new Error(extensionSettings?.error || "扩展设置保存失败");
+    status.textContent = "设置已保存；深度巡查页数写入当前浏览器，截断仍禁止确认资金动作。";
     await loadDashboard();
   } catch (error) {
     status.textContent = `保存失败：${error.message}`;

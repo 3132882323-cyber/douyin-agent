@@ -925,6 +925,46 @@ class SnapshotStoreTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_health_monitor_flags_consecutive_quality_drops_as_possible_redesign(self) -> None:
+        key = "qianchuan/campaigns"
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "quality": {"score": 30, "row_count": 0, "metric_count": 0},
+                "tables": [],
+            },
+        )
+        # Overwrite baselines after save_data so the trailing samples form a
+        # clean consecutive-drop streak ending at the current snapshot score.
+        http_receiver._atomic_json_write(
+            http_receiver._health_baselines_path(),
+            {
+                key: {
+                    "samples": [
+                        {"quality_score": 90, "row_count": 20, "metric_count": 4, "captured_at": 1},
+                        {"quality_score": 88, "row_count": 20, "metric_count": 4, "captured_at": 2},
+                        {"quality_score": 70, "row_count": 8, "metric_count": 2, "captured_at": 3},
+                        {"quality_score": 50, "row_count": 2, "metric_count": 1, "captured_at": 4},
+                        {"quality_score": 30, "row_count": 0, "metric_count": 0, "captured_at": 5},
+                    ],
+                    "baseline": {
+                        "avg_quality_score": 85.0,
+                        "avg_row_count": 18.0,
+                        "avg_metric_count": 3.5,
+                        "sample_count": 5,
+                    },
+                }
+            },
+        )
+        report = http_receiver.check_selector_health()
+        titles = [item["title"] for item in report["alerts"]]
+        self.assertIn("疑似平台改版", titles)
+        redesign = next(item for item in report["alerts"] if item["title"] == "疑似平台改版")
+        self.assertEqual(redesign["page"], key)
+        self.assertEqual(redesign["level"], "high")
+
 
 if __name__ == "__main__":
     unittest.main()

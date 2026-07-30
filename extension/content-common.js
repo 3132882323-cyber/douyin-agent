@@ -154,8 +154,9 @@
       && !/disabled/i.test(button.className || ""));
   }
 
-  async function harvestTables(privacyMode, includePagination) {
+  async function harvestTables(privacyMode, includePagination, maxPages = 5) {
     if (!includePagination) return { tables: extractTables(privacyMode), pages: 1, virtualPasses: 0, truncated: false };
+    const pageLimit = Math.max(1, Math.min(20, Number(maxPages) || 5));
     const merged = [];
     let virtualPasses = 0;
     let pages = 1;
@@ -181,7 +182,7 @@
     };
     await harvestCurrentPage();
     if (includePagination) {
-      for (let page = 2; page <= 5; page += 1) {
+      for (let page = 2; page <= pageLimit; page += 1) {
         const next = nextPageButton();
         if (!next) break;
         next.click();
@@ -191,7 +192,7 @@
       }
       truncated = Boolean(nextPageButton());
     }
-    return { tables: merged.map(({ __key, ...table }) => table), pages, virtualPasses, truncated };
+    return { tables: merged.map(({ __key, ...table }) => table), pages, virtualPasses, truncated, max_pages: pageLimit };
   }
 
   function extractMetrics(privacyMode) {
@@ -269,9 +270,10 @@
     return Math.min(100, score);
   }
 
-  async function collect(source, pageType, privacyMode = true, reason = "auto") {
+  async function collect(source, pageType, privacyMode = true, reason = "auto", options = {}) {
     const scanHarvest = String(reason).startsWith("full-scan-list-");
-    const harvested = await harvestTables(privacyMode, scanHarvest);
+    const maxDeepScanPages = Math.max(1, Math.min(20, Number(options.maxDeepScanPages) || 5));
+    const harvested = await harvestTables(privacyMode, scanHarvest, maxDeepScanPages);
     const tables = harvested.tables;
     const metrics = extractMetrics(privacyMode);
     const rawVisibleText = document.body?.innerText || "";
@@ -289,7 +291,9 @@
     if (loginRequired) warnings.push("页面可能未登录");
     if (pageType === "unknown") warnings.push("暂未识别该页面类型");
     if (!tables.length && !Object.keys(metrics).length) warnings.push("未发现结构化指标或表格");
-    if (harvested.truncated) warnings.push("分页超过 5 页，本轮仅采集前 5 页");
+    if (harvested.truncated) {
+      warnings.push(`分页超过 ${maxDeepScanPages} 页，本轮仅采集前 ${maxDeepScanPages} 页`);
+    }
 
     return {
       schema_version: 2,
@@ -311,6 +315,7 @@
         row_count: tables.reduce((sum, table) => sum + table.rows.length, 0),
         warnings,
         pages_scanned: harvested.pages,
+        max_pages: maxDeepScanPages,
         virtual_scroll_passes: harvested.virtualPasses,
         pagination_truncated: harvested.truncated,
       },
@@ -330,5 +335,7 @@
     isSensitiveHeader,
     extractKnownMetrics,
     extractKnownSignals,
+    extractTables,
+    qualityScore,
   };
 })();

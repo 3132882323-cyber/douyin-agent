@@ -126,7 +126,8 @@
   async function capture(reason = "auto") {
     const stored = await chrome.storage.local.get("settings");
     const privacyMode = stored.settings?.privacyMode !== false;
-    const data = await globalThis.DianAgentExtractor.collect(SOURCE, detectPageType(), privacyMode, reason);
+    const maxDeepScanPages = Math.max(1, Math.min(20, Number(stored.settings?.maxDeepScanPages) || 5));
+    const data = await globalThis.DianAgentExtractor.collect(SOURCE, detectPageType(), privacyMode, reason, { maxDeepScanPages });
     data.account = detectAccountContext();
     const response = await chrome.runtime.sendMessage({ type: "page-data", source: SOURCE, data });
     return { ok: true, page_type: data.page_type, quality: data.quality, account: data.account, bridge: response };

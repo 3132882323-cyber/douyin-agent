@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS = {
   fullScanIntervalHours: 6,
   privacyMode: true,
   operatingMode: "sentinel",
+  maxDeepScanPages: 5,
 };
 
 const FULL_SCAN_PAGES = [
@@ -346,7 +347,12 @@ async function scanOnePage(tabId, page, reason, expectedAccount = {}) {
         await sleep(3500);
       }
       const scanMode = page.harvestList ? "full-scan-list" : "full-scan-page";
-      const collectTimeoutMs = Number(page.collectTimeoutMs || (page.harvestList ? 30000 : 12000));
+      const settings = await getSettings();
+      const maxDeepScanPages = Math.max(1, Math.min(20, Number(settings.maxDeepScanPages) || 5));
+      const baseTimeout = Number(page.collectTimeoutMs || (page.harvestList ? 30000 : 12000));
+      const collectTimeoutMs = page.harvestList
+        ? Math.max(baseTimeout, maxDeepScanPages * 6000)
+        : baseTimeout;
       const response = await withTimeout(
         collectFromTab(page.source, { id: tabId }, `${scanMode}-${reason}-${page.id}`),
         collectTimeoutMs,
@@ -887,10 +893,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const next = { ...(await getSettings()), ...(message.settings || {}) };
       next.intervalMinutes = Math.max(1, Number(next.intervalMinutes) || 5);
       next.fullScanIntervalHours = Math.max(1, Number(next.fullScanIntervalHours) || 6);
+      next.maxDeepScanPages = Math.max(1, Math.min(20, Number(next.maxDeepScanPages) || 5));
       next.operatingMode = next.operatingMode === "full" ? "full" : "sentinel";
       await chrome.storage.local.set({ settings: next });
       await configureAlarm();
       sendResponse({ ok: true, settings: next });
+      return;
+    }
+    if (message.type === "get-settings") {
+      sendResponse({ ok: true, settings: await getSettings() });
       return;
     }
     if (message.type === "open-platform") {
