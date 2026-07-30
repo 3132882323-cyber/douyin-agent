@@ -141,6 +141,44 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(cancelled["state"], "cancelled")
         self.assertEqual(http_receiver.get_action_audit()["summary"]["cancelled"], 1)
 
+    def test_strategy_simulation_compares_policies_without_execution(self) -> None:
+        queue_report = {
+            "items": [
+                {
+                    "plan": "高风险计划",
+                    "bucket": "must_handle",
+                    "risk_score": 82,
+                    "estimated_savings_low": 60,
+                    "estimated_savings_high": 120,
+                    "evidence": {"orders": 2},
+                    "action_params": {"change": {"current_value": 500, "target_value": 400}},
+                },
+                {
+                    "plan": "中风险计划",
+                    "bucket": "must_handle",
+                    "risk_score": 62,
+                    "estimated_savings_low": 30,
+                    "estimated_savings_high": 60,
+                    "evidence": {"orders": 1},
+                    "action_params": {"change": {"current_value": 300, "target_value": 240}},
+                },
+            ]
+        }
+        report = http_receiver.build_strategy_simulation(queue_report)
+        scenarios = {item["key"]: item for item in report["scenarios"]}
+        self.assertFalse(report["execution_enabled"])
+        self.assertEqual(3, len(scenarios))
+        self.assertEqual(2, scenarios["protect_roi"]["selected_plan_count"])
+        self.assertEqual(1, scenarios["balanced"]["selected_plan_count"])
+        self.assertEqual(80.0, scenarios["balanced"]["estimated_budget_impact"])
+        self.assertTrue(all(not item["can_execute"] for item in scenarios.values()))
+        decision = http_receiver.save_strategy_decision("balanced")
+        self.assertEqual("balanced", decision["policy_key"])
+        self.assertFalse(decision["execution_enabled"])
+        self.assertEqual(decision["decision_id"], http_receiver.load_strategy_decisions()["current"]["decision_id"])
+        with self.assertRaisesRegex(ValueError, "策略类型无效"):
+            http_receiver.save_strategy_decision("automatic_batch")
+
     def test_missing_budget_stays_blocked_and_never_falls_back_to_pause(self) -> None:
         http_receiver.save_data(
             "qianchuan",

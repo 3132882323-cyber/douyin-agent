@@ -593,6 +593,53 @@ function renderStopLossQueue(report = {}) {
   }));
 }
 
+function renderStrategySimulation(report = {}) {
+  const scenarios = report.scenarios || [];
+  const selectedPolicy = report.selected_decision?.policy_key;
+  const container = document.getElementById("strategy-simulation");
+  document.getElementById("strategy-simulation-status").textContent = scenarios.length ? "3 种方案" : "只读预演";
+  document.getElementById("strategy-simulation-summary").textContent =
+    `${report.recommended_reason || "默认先比较策略影响。"} ${report.note || ""}`;
+  if (!scenarios.length) return empty(container, "当前没有足够的止损数据用于策略模拟。");
+  container.className = "stack";
+  container.replaceChildren(...scenarios.map((scenario) => {
+    const card = document.createElement("article");
+    card.className = `plan-workbench-card${scenario.key === report.recommended_policy ? " opportunity" : ""}`;
+    const top = document.createElement("div"); top.className = "recommendation-top";
+    const title = document.createElement("strong"); title.textContent = scenario.label;
+    const tag = document.createElement("span");
+    tag.textContent = scenario.key === selectedPolicy ? "当前采用" : scenario.key === report.recommended_policy ? "系统建议" : `风险≥${scenario.risk_threshold}`;
+    top.append(title, tag);
+    const description = document.createElement("p"); description.textContent = scenario.description;
+    const metrics = document.createElement("small");
+    metrics.textContent = `涉及 ${scenario.selected_plan_count} 个计划 · 预算影响约 ¥${scenario.estimated_budget_impact} · 可避免无效消耗 ¥${scenario.estimated_avoided_waste_low}–¥${scenario.estimated_avoided_waste_high} · 订单风险提示 ${scenario.estimated_orders_at_risk}`;
+    const plans = document.createElement("small");
+    plans.textContent = scenario.selected_plan_names?.length ? `计划：${scenario.selected_plan_names.join("、")}` : "当前无计划达到该策略阈值";
+    const select = document.createElement("button");
+    select.type = "button";
+    select.className = scenario.key === selectedPolicy ? "small-secondary" : "small-primary";
+    select.textContent = scenario.key === selectedPolicy ? "已采用此策略" : "采用此策略";
+    select.disabled = scenario.key === selectedPolicy;
+    select.addEventListener("click", async () => {
+      select.disabled = true;
+      select.textContent = "正在记录…";
+      try {
+        await bridgeFetch("/actions/strategy/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+          body: JSON.stringify({ policy_key: scenario.key }),
+        });
+        await loadDashboard();
+      } catch (error) {
+        select.disabled = false;
+        select.textContent = error.message || "记录失败";
+      }
+    });
+    card.append(top, description, metrics, plans, select);
+    return card;
+  }));
+}
+
 function planWorkbenchCard(item) {
   const card = document.createElement("article");
   card.className = `plan-workbench-card ${item.level || "info"}`;
@@ -1538,7 +1585,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, stopLossR, preflightR, shadowR, executionEffectivenessR, integrationsR, oceanengineR, oceanengineSyncR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, stopLossR, strategySimulationR, preflightR, shadowR, executionEffectivenessR, integrationsR, oceanengineR, oceanengineSyncR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1552,6 +1599,7 @@ async function loadDashboard() {
     bridgeFetch("/effectiveness"),
     bridgeFetch("/actions/readiness"),
     bridgeFetch("/actions/stop-loss-queue"),
+    bridgeFetch("/actions/strategy-simulation"),
     bridgeFetch("/actions/preflight"),
     bridgeFetch("/actions/shadow"),
     bridgeFetch("/actions/effectiveness"),
@@ -1573,6 +1621,7 @@ async function loadDashboard() {
   const effectiveness = val(effectivenessR, {});
   const readiness = val(readinessR, { items: [], summary: {}, criteria: [] });
   const stopLoss = val(stopLossR, { items: [], summary: {} });
+  const strategySimulation = val(strategySimulationR, { scenarios: [] });
   const preflight = val(preflightR, { state: "idle", session: null, checks: [] });
   const shadow = val(shadowR, { items: [], summary: {} });
   const executionEffectiveness = val(executionEffectivenessR, { items: [], summary: {} });
@@ -1611,6 +1660,7 @@ async function loadDashboard() {
   renderEffectiveness(effectiveness);
   renderAutomationReadiness(readiness);
   renderStopLossQueue(stopLoss);
+  renderStrategySimulation(strategySimulation);
   renderExecutionPreflight(preflight);
   renderShadowExecution(shadow);
   renderExecutionEffectiveness(executionEffectiveness);
