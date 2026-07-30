@@ -1,4 +1,4 @@
-# 店策 Agent 迭代说明（`zjt_dev`）
+﻿# 店策 Agent 迭代说明（`zjt_dev`）
 
 > 分支：`zjt_dev`  
 > 用途：记录安全与数据质量相关改造，供后续迭代对照。  
@@ -79,4 +79,4 @@
 | 2026-07-30 | `8d5754f` | P1：可配置深度页数、fixture 契约、连续质量骤降告警、CI |
 | 2026-07-30 | `071bfef` | P2 首刀：storage 拆分、网页/API 预算对账降置信度 |
 | 2026-07-30 | `1e9b6fb` | P2 续：抽出 `insights.py` + `sidepanel-scan.js` |
-| 2026-07-30 | （待提交） | P2 收尾 + P3 首刀：actions/reports 拆分、文案三态、OAuth 回调可配 |
+| 2026-07-30 | `4b6424f` | P2 收尾 + P3 首刀：actions/reports 拆分、文案三态、OAuth 回调可配 |
