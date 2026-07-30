@@ -13,27 +13,23 @@ from pathlib import Path
 from typing import Any
 
 from action_protocol import build_action_draft, transition_action, validate_action_draft
-from insights import _clean_entity_name, _entity_identifier, _evidence_value, _pick
+from insights import (
+    _clean_entity_name,
+    _entity_identifier,
+    _evidence_value,
+    _pick,
+    match_delivery_status,
+    pause_plan_succeeded,
+)
 from storage import _atomic_json_write, _now_label, load_data
 import state
 
 logger = logging.getLogger("dian-agent-http")
 _state_lock = state._state_lock
 
-PAUSE_SUCCESS_STATUSES = ("暂停", "已暂停")
-
 
 def _data_dir() -> Path:
     return state.DATA_DIR
-
-
-def _pause_plan_succeeded(status: Any, *, target_value: Any = "暂停") -> bool:
-    text = str(status or "").strip()
-    if not text:
-        return False
-    if text == str(target_value or "暂停"):
-        return True
-    return any(token in text for token in PAUSE_SUCCESS_STATUSES)
 
 
 def _facade():
@@ -234,11 +230,7 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
             roi = _evidence_value(record, ("支付roi", "roi", "整体roi"))
             orders = _evidence_value(record, ("成交订单", "支付订单", "成交订单数", "订单数"))
             _, status_raw = _pick(record, ("投放状态", "计划状态", "状态"))
-            status_text = str(status_raw or "")
-            status = next(
-                (label for label in ("投放中", "启用", "生效中", "运行中", "暂停", "已暂停", "未投放") if label in status_text),
-                status_text.strip().splitlines()[0] if status_text.strip() else "",
-            )
+            status = match_delivery_status(status_raw)
             captured_at_ms = int(
                 data.get("captured_at")
                 or (float((snapshot or {}).get("timestamp", 0)) * 1000)
@@ -668,7 +660,7 @@ def verify_execution_result(action_id: str) -> dict[str, Any]:
             matched = bool(
                 readback
                 and int(readback.get("captured_at_ms") or 0) > submitted_at
-                and _pause_plan_succeeded(status, target_value=target_value)
+                and pause_plan_succeeded(status, target_value=target_value)
             )
         else:
             matched = bool(
@@ -1017,7 +1009,7 @@ def build_shadow_execution_report() -> dict[str, Any]:
                     observed_status = str(readback.get("status") or "")
                     target_value = change.get("target_value")
                     current = change.get("current_value")
-                    if _pause_plan_succeeded(observed_status, target_value=target_value):
+                    if pause_plan_succeeded(observed_status, target_value=target_value):
                         status = "matched"
                         status_label = "回读已匹配"
                         detail = f"最新页面投放状态为 {observed_status}，与确认目标一致。"

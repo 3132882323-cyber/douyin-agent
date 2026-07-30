@@ -319,6 +319,43 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
     return records
 
 
+ACTIVE_DELIVERY_STATUSES = ("投放中", "启用", "生效中", "运行中")
+PAUSE_SUCCESS_STATUSES = ("已暂停", "暂停中", "暂停")
+_DELIVERY_STATUS_LABELS = (*ACTIVE_DELIVERY_STATUSES, "已暂停", "未投放", "暂停")
+
+
+def match_delivery_status(status_raw: Any) -> str:
+    """Normalize a status cell without treating 未暂停 as 暂停."""
+
+    text = str(status_raw or "").strip()
+    if not text:
+        return ""
+    if text in _DELIVERY_STATUS_LABELS:
+        return text
+    first = text.splitlines()[0].strip()
+    if first in _DELIVERY_STATUS_LABELS:
+        return first
+    for label in sorted(_DELIVERY_STATUS_LABELS, key=len, reverse=True):
+        start = 0
+        while True:
+            idx = text.find(label, start)
+            if idx < 0:
+                break
+            if label == "暂停" and idx > 0 and text[idx - 1] in "未不":
+                start = idx + 1
+                continue
+            return label
+    return first
+
+
+def pause_plan_succeeded(status: Any, *, target_value: Any = "暂停") -> bool:
+    matched = match_delivery_status(status)
+    target = str(target_value or "暂停").strip()
+    if matched and matched == target:
+        return True
+    return matched in PAUSE_SUCCESS_STATUSES
+
+
 def _pick(record: dict[str, Any], keywords: tuple[str, ...]) -> tuple[str, Any] | tuple[None, None]:
     for label, value in record.items():
         normalized = str(label).lower().replace(" ", "")
@@ -371,8 +408,9 @@ def _action_params_for_plan(
     budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
     plan_id = _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id"))
     _, status_raw = _pick(record, ("投放状态", "计划状态", "状态"))
-    status_text = str(status_raw or "")
-    active_status = next((label for label in ("投放中", "启用", "生效中", "运行中") if label in status_text), "")
+    active_status = match_delivery_status(status_raw)
+    if active_status not in ACTIVE_DELIVERY_STATUSES:
+        active_status = ""
     operation_type = "replace_creative"
     operation_label = "优化素材"
     field = "素材"
@@ -548,7 +586,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
         if spend is None and roi is None:
             continue
         _, status_value = _pick(record, ("投放状态", "计划状态", "状态"))
-        if spend == 0 and "暂停" in str(status_value or ""):
+        if spend == 0 and pause_plan_succeeded(status_value):
             continue
 
         plan_roi_target = _extract_labeled_number(record, "ROI目标")
