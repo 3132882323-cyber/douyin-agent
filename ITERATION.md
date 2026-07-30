@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | **P0** | 截断/低质数据不可执行化 + Bridge 写入鉴权 + 工作台补采优先 | ✅ 已完成 |
 | **P1** | 选择器/页面类型回归、关键页 fixture、健康漂移告警、可配置深度页数 | ✅ 已完成 |
-| **P2** | 拆分 `http_receiver.py` / `sidepanel.js`；网页与官方 API 对账 | ✅ 本轮完成（首刀） |
+| **P2** | 拆分 `http_receiver.py` / `sidepanel.js`；网页与官方 API 对账 | ✅ 本轮完成（insights + 体检 UI） |
 | **P3** | 执行面按闸门扩展（单计划暂停等）；OAuth 回调可配置 | ⏳ 待开始 |
 
 ---
@@ -120,11 +120,11 @@ python -m unittest discover -s . -p "test_*.py"
 | 改版告警 | `check_selector_health`：连续 ≥2 次下降且每次 ≥15 分 →「疑似平台改版」；并修复行数对比误用 quality_score 的 bug |
 | 本地验证 | `.\run-tests.ps1` 或 `bash run-tests.sh` |
 
-### P2 — 可维护性与双通道可信度（本轮已完成首刀）
+### P2 — 可维护性与双通道可信度（本轮继续）
 
 - [x] 拆分 `http_receiver.py`：抽出 `state.py` + `storage.py`（快照/账号目录 I/O），facade 继续 re-export  
-- [ ] 继续拆分：`insights` / `actions` / `reports` / `http_api`（下一批）  
-- [ ] 拆分 `sidepanel.js`：体检、任务、千川方案、设置（下一批）  
+- [x] 继续拆分：抽出 `insights.py`（诊断/计划建议/货架直播/体检单）；`actions` / `reports` / `http_api` 仍待下一批  
+- [x] 拆分 `sidepanel.js`：抽出 `sidepanel-scan.js`（巡查进度 + 体检单）；任务/千川方案/设置仍待下一批  
 - [x] 有 OAuth 时：网页快照 vs 官方 API 计划预算/消耗对账；偏差超阈值降置信度  
 
 #### P2 说明
@@ -133,7 +133,9 @@ python -m unittest discover -s . -p "test_*.py"
 | --- | --- |
 | `bridge/state.py` | 共享 `DATA_DIR` / 锁 / 缓存；测试用 `http_receiver.set_data_dir()` 同步 |
 | `bridge/storage.py` | `save_data` / `load_data` / `list_snapshots` / 账号目录 / `build_store_catalog` |
+| `bridge/insights.py` | trends / insights / 计划建议 / 货架直播 / ops / 体检单等；经 `http_receiver` facade re-export |
 | `bridge/reconcile.py` | 官方 `plans` 与浏览器计划行对账；预算或消耗偏差 ≥20% 或 ≥50 元 → `confidence=medium` |
+| `extension/sidepanel-scan.js` | `scanReceiptFromStatus` / `renderScanReceipt` / `renderFullScan`；工作台 HTML 在 `sidepanel.js` 后加载 |
 | 官方计划表 | `oceanengine_data` 的 `plans` 表增加「消耗」列，便于计划级对账 |
 | 无 OAuth | 对账跳过，行为与 P1 一致 |
 
@@ -160,4 +162,5 @@ python -m unittest discover -s . -p "test_*.py"
 | --- | --- | --- |
 | 2026-07-30 | `136d238` | P0：截断阻断、Bridge Bearer、工作台补采 |
 | 2026-07-30 | `8d5754f` | P1：可配置深度页数、fixture 契约、连续质量骤降告警、CI |
-| 2026-07-30 | （待提交） | P2 首刀：storage 拆分、网页/API 预算对账降置信度 |
+| 2026-07-30 | `071bfef` | P2 首刀：storage 拆分、网页/API 预算对账降置信度 |
+| 2026-07-30 | `7476f98` | P2 续：抽出 `insights.py` + `sidepanel-scan.js` |
