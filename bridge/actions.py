@@ -539,6 +539,8 @@ def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
         )
         if not action:
             raise ValueError("授权对应的动作不存在。")
+        if action.get("state") != "confirmed":
+            raise ValueError("动作已撤销或状态已变化，不能消费执行授权。")
         quota = assess_execution_quota(action, now_ms=now_ms)
         if not quota["allowed"]:
             raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))

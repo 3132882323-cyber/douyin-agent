@@ -383,13 +383,24 @@ def list_snapshots() -> list[dict[str, Any]]:
             if not snapshot:
                 continue
             data = snapshot.get("data", {})
+            if not isinstance(data, dict):
+                continue
+            # When an account is selected, do not merge root snapshots belonging to another account.
+            if source == "qianchuan" and selected_account and account_key == "":
+                root_account = str((data.get("account") or {}).get("key") or "").lower()
+                channel = str(data.get("channel") or "")
+                if root_account and root_account != selected_account:
+                    continue
+                # Official API snapshots may omit account; keep those for reconcile.
+                if not root_account and channel != "official_api":
+                    continue
             quality = data.get("quality", {}) if isinstance(data, dict) else {}
             age = max(0, int(time.time() - float(snapshot.get("timestamp", 0))))
             items.append(
                 {
                     "source": source,
                     "page_type": snapshot.get("page_type", path.stem),
-                    "account_key": str(((data.get("account") or {}) if isinstance(data, dict) else {}).get("key") or account_key or ""),
+                    "account_key": str((data.get("account") or {}).get("key") or account_key or ""),
                     "saved_at": snapshot.get("saved_at"),
                     "age_seconds": age,
                     "fresh": age < state.STALE_SECONDS,

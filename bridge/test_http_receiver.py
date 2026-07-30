@@ -449,6 +449,53 @@ class SnapshotStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不能增加预算"):
             http_receiver.start_execution_preflight(confirmed["action_id"])
 
+    def test_consume_rejects_cancelled_confirmed_action(self) -> None:
+        http_receiver.save_agent_settings({"execution_mode": "supervised"})
+        captured_at = int(time.time() * 1000)
+        snapshot = {
+            "schema_version": 2,
+            "page_type": "campaigns",
+            "captured_at": captured_at,
+            "account": {"key": "acct_cancel1", "label": "撤销消费账号"},
+            "quality": {"score": 90, "row_count": 1},
+            "tables": [{
+                "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                "rows": [["plan_cancel1", "撤销消费计划", "500", "300", "0.60", "2"]],
+            }],
+        }
+        http_receiver.save_data("qianchuan", snapshot)
+        draft = http_receiver.build_action_draft(
+            operation_type="adjust_budget",
+            operation_label="降低预算 20%",
+            target_kind="qianchuan_plan",
+            target_id="plan_cancel1",
+            target_name="撤销消费计划",
+            account_key="acct_cancel1",
+            account_label="撤销消费账号",
+            field="预算",
+            current_value=500.0,
+            target_value=400.0,
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=captured_at,
+            quality_score=90,
+            confidence="high",
+            evidence={"spend": 300.0, "roi": 0.60, "orders": 2.0},
+        )
+        confirmed = http_receiver.confirm_action_draft(draft)
+        awaiting = http_receiver.start_execution_preflight(confirmed["action_id"])
+        snapshot["captured_at"] = awaiting["session"]["started_at_ms"] + 1000
+        http_receiver.save_data("qianchuan", snapshot)
+        ready = http_receiver.build_execution_preflight_report()
+        self.assertEqual("ready_for_final_confirmation", ready["state"])
+        authorized = http_receiver.authorize_execution_preflight(
+            ready["session"]["session_id"],
+            "确认降低预算至400.0",
+        )
+        http_receiver.cancel_confirmed_action(confirmed["action_id"])
+        with self.assertRaisesRegex(ValueError, "撤销|状态已变化"):
+            http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
+
     def test_supervised_pause_plan_preflight_uses_status_gates(self) -> None:
         http_receiver.save_agent_settings({"execution_mode": "supervised"})
         captured_at = int(time.time() * 1000)

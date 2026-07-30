@@ -313,7 +313,7 @@
     const confirms = buttons.filter((button) => {
       const label = String(button.innerText || button.textContent || "").trim();
       if (/取消|关闭|再想想/.test(label)) return false;
-      return /^(确认|确定|暂停|停用)$/.test(label);
+      return /^(确认|确定|暂停|停用)$/.test(label) || /^(确认|确定)(暂停|停用)$/.test(label);
     });
     if (confirms.length !== 1) return false;
     confirms[0].click();
