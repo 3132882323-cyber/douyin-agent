@@ -580,11 +580,15 @@ def restore_execution_authorization(authorization_id: str) -> dict[str, Any]:
         if int(session.get("authorization_expires_at_ms") or 0) <= now_ms:
             _save_execution_preflight({**session, "state": "expired", "execution_enabled": False, "write_enabled": False})
             raise ValueError("执行授权已过期，无法恢复。")
+        restore_count = int(session.get("authorization_restore_count") or 0)
+        if restore_count >= 2:
+            raise ValueError("授权恢复次数已达上限，请重新口令确认。")
         restored = {
             **session,
             "state": "authorized",
             "authorization_consumed": False,
             "authorization_restored_at_ms": now_ms,
+            "authorization_restore_count": restore_count + 1,
             "execution_enabled": False,
             "write_enabled": False,
         }

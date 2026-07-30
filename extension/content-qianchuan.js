@@ -239,51 +239,62 @@
   }
 
   async function supervisedPauseSubmit(request) {
-    probePauseExecution(request);
-    const account = detectAccountContext();
-    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
-    const row = findAuthorizedPlanRow(request);
-    const control = findPauseControl(row, String(request.expected_current_value || ""));
-    control.click();
-    await dismissPauseConfirmationIfPresent();
-    const expected = String(request.expected_current_value || "");
-    const successObserved = await waitFor(() => {
-      const notices = Array.from(document.querySelectorAll(
-        "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
-      )).filter(visible);
-      const toastText = notices.map((item) => String(item.innerText || item.textContent || "")).join("\n");
-      if (/已暂停|暂停成功/.test(toastText)) return true;
-      let rowText = "";
-      try {
-        rowText = String(findAuthorizedPlanRow(request).innerText || "");
-      } catch {
+    let platformMutationAttempted = false;
+    try {
+      probePauseExecution(request);
+      const account = detectAccountContext();
+      if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+      const row = findAuthorizedPlanRow(request);
+      const control = findPauseControl(row, String(request.expected_current_value || ""));
+      control.click();
+      platformMutationAttempted = true;
+      await dismissPauseConfirmationIfPresent();
+      const expected = String(request.expected_current_value || "");
+      const successObserved = await waitFor(() => {
+        const notices = Array.from(document.querySelectorAll(
+          "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
+        )).filter(visible);
+        const toastText = notices.map((item) => String(item.innerText || item.textContent || "")).join("\n");
+        if (/已暂停|暂停成功/.test(toastText)) return true;
+        let rowText = "";
+        try {
+          rowText = String(findAuthorizedPlanRow(request).innerText || "");
+        } catch {
+          return false;
+        }
+        if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) return true;
+        // Generic success toast alone is not enough unless the row left the authorized active status.
+        if (/(?:操作|设置|修改)完成|已保存/.test(toastText) && expected && !rowShowsStatus(rowText, expected)) {
+          return true;
+        }
         return false;
+      });
+      if (!successObserved) {
+        return {
+          ok: false,
+          submitted: false,
+          platform_mutation_attempted: true,
+          plan_id: String(request.plan_id || ""),
+          target_value: "暂停",
+          error: "已点击平台暂停，但未读取到成功回执；请立即在千川核对，系统不会重复提交。",
+        };
       }
-      if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) return true;
-      // Generic success toast alone is not enough unless the row left the authorized active status.
-      if (/(?:操作|设置|修改)完成|已保存/.test(toastText) && expected && !rowShowsStatus(rowText, expected)) {
-        return true;
-      }
-      return false;
-    });
-    if (!successObserved) {
+      return {
+        ok: true,
+        mode: "supervised_submit",
+        plan_id: String(request.plan_id || ""),
+        target_value: "暂停",
+        submitted: true,
+        platform_success_observed: true,
+      };
+    } catch (error) {
       return {
         ok: false,
         submitted: false,
-        platform_mutation_attempted: true,
-        plan_id: String(request.plan_id || ""),
-        target_value: "暂停",
-        error: "已点击平台暂停，但未读取到成功回执；请立即在千川核对，系统不会重复提交。",
+        platform_mutation_attempted: platformMutationAttempted,
+        error: error.message || String(error),
       };
     }
-    return {
-      ok: true,
-      mode: "supervised_submit",
-      plan_id: String(request.plan_id || ""),
-      target_value: "暂停",
-      submitted: true,
-      platform_success_observed: true,
-    };
   }
 
   async function dismissPauseConfirmationIfPresent() {
@@ -291,7 +302,7 @@
       const nodes = Array.from(document.querySelectorAll(
         "[role='dialog'], [class*='modal'], [class*='Modal'], [class*='dialog'], [class*='confirm']",
       )).filter(visible);
-      return nodes.find((node) => /暂停|停用|确认/.test(String(node.innerText || node.textContent || ""))) || null;
+      return nodes.find((node) => /暂停|停用/.test(String(node.innerText || node.textContent || ""))) || null;
     }, 1800);
     if (!dialog) return false;
     const buttons = Array.from(dialog.querySelectorAll("button")).filter((button) => (
@@ -355,81 +366,92 @@
 
   async function supervisedBudgetSubmit(request) {
     if (request?.operation_type === "pause_plan") return supervisedPauseSubmit(request);
-    probeBudgetExecution(request);
-    if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
-      throw new Error("当前页面执行器只支持受监督降低预算、恢复原预算或单计划暂停。");
-    }
-    const account = detectAccountContext();
-    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
-    const planId = String(request.plan_id || "").trim();
-    const planName = String(request.plan_name || "").trim();
-    if (!planId || !planName) throw new Error("授权缺少计划唯一 ID 或名称。");
-    const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']"))
-      .filter((row) => row.getClientRects().length > 0);
-    const matches = rows.filter((row) => {
-      const text = String(row.innerText || "").replace(/\s+/g, " ");
-      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
-      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
-    });
-    if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止辅助填写。" : "当前页面未找到授权计划，请打开对应计划列表。");
-    const row = matches[0];
-    const inputs = Array.from(row.querySelectorAll("input")).filter((input) => input.getClientRects().length > 0 && !input.disabled);
-    const expected = Number(request.expected_current_value);
-    const budgetInput = inputs.find((input) => {
-      const label = `${input.getAttribute("aria-label") || ""} ${input.getAttribute("placeholder") || ""}`;
-      return /预算/.test(label) && Math.abs((normalizedNumber(input.value) ?? NaN) - expected) <= 0.01;
-    });
-    if (!budgetInput) throw new Error("未找到与授权当前预算一致的输入框，页面未做任何修改。");
-    const target = Number(request.target_value);
-    const inRange = request.operation_type === "restore_budget"
-      ? target > expected && (target - expected) / expected <= 0.50
-      : target > 0 && target < expected && (expected - target) / expected <= 0.30;
-    if (!Number.isFinite(target) || !inRange) {
-      throw new Error("目标预算不符合首批止损或回滚范围。");
-    }
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (!setter) throw new Error("浏览器不支持安全填写预算。");
-    setter.call(budgetInput, String(target));
-    budgetInput.dispatchEvent(new Event("input", { bubbles: true }));
-    budgetInput.dispatchEvent(new Event("change", { bubbles: true }));
-    budgetInput.focus();
-    budgetInput.style.outline = "3px solid #f59e0b";
-    budgetInput.scrollIntoView({ behavior: "smooth", block: "center" });
-
-    const submitScope = budgetInput.closest("[role='dialog'], [class*='modal'], [class*='drawer']") || row;
-    const buttons = Array.from(submitScope.querySelectorAll("button")).filter(visible);
-    const submitButtons = buttons.filter((button) => /^(确认|确定|保存|提交)$/.test(String(button.innerText || button.textContent || "").trim())
-      && !button.disabled && button.getAttribute("aria-disabled") !== "true");
-    if (submitButtons.length !== 1) {
-      setter.call(budgetInput, String(expected));
+    let platformMutationAttempted = false;
+    try {
+      probeBudgetExecution(request);
+      if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
+        throw new Error("当前页面执行器只支持受监督降低预算、恢复原预算或单计划暂停。");
+      }
+      const account = detectAccountContext();
+      if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+      const planId = String(request.plan_id || "").trim();
+      const planName = String(request.plan_name || "").trim();
+      if (!planId || !planName) throw new Error("授权缺少计划唯一 ID 或名称。");
+      const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']"))
+        .filter((row) => row.getClientRects().length > 0);
+      const matches = rows.filter((row) => {
+        const text = String(row.innerText || "").replace(/\s+/g, " ");
+        const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
+        return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+      });
+      if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止辅助填写。" : "当前页面未找到授权计划，请打开对应计划列表。");
+      const row = matches[0];
+      const inputs = Array.from(row.querySelectorAll("input")).filter((input) => input.getClientRects().length > 0 && !input.disabled);
+      const expected = Number(request.expected_current_value);
+      const budgetInput = inputs.find((input) => {
+        const label = `${input.getAttribute("aria-label") || ""} ${input.getAttribute("placeholder") || ""}`;
+        return /预算/.test(label) && Math.abs((normalizedNumber(input.value) ?? NaN) - expected) <= 0.01;
+      });
+      if (!budgetInput) throw new Error("未找到与授权当前预算一致的输入框，页面未做任何修改。");
+      const target = Number(request.target_value);
+      const inRange = request.operation_type === "restore_budget"
+        ? target > expected && (target - expected) / expected <= 0.50
+        : target > 0 && target < expected && (expected - target) / expected <= 0.30;
+      if (!Number.isFinite(target) || !inRange) {
+        throw new Error("目标预算不符合首批止损或回滚范围。");
+      }
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      if (!setter) throw new Error("浏览器不支持安全填写预算。");
+      setter.call(budgetInput, String(target));
       budgetInput.dispatchEvent(new Event("input", { bubbles: true }));
-      throw new Error(submitButtons.length ? "发现多个提交按钮，已恢复原预算并停止。" : "未找到唯一提交按钮，已恢复原预算并停止。");
-    }
-    submitButtons[0].click();
-    const successObserved = await waitFor(() => {
-      const notices = Array.from(document.querySelectorAll(
-        "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
-      )).filter(visible);
-      return notices.some((item) => /成功|已保存|修改完成|设置完成/.test(String(item.innerText || item.textContent || "")));
-    });
-    if (!successObserved) {
+      budgetInput.dispatchEvent(new Event("change", { bubbles: true }));
+      budgetInput.focus();
+      budgetInput.style.outline = "3px solid #f59e0b";
+      budgetInput.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      const submitScope = budgetInput.closest("[role='dialog'], [class*='modal'], [class*='drawer']") || row;
+      const buttons = Array.from(submitScope.querySelectorAll("button")).filter(visible);
+      const submitButtons = buttons.filter((button) => /^(确认|确定|保存|提交)$/.test(String(button.innerText || button.textContent || "").trim())
+        && !button.disabled && button.getAttribute("aria-disabled") !== "true");
+      if (submitButtons.length !== 1) {
+        setter.call(budgetInput, String(expected));
+        budgetInput.dispatchEvent(new Event("input", { bubbles: true }));
+        throw new Error(submitButtons.length ? "发现多个提交按钮，已恢复原预算并停止。" : "未找到唯一提交按钮，已恢复原预算并停止。");
+      }
+      submitButtons[0].click();
+      platformMutationAttempted = true;
+      const successObserved = await waitFor(() => {
+        const notices = Array.from(document.querySelectorAll(
+          "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
+        )).filter(visible);
+        return notices.some((item) => /成功|已保存|修改完成|设置完成/.test(String(item.innerText || item.textContent || "")));
+      });
+      if (!successObserved) {
+        return {
+          ok: false,
+          submitted: false,
+          platform_mutation_attempted: true,
+          plan_id: planId,
+          target_value: target,
+          error: "已点击平台提交，但未读取到成功回执；请立即在千川核对，系统不会重复提交。",
+        };
+      }
+      return {
+        ok: true,
+        mode: "supervised_submit",
+        plan_id: planId,
+        target_value: target,
+        submitted: true,
+        platform_success_observed: true,
+      };
+    } catch (error) {
       return {
         ok: false,
         submitted: false,
-        platform_mutation_attempted: true,
-        plan_id: planId,
-        target_value: target,
-        error: "已点击平台提交，但未读取到成功回执；请立即在千川核对，系统不会重复提交。",
+        platform_mutation_attempted: platformMutationAttempted,
+        error: error.message || String(error),
       };
     }
-    return {
-      ok: true,
-      mode: "supervised_submit",
-      plan_id: planId,
-      target_value: target,
-      submitted: true,
-      platform_success_observed: true,
-    };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

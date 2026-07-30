@@ -590,16 +590,17 @@ async function querySourceTabs(source) {
 
 async function collectFromTab(source, tab, reason) {
   try {
-    return await sendTabMessage(tab.id, { type: "collect-now", reason }, source);
+    return await sendTabMessage(tab.id, { type: "collect-now", reason }, source, { reinject: true });
   } catch (error) {
     throw new Error(error.message || String(error));
   }
 }
 
-async function sendTabMessage(tabId, message, source = "qianchuan") {
+async function sendTabMessage(tabId, message, source = "qianchuan", { reinject = true } = {}) {
   try {
     return await chrome.tabs.sendMessage(tabId, message);
   } catch (firstError) {
+    if (!reinject) throw firstError;
     const platformScript = source === "doudian" ? "content-doudian.js" : "content-qianchuan.js";
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -723,16 +724,28 @@ async function runAuthorizedExecution(authorizationId) {
   const probe = await sendTabMessage(selection.tab.id, {
     type: "qianchuan-execution-probe",
     request: preview.preview?.execution_request,
-  }, "qianchuan");
+  }, "qianchuan", { reinject: true });
   if (!probe?.ok || !probe?.ready) throw new Error(probe?.error || "当前千川页面尚未满足执行条件");
   const consumed = await bridgePost("/actions/preflight/consume", { authorization_id: authorizationId });
   const request = consumed.grant?.execution_request;
   if (!request) throw new Error("授权中缺少执行参数");
   let result;
   try {
-    result = await sendTabMessage(selection.tab.id, { type: "qianchuan-supervised-submit", request }, "qianchuan");
+    // Never reinject-and-retry submit: pause/budget clicks are not idempotent.
+    result = await sendTabMessage(
+      selection.tab.id,
+      { type: "qianchuan-supervised-submit", request },
+      "qianchuan",
+      { reinject: false },
+    );
   } catch (error) {
-    result = { ok: false, submitted: false, error: error.message || String(error) };
+    // Transport failure after consume: assume mutation may have started; do not restore.
+    result = {
+      ok: false,
+      submitted: false,
+      platform_mutation_attempted: true,
+      error: error.message || String(error),
+    };
   }
   if (result?.ok && result?.submitted === true) {
     await bridgePost("/actions/execution/result", { action_id: consumed.grant.action_id, result });

@@ -382,8 +382,15 @@ class SnapshotStoreTests(unittest.TestCase):
         restored = http_receiver.restore_execution_authorization(authorized["session"]["authorization_id"])
         self.assertEqual("authorized", restored["state"])
         self.assertFalse(restored["session"]["authorization_consumed"])
+        self.assertEqual(1, restored["session"]["authorization_restore_count"])
         consumed = http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
         self.assertEqual("authorization_consumed", consumed["state"])
+        # After a failed click-less attempt the grant can be restored again, but not forever.
+        restored_again = http_receiver.restore_execution_authorization(authorized["session"]["authorization_id"])
+        self.assertEqual(2, restored_again["session"]["authorization_restore_count"])
+        consumed = http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
+        with self.assertRaisesRegex(ValueError, "恢复次数已达上限"):
+            http_receiver.restore_execution_authorization(authorized["session"]["authorization_id"])
         executed = http_receiver.record_execution_result(
             confirmed["action_id"],
             {

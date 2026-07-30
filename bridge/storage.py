@@ -363,14 +363,21 @@ def list_snapshots() -> list[dict[str, Any]]:
     selected_account = str(load_agent_settings().get("qianchuan_account_key") or "").lower()
     for source in sorted(state.ALLOWED_SOURCES):
         paths: list[tuple[Path, str | None]] = []
+        seen_pages: set[str] = set()
         if source == "qianchuan" and selected_account and SAFE_KEY.fullmatch(selected_account):
             account_dir = state.DATA_DIR / "qianchuan_accounts" / selected_account
             if account_dir.exists():
-                paths = [(path, selected_account) for path in sorted(account_dir.glob("*.json"))]
-        if not paths:
-            source_dir = state.DATA_DIR / source
-            if source_dir.exists():
-                paths = [(path, "" if source == "qianchuan" else None) for path in sorted(source_dir.glob("*.json"))]
+                for path in sorted(account_dir.glob("*.json")):
+                    paths.append((path, selected_account))
+                    seen_pages.add(path.stem)
+        source_dir = state.DATA_DIR / source
+        if source_dir.exists():
+            for path in sorted(source_dir.glob("*.json")):
+                # Prefer account-partitioned pages; still surface root-only pages
+                # (e.g. official API plans) so reconcile does not go blind.
+                if path.stem in seen_pages:
+                    continue
+                paths.append((path, "" if source == "qianchuan" else None))
         for path, account_key in paths:
             snapshot = load_data(source, path.stem, account_key=account_key)
             if not snapshot:

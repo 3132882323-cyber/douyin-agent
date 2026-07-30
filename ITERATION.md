@@ -86,10 +86,16 @@
 | LEGACY-3 | ✅ | `consume_execution_authorization` 在锁内复核配额 |
 | LEGACY-4 | ⚠️ | `/health.secret_files` 增加默认第三方回调告警；仍需生产自设 `DIAN_AGENT_OAUTH_CALLBACK_URL` |
 | LEGACY-5 | ✅ | `set_data_dir` 清空 `_analysis_cache` |
-| LEGACY-6 | ✅ | 平台未改动失败时 `/actions/preflight/restore` 恢复授权；已点击则不恢复 |
+| LEGACY-6 | ✅ | 平台未改动失败时 `/actions/preflight/restore` 恢复授权；已点击则不恢复；恢复最多 2 次 |
 | LEGACY-7 | ✅ | 对账优先 `plan_id`；同名标 `ambiguous_plan_name` |
 | LEGACY-8 | ✅ | 选中账号非空时按 `entry.account_key` 过滤建议 |
-| LEGACY-9 | ✅ | `list_snapshots` 优先读选中账号分区 |
+| LEGACY-9 | ✅ | `list_snapshots` 优先账号分区，并合并根目录独有页（如官方 plans） |
+
+### 执行提交安全补充（LEGACY 收敛后复查）
+
+- submit **禁止** reinject 后原样重放（避免暂停开关二次点击）
+- 传输层失败按「可能已改动平台」处理，**不** restore
+- 暂停确认弹窗须含「暂停/停用」文案，避免点到无关「确认」
 
 ---
 
