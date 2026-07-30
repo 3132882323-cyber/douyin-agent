@@ -276,8 +276,38 @@ async function pollFullScan() {
 }
 
 async function bridgeFetch(path, options = {}) {
-  const response = await fetch(`${BRIDGE_URL}${path}`, { cache: "no-store", ...options });
-  const value = await response.json().catch(() => ({}));
+  const method = String(options.method || "GET").toUpperCase();
+  const buildHeaders = async (forceRefresh = false) => {
+    const headers = { ...(options.headers || {}) };
+    if (method === "GET" || method === "HEAD") return headers;
+    if (forceRefresh) await chrome.storage.local.remove("bridgeToken");
+    const stored = await chrome.storage.local.get("bridgeToken");
+    let token = stored.bridgeToken;
+    if (!token) {
+      const bootstrap = await fetch(`${BRIDGE_URL}/auth/bootstrap`, {
+        cache: "no-store",
+        headers: { "X-Dian-Agent": "2" },
+      });
+      const bootstrapValue = await bootstrap.json().catch(() => ({}));
+      if (!bootstrap.ok || !bootstrapValue.token) {
+        throw new Error(bootstrapValue.error || "无法领取本地 Agent 写入令牌");
+      }
+      token = bootstrapValue.token;
+      await chrome.storage.local.set({ bridgeToken: token });
+    }
+    headers["Content-Type"] = headers["Content-Type"] || "application/json";
+    headers["X-Dian-Agent"] = headers["X-Dian-Agent"] || "2";
+    headers.Authorization = `Bearer ${token}`;
+    return headers;
+  };
+  let headers = await buildHeaders(false);
+  let response = await fetch(`${BRIDGE_URL}${path}`, { cache: "no-store", ...options, headers });
+  let value = await response.json().catch(() => ({}));
+  if (response.status === 403 && value.error === "missing_or_invalid_bridge_token" && method !== "GET" && method !== "HEAD") {
+    headers = await buildHeaders(true);
+    response = await fetch(`${BRIDGE_URL}${path}`, { cache: "no-store", ...options, headers });
+    value = await response.json().catch(() => ({}));
+  }
   if (!response.ok) throw new Error(value.error || `本地 Agent 返回 HTTP ${response.status}`);
   return value;
 }
@@ -292,19 +322,22 @@ function renderConnection(ok, title, detail) {
 function scanReceiptFromStatus(scan = {}) {
   const results = (scan.results || []).filter((item) => item && typeof item === "object").map((item) => {
     const score = Math.max(0, Math.min(100, Number(item.quality?.score || 0)));
+    const paginationTruncated = Boolean(item.quality?.pagination_truncated);
     return {
       ...item,
       source: item.source || (String(item.id || "").startsWith("qianchuan") ? "qianchuan" : "doudian"),
       quality_score: score,
       metric_count: Number(item.quality?.metric_count || 0),
       row_count: Number(item.quality?.row_count || 0),
-      needs_review: Boolean(item.ok) && score < 70,
+      pagination_truncated: paginationTruncated,
+      needs_review: Boolean(item.ok) && (score < 70 || paginationTruncated),
     };
   });
   const total = Math.max(Number(scan.total || 0), results.length);
   const success = results.filter((item) => item.ok).length;
   const failed = results.filter((item) => !item.ok).length;
   const needsReview = results.filter((item) => item.needs_review).length;
+  const truncated = results.filter((item) => item.pagination_truncated).length;
   const coverageRate = total ? Math.round(results.length / total * 100) : 0;
   const running = scan.status === "running";
   const ready = scan.status === "completed" && coverageRate === 100 && failed === 0 && needsReview === 0;
@@ -325,7 +358,8 @@ function scanReceiptFromStatus(scan = {}) {
     },
     warnings: [
       failed ? `${failed} 个页面读取失败，可在下方单独重试。` : "",
-      needsReview ? `${needsReview} 个页面质量分低于 70，相关建议需要人工复核。` : "",
+      needsReview ? `${needsReview} 个页面质量不足或列表被截断，相关建议需先补采。` : "",
+      truncated ? `${truncated} 个页面列表超过采集页数上限，止损/预算方案已锁定。` : "",
       total && results.length < total && !running ? `巡查仅覆盖 ${results.length}/${total} 个页面。` : "",
     ].filter(Boolean),
     results,
@@ -380,19 +414,21 @@ function renderScanReceipt(receipt = {}) {
     cardRow.className = `receipt-page${!item.ok ? " failed" : item.needs_review ? " review" : ""}`;
     const title = document.createElement("strong"); title.textContent = item.label || item.id || "未命名页面";
     const tag = document.createElement("span"); tag.className = "receipt-status";
-    tag.textContent = !item.ok ? "失败" : item.needs_review ? "需复核" : "通过";
+    tag.textContent = !item.ok ? "失败" : item.pagination_truncated ? "需补采" : item.needs_review ? "需复核" : "通过";
     const detail = document.createElement("small");
     detail.textContent = !item.ok
       ? item.error || "页面读取失败"
-      : `${LABELS[item.source] || item.source} · 质量 ${item.quality_score || 0} · ${item.row_count || 0} 行 · ${item.metric_count || 0} 项指标`;
+      : item.pagination_truncated
+        ? `${LABELS[item.source] || item.source} · 列表截断 · 质量 ${item.quality_score || 0} · ${item.row_count || 0} 行`
+        : `${LABELS[item.source] || item.source} · 质量 ${item.quality_score || 0} · ${item.row_count || 0} 行 · ${item.metric_count || 0} 项指标`;
     cardRow.append(title, tag, detail);
-    if (!item.ok && item.id) {
+    if ((!item.ok || item.needs_review) && item.id) {
       const retry = document.createElement("button");
       retry.type = "button";
-      retry.textContent = "只重试这一页";
+      retry.textContent = item.ok ? "补采" : "只重试这一页";
       retry.addEventListener("click", async () => {
         retry.disabled = true;
-        retry.textContent = "正在重试…";
+        retry.textContent = item.ok ? "正在补采…" : "正在重试…";
         const response = await chrome.runtime.sendMessage({
           type: "start-full-scan",
           page_ids: [item.id],
@@ -400,7 +436,7 @@ function renderScanReceipt(receipt = {}) {
         });
         if (!response?.ok) {
           retry.disabled = false;
-          retry.textContent = response?.error || "重试失败";
+          retry.textContent = response?.error || (item.ok ? "补采失败" : "重试失败");
           return;
         }
         await loadDashboard();
@@ -455,8 +491,13 @@ function renderFullScan(scan = {}) {
   document.getElementById("full-scan-button").disabled = running || accountSelectionRequired;
   document.getElementById("full-scan-button").textContent = running ? "正在自动获取…" : accountSelectionRequired ? "请先选择千川账号" : "自动获取全店数据";
   document.getElementById("cancel-scan-button").hidden = !running;
-  document.getElementById("retry-scan-button").hidden = running || !(scan.failed > 0);
-  renderScanReceipt(scanReceiptFromStatus(scan));
+  const receipt = scanReceiptFromStatus(scan);
+  const needsRescan = Number(scan.failed || 0) > 0 || Number(receipt.summary?.needs_review || 0) > 0;
+  document.getElementById("retry-scan-button").hidden = running || !needsRescan;
+  document.getElementById("retry-scan-button").textContent = Number(receipt.summary?.needs_review || 0) > 0 && !(scan.failed > 0)
+    ? "补采低质量页"
+    : "补采失败/低质量页";
+  renderScanReceipt(receipt);
   if (running && !scanPoller) scanPoller = setInterval(() => pollFullScan().catch(() => undefined), 1500);
   if (!running && scanPoller) { clearInterval(scanPoller); scanPoller = null; }
 }
@@ -1294,12 +1335,13 @@ function renderAutomationReadiness(report = {}) {
     if (item.status !== "manual_only") {
       const actions = document.createElement("div"); actions.className = "automation-card-actions";
       const button = document.createElement("button"); button.type = "button";
-      const needsReread = (item.blocked_reasons || []).some((reason) => ["DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "CONFIDENCE_NOT_HIGH"].includes(reason.code));
-      button.textContent = needsReread ? "重新读取当前千川页" : item.status === "confirmable" ? "查看并确认方案" : item.status === "preflight_ready" ? "启动执行前检查" : "查看投放方案";
+      const needsReread = (item.blocked_reasons || []).some((reason) => ["DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "SNAPSHOT_TRUNCATED", "CONFIDENCE_NOT_HIGH"].includes(reason.code));
+      button.textContent = needsReread ? "补采当前千川页" : item.status === "confirmable" ? "查看并确认方案" : item.status === "preflight_ready" ? "启动执行前检查" : "查看投放方案";
       button.addEventListener("click", async () => {
         if (needsReread) {
           document.getElementById("current-qianchuan-button").click();
-          document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          document.getElementById("scan-receipt")?.scrollIntoView({ behavior: "smooth", block: "start" })
+            || document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
           return;
         }
         if (item.status === "preflight_ready" && item.action_id) {

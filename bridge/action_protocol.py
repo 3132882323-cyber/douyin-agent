@@ -67,6 +67,7 @@ def _identity_payload(action: dict[str, Any]) -> dict[str, Any]:
         "page_type": evidence.get("page_type"),
         "captured_at_ms": evidence.get("captured_at_ms"),
         "quality_score": evidence.get("quality_score"),
+        "pagination_truncated": bool(evidence.get("pagination_truncated")),
         "confidence": evidence.get("confidence"),
         "rollback_of_action_id": evidence.get("rollback_of_action_id"),
         "policy": action.get("policy"),
@@ -106,6 +107,7 @@ def build_action_draft(
     evidence: dict[str, Any] | None = None,
     copy_text: str = "",
     now_ms: int | None = None,
+    pagination_truncated: bool = False,
 ) -> dict[str, Any]:
     """Create a policy-checked action draft.
 
@@ -120,6 +122,9 @@ def build_action_draft(
     target_id = str(target_id or "").strip()
     target_name = str(target_name or "").strip()[:120]
     operation_type = str(operation_type or "").strip()
+    evidence = dict(evidence or {})
+    pagination_truncated = bool(pagination_truncated or evidence.get("pagination_truncated"))
+    evidence["pagination_truncated"] = pagination_truncated
     blocked: list[dict[str, str]] = []
 
     if operation_type not in EXECUTABLE_OPERATIONS:
@@ -136,8 +141,10 @@ def build_action_draft(
         blocked.append(_block("DATA_STALE", "计划数据已超过 10 分钟，请重新同步后再确认。"))
     if int(quality_score or 0) < 70:
         blocked.append(_block("DATA_QUALITY_LOW", "页面采集质量不足 70 分，暂不允许确认资金动作。"))
+    if pagination_truncated:
+        blocked.append(_block("SNAPSHOT_TRUNCATED", "列表分页被截断，完整数据未采齐前禁止确认资金动作。"))
     if confidence != "high":
-        blocked.append(_block("CONFIDENCE_NOT_HIGH", "当前判断置信度不足，需补齐消耗、ROI 和成交数据。"))
+        blocked.append(_block("CONFIDENCE_NOT_HIGH", "当前判断置信度不足，需补齐消耗、成交和 ROI 数据。"))
 
     change_percent: float | None = None
     if operation_type in {"adjust_budget", "adjust_bid", "restore_budget"}:
@@ -187,7 +194,7 @@ def build_action_draft(
             "captured_at_ms": captured_at_ms,
             "quality_score": int(quality_score or 0),
             "confidence": confidence,
-            **(evidence or {}),
+            **evidence,
         },
         "policy": {
             "risk_level": risk_level,
@@ -273,8 +280,8 @@ def assess_automation_readiness(action: dict[str, Any]) -> dict[str, Any]:
         status = "blocked"
         label = "暂时阻止"
         stage = "qualification"
-        if codes & {"DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "CONFIDENCE_NOT_HIGH"}:
-            next_step = "重新读取当前千川页面，并补齐高质量消耗、成交和 ROI 数据。"
+        if codes & {"DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "SNAPSHOT_TRUNCATED", "CONFIDENCE_NOT_HIGH"}:
+            next_step = "先补采当前千川页面，确认列表未截断且质量分达标后再生成方案。"
         elif codes & {"ACCOUNT_NOT_LOCKED", "TARGET_ID_MISSING", "TARGET_NAME_MISSING"}:
             next_step = "锁定正确千川账号，并补齐计划唯一 ID。"
         else:

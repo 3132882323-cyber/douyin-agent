@@ -54,6 +54,15 @@ class ActionProtocolTests(unittest.TestCase):
         self.assertIn("DATA_STALE", codes)
         self.assertIn("DATA_QUALITY_LOW", codes)
 
+    def test_truncated_snapshot_blocks_confirmation_and_asks_for_rescan(self):
+        draft = self._draft(pagination_truncated=True)
+        codes = {item["code"] for item in draft["blocked_reasons"]}
+        self.assertIn("SNAPSHOT_TRUNCATED", codes)
+        self.assertFalse(draft["can_confirm"])
+        readiness = assess_automation_readiness(draft)
+        self.assertEqual("blocked", readiness["status"])
+        self.assertIn("补采", readiness["next_step"])
+
     def test_change_limits_are_enforced(self):
         increase = self._draft(target_value=600)
         decrease = self._draft(target_value=300)

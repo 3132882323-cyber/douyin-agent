@@ -164,6 +164,36 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertFalse(draft["can_confirm"])
         self.assertIn("CURRENT_VALUE_MISSING", {item["code"] for item in draft["blocked_reasons"]})
 
+    def test_truncated_campaign_snapshot_blocks_confirmable_budget_draft(self) -> None:
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": int(time.time() * 1000),
+                "account": {"key": "acct_safe1234", "label": "主投放账号", "confidence": "high"},
+                "quality": {
+                    "score": 90,
+                    "metric_count": 0,
+                    "row_count": 1,
+                    "pagination_truncated": True,
+                    "warnings": ["分页超过 5 页，本轮仅采集前 5 页"],
+                },
+                "tables": [
+                    {
+                        "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                        "rows": [["plan_truncated_1", "截断列表计划", "500", "300", "0.60", "2"]],
+                    }
+                ],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_safe1234"})
+        item = http_receiver.build_plan_recommendations()[0]
+        draft = item["action_params"]
+        self.assertEqual(item["confidence"], "medium")
+        self.assertFalse(draft["can_confirm"])
+        self.assertIn("SNAPSHOT_TRUNCATED", {reason["code"] for reason in draft["blocked_reasons"]})
+
     def test_automation_readiness_builds_candidate_queue_without_execution(self) -> None:
         base = {
             "operation_type": "adjust_budget",
@@ -682,8 +712,8 @@ class SnapshotStoreTests(unittest.TestCase):
                 "account_key": "acct_safe1234",
                 "started_at": 1_785_200_000_000,
                 "finished_at": 1_785_200_060_000,
-                "total": 3,
-                "success": 2,
+                "total": 4,
+                "success": 3,
                 "failed": 1,
                 "results": [
                     {
@@ -702,6 +732,18 @@ class SnapshotStoreTests(unittest.TestCase):
                         "quality": {"score": 60, "metric_count": 2, "row_count": 1},
                     },
                     {
+                        "id": "qianchuan_live",
+                        "label": "千川直播推广",
+                        "source": "qianchuan",
+                        "ok": True,
+                        "quality": {
+                            "score": 88,
+                            "metric_count": 3,
+                            "row_count": 40,
+                            "pagination_truncated": True,
+                        },
+                    },
+                    {
                         "id": "qianchuan_video_library",
                         "label": "千川视频库",
                         "source": "qianchuan",
@@ -716,10 +758,14 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertFalse(receipt["analysis_ready"])
         self.assertEqual(receipt["account_label"], "主投放账号")
         self.assertEqual(receipt["summary"]["coverage_rate"], 100)
-        self.assertEqual(receipt["summary"]["needs_review"], 1)
+        self.assertEqual(receipt["summary"]["needs_review"], 2)
+        truncated = next(item for item in receipt["results"] if item["id"] == "qianchuan_live")
+        self.assertTrue(truncated["pagination_truncated"])
+        self.assertTrue(truncated["needs_review"])
         self.assertEqual(receipt["failed_page_ids"], ["qianchuan_video_library"])
         self.assertEqual(receipt["sources"]["qianchuan"]["failed"], 1)
         self.assertTrue(any("单独重试" in warning for warning in receipt["warnings"]))
+        self.assertTrue(any("截断" in warning for warning in receipt["warnings"]))
 
     def test_history_snapshots_build_seven_day_trends(self) -> None:
         now_ms = int(time.time() * 1000)
@@ -736,6 +782,7 @@ class SnapshotStoreTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_port}"
+        token = http_receiver.ensure_bridge_token()
         body = json.dumps(
             {
                 "source": "doudian",
@@ -759,15 +806,59 @@ class SnapshotStoreTests(unittest.TestCase):
                 )
             self.assertEqual(context.exception.code, 403)
 
+            with self.assertRaises(urllib.error.HTTPError) as missing_token:
+                urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/push",
+                        data=body,
+                        headers={"Content-Type": "application/json", "X-Dian-Agent": "2"},
+                        method="POST",
+                    )
+                )
+            self.assertEqual(missing_token.exception.code, 403)
+
+            with self.assertRaises(urllib.error.HTTPError) as bad_token:
+                urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/push",
+                        data=body,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Dian-Agent": "2",
+                            "Authorization": "Bearer wrong-token-value-xxxxxxxx",
+                        },
+                        method="POST",
+                    )
+                )
+            self.assertEqual(bad_token.exception.code, 403)
+
             response = urllib.request.urlopen(
                 urllib.request.Request(
                     f"{base_url}/push",
                     data=body,
-                    headers={"Content-Type": "application/json", "X-Dian-Agent": "2"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Dian-Agent": "2",
+                        "Authorization": f"Bearer {token}",
+                    },
                     method="POST",
                 )
             )
             self.assertTrue(json.loads(response.read())["ok"])
+
+            bootstrap = json.loads(
+                urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/auth/bootstrap",
+                        headers={"X-Dian-Agent": "2"},
+                    )
+                ).read()
+            )
+            self.assertEqual(bootstrap["token"], token)
+
+            health = json.loads(urllib.request.urlopen(f"{base_url}/health").read())
+            self.assertTrue(health["auth_required"])
+            self.assertNotIn("token", health)
 
             catalog = json.loads(urllib.request.urlopen(f"{base_url}/catalog").read())
             self.assertEqual(catalog["snapshots"][0]["page_type"], "overview")
@@ -782,6 +873,7 @@ class SnapshotStoreTests(unittest.TestCase):
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_port}"
         now_ms = int(time.time() * 1000)
+        token = http_receiver.ensure_bridge_token()
         draft = http_receiver.build_action_draft(
             operation_type="adjust_budget",
             operation_label="降低预算 20%",
@@ -806,7 +898,11 @@ class SnapshotStoreTests(unittest.TestCase):
                 urllib.request.Request(
                     f"{base_url}{path}",
                     data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "X-Dian-Agent": "2"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Dian-Agent": "2",
+                        "Authorization": f"Bearer {token}",
+                    },
                     method="POST",
                 )
             )

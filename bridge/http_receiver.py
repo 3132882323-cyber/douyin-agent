@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 import sys
 import tempfile
 import threading
@@ -100,6 +101,38 @@ def _invalidate_cache() -> None:
     _analysis_cache.clear()
 
 
+def _bridge_token_path() -> Path:
+    return DATA_DIR / "bridge_token.txt"
+
+
+def ensure_bridge_token() -> str:
+    """Load or create the local companion write-token."""
+    path = _bridge_token_path()
+    try:
+        if path.exists():
+            token = path.read_text(encoding="utf-8").strip()
+            if re.fullmatch(r"[A-Za-z0-9_-]{24,128}", token):
+                return token
+    except OSError:
+        logger.exception("读取 bridge_token 失败: %s", path)
+    token = secrets.token_urlsafe(32)
+    try:
+        path.write_text(token, encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    except OSError:
+        logger.exception("写入 bridge_token 失败: %s", path)
+        raise
+    logger.info("已生成本地 bridge_token（仅本机扩展写入接口使用）")
+    return token
+
+
+def load_bridge_token() -> str:
+    return ensure_bridge_token()
+
+
 def _schema_version_check() -> list[str]:
     """Check if any on-disk snapshots have outdated schema versions."""
     warnings: list[str] = []
@@ -119,7 +152,7 @@ def _schema_version_check() -> list[str]:
                         warnings.append(f"{source}/{path.stem} (schema v{sv})")
             except (OSError, json.JSONDecodeError, ValueError):
                 continue
-    return warnings[:10]
+    return warnings
 
 
 def _disk_usage_check() -> dict[str, Any]:
@@ -456,6 +489,7 @@ def list_snapshots() -> list[dict[str, Any]]:
                     "quality_score": int(quality.get("score", 0) or 0),
                     "metric_count": int(quality.get("metric_count", 0) or 0),
                     "row_count": int(quality.get("row_count", 0) or 0),
+                    "pagination_truncated": bool(quality.get("pagination_truncated")),
                     "warnings": quality.get("warnings", []),
                 }
             )
@@ -967,6 +1001,7 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
                         "source": source,
                         "page_type": item["page_type"],
                         "quality_score": int(quality.get("score", item["quality_score"]) or 0),
+                        "pagination_truncated": bool(quality.get("pagination_truncated") or item.get("pagination_truncated")),
                         "captured_at_ms": captured_at_ms,
                         "account_key": str(account.get("key") or "").lower(),
                         "account_label": str(account.get("label") or ""),
@@ -1053,6 +1088,7 @@ def _action_params_for_plan(
         for key in ("spend", "roi", "roi_target", "orders", "ctr")
         if evidence.get(key) is not None
     }
+    compact_evidence["pagination_truncated"] = bool(entry.get("pagination_truncated"))
     return build_action_draft(
         operation_type=operation_type,
         operation_label=operation_label,
@@ -1071,6 +1107,7 @@ def _action_params_for_plan(
         confidence=confidence,
         evidence=compact_evidence,
         copy_text=copy_text,
+        pagination_truncated=bool(entry.get("pagination_truncated")),
     )
 
 
@@ -1278,6 +1315,7 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
                 "orders": orders,
                 "captured_at_ms": captured_at_ms,
                 "quality_score": int((data.get("quality") or {}).get("score", 0) or 0),
+                "pagination_truncated": bool((data.get("quality") or {}).get("pagination_truncated")),
             }
     return None
 
@@ -1850,6 +1888,12 @@ def build_execution_preflight_report() -> dict[str, Any]:
             "detail": f"当前质量分 {int((readback or {}).get('quality_score') or 0)}",
         },
         {
+            "id": "not_truncated",
+            "label": "计划列表未截断",
+            "passed": bool(readback and not readback.get("pagination_truncated")),
+            "detail": "列表超过采集页数上限，请补采后再执行。" if (readback or {}).get("pagination_truncated") else "列表完整或无需分页。",
+        },
+        {
             "id": "current_value_match",
             "label": "当前预算未被其他人修改",
             "passed": bool(
@@ -2154,7 +2198,14 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
             "page_type": entry["page_type"],
             "_record": record,
         }
-        confidence = "high" if entry["quality_score"] >= 70 and spend is not None and roi is not None else "medium"
+        confidence = (
+            "high"
+            if entry["quality_score"] >= 70
+            and not entry.get("pagination_truncated")
+            and spend is not None
+            and roi is not None
+            else "medium"
+        )
         base = {
             "id": f"{entry['page_type']}-{entry['table_index']}-{entry['row_index']}",
             "plan": plan,
@@ -3031,8 +3082,9 @@ def build_scan_receipt() -> dict[str, Any]:
             source = "doudian"
         quality = raw.get("quality") if isinstance(raw.get("quality"), dict) else {}
         quality_score = max(0, min(100, int(quality.get("score", 0) or 0)))
+        pagination_truncated = bool(quality.get("pagination_truncated"))
         ok = bool(raw.get("ok"))
-        needs_review = ok and quality_score < 70
+        needs_review = ok and (quality_score < 70 or pagination_truncated)
         source_totals[source]["total"] += 1
         source_totals[source]["success" if ok else "failed"] += 1
         if needs_review:
@@ -3049,6 +3101,7 @@ def build_scan_receipt() -> dict[str, Any]:
                 "quality_score": quality_score,
                 "metric_count": max(0, int(quality.get("metric_count", 0) or 0)),
                 "row_count": max(0, int(quality.get("row_count", 0) or 0)),
+                "pagination_truncated": pagination_truncated,
                 "needs_review": needs_review,
                 "error": str(raw.get("error") or "")[:300],
                 "captured_at": int(raw.get("captured_at", 0) or 0),
@@ -3078,8 +3131,11 @@ def build_scan_receipt() -> dict[str, Any]:
     warnings: list[str] = []
     if failed:
         warnings.append(f"{failed} 个页面读取失败，可在体检单中单独重试。")
+    truncated = sum(1 for item in results if item.get("pagination_truncated"))
     if needs_review:
-        warnings.append(f"{needs_review} 个页面质量分低于 70，相关建议需要人工复核。")
+        warnings.append(f"{needs_review} 个页面质量不足或列表被截断，相关建议需先补采再作为可执行结论。")
+    if truncated:
+        warnings.append(f"{truncated} 个页面列表超过采集页数上限，止损/预算方案已锁定。")
     if total and completed < total:
         warnings.append(f"巡查仅覆盖 {completed}/{total} 个页面，数据不完整。")
     if status in {"cancelled", "error"} and scan.get("error"):
@@ -3677,9 +3733,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self._cors()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Dian-Agent")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Dian-Agent, Authorization")
         self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
+
+    def _client_is_loopback(self) -> bool:
+        host = str(self.client_address[0] if self.client_address else "")
+        return host in {"127.0.0.1", "::1", "localhost"}
+
+    def _authorized_write(self) -> bool:
+        if self.headers.get("X-Dian-Agent") not in {"1", "2"}:
+            return False
+        expected = load_bridge_token()
+        auth = str(self.headers.get("Authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            provided = auth[7:].strip()
+        else:
+            provided = str(self.headers.get("X-Dian-Agent-Token") or "").strip()
+        return bool(provided) and secrets.compare_digest(provided, expected)
 
     def do_GET(self) -> None:  # noqa: N802
         parsed_url = urlparse(self.path)
@@ -3698,6 +3769,7 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": execution_mode,
                     "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}.get(execution_mode, "未知模式"),
                     "execution_enabled": execution_mode == "supervised",
+                    "auth_required": True,
                     "snapshot_count": len(catalog),
                     "schema_warnings": schema_warnings,
                     "disk": disk_info,
@@ -3710,6 +3782,15 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 }
             )
+            return
+        if path == "/auth/bootstrap":
+            if not self._client_is_loopback():
+                self._json({"error": "bootstrap_forbidden"}, 403)
+                return
+            if self.headers.get("X-Dian-Agent") not in {"1", "2"}:
+                self._json({"error": "missing_bridge_header"}, 403)
+                return
+            self._json({"ok": True, "token": load_bridge_token(), "auth_required": True})
             return
         if path == "/oauth/oceanengine/status":
             self._json(OceanEngineOAuth(DATA_DIR).status())
@@ -3860,6 +3941,9 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path).rstrip("/") or "/"
         if self.headers.get("X-Dian-Agent") not in {"1", "2"}:
             self._json({"error": "missing_bridge_header"}, 403)
+            return
+        if not self._authorized_write():
+            self._json({"error": "missing_or_invalid_bridge_token", "auth_required": True}, 403)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -4014,6 +4098,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     # allow_reuse_address must be set before __init__ calls server_bind()
     ThreadingHTTPServer.allow_reuse_address = True
+    ensure_bridge_token()
     try:
         server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     except OSError as error:
@@ -4027,7 +4112,7 @@ def main() -> None:
     scheduler = threading.Thread(target=_daily_report_scheduler, args=(stop_event,), daemon=True)
     scheduler.start()
     logger.info("店策 Agent 本地服务已启动: http://127.0.0.1:%d", PORT)
-    logger.info("方案确认模式（不执行千川操作）；数据目录: %s", DATA_DIR)
+    logger.info("写入接口已启用 bridge_token；方案确认模式；数据目录: %s", DATA_DIR)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

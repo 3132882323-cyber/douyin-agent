@@ -67,6 +67,56 @@ function mutateLocalStorage(keys, mutator) {
   return operation;
 }
 
+async function getBridgeToken() {
+  const stored = await chrome.storage.local.get("bridgeToken");
+  if (stored.bridgeToken) return stored.bridgeToken;
+  const response = await fetch(`${BRIDGE_URL}/auth/bootstrap`, {
+    cache: "no-store",
+    headers: { "X-Dian-Agent": "2" },
+  });
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok || !value.token) {
+    throw new Error(value.error || "无法领取本地 Agent 写入令牌");
+  }
+  await chrome.storage.local.set({ bridgeToken: value.token });
+  return value.token;
+}
+
+async function bridgeHeaders(extra = {}) {
+  const token = await getBridgeToken();
+  return {
+    "Content-Type": "application/json",
+    "X-Dian-Agent": "2",
+    Authorization: `Bearer ${token}`,
+    ...extra,
+  };
+}
+
+async function bridgePost(path, body = {}) {
+  const attempt = async (forceRefresh = false) => {
+    if (forceRefresh) await chrome.storage.local.remove("bridgeToken");
+    const response = await fetch(`${BRIDGE_URL}${path}`, {
+      method: "POST",
+      headers: await bridgeHeaders(),
+      body: JSON.stringify(body),
+    });
+    const value = await response.json().catch(() => ({}));
+    return { response, value };
+  };
+  let { response, value } = await attempt(false);
+  if (response.status === 403 && value.error === "missing_or_invalid_bridge_token") {
+    ({ response, value } = await attempt(true));
+  }
+  if (!response.ok) throw new Error(value.error || `本地 Agent 返回 HTTP ${response.status}`);
+  return value;
+}
+
+function pageNeedsRescan(item = {}) {
+  if (!item?.ok) return true;
+  const score = Number(item.quality?.score || 0);
+  return score < 70 || Boolean(item.quality?.pagination_truncated);
+}
+
 chrome.runtime.onInstalled.addListener(async (details) => {
   const stored = await chrome.storage.local.get("settings");
   await chrome.storage.local.set({
@@ -195,20 +245,12 @@ function withTimeout(promise, timeoutMs, message) {
 async function setFullScanState(patch) {
   const updates = await mutateLocalStorage(["fullScan"], ({ fullScan }) => ({ fullScan: { ...(fullScan || {}), ...patch } }));
   if (updates.fullScan) {
-    await fetch(`${BRIDGE_URL}/scan-status`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-      body: JSON.stringify(updates.fullScan),
-    }).catch(() => undefined);
+    await bridgePost("/scan-status", updates.fullScan).catch(() => undefined);
   }
 }
 
 async function selectAnalysisAccount(accountKey = "") {
-  await fetch(`${BRIDGE_URL}/settings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-    body: JSON.stringify({ qianchuan_account_key: accountKey }),
-  }).catch(() => undefined);
+  await bridgePost("/settings", { qianchuan_account_key: accountKey }).catch(() => undefined);
 }
 
 function waitForTabReady(tabId, timeoutMs = 30000) {
@@ -502,7 +544,7 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
         }
       }
       results.push(result);
-      await setFullScanState({ results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
+      await setFullScanState({ results, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && (Number(item.quality?.score || 0) < 70 || item.quality?.pagination_truncated)).length });
       // Give the browser UI and the platform page a short idle window between
       // pages so a long scan does not monopolize the renderer.
       await sleep(350);
@@ -515,14 +557,10 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
     }
     const incomplete = finalResults.length < FULL_SCAN_PAGES.length;
     const status = fullScanCancelled ? "cancelled" : finalResults.some((item) => !item.ok) || incomplete ? "partial" : "completed";
-    await setFullScanState({ status, current: "", finished_at: Date.now(), error: "", results: finalResults, index: targeted ? finalResults.length : scanPages.length, total: targeted ? FULL_SCAN_PAGES.length : scanPages.length, success: finalResults.filter((item) => item.ok).length, failed: finalResults.filter((item) => !item.ok).length, low_quality: finalResults.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
+    await setFullScanState({ status, current: "", finished_at: Date.now(), error: "", results: finalResults, index: targeted ? finalResults.length : scanPages.length, total: targeted ? FULL_SCAN_PAGES.length : scanPages.length, success: finalResults.filter((item) => item.ok).length, failed: finalResults.filter((item) => !item.ok).length, low_quality: finalResults.filter((item) => item.ok && (Number(item.quality?.score || 0) < 70 || item.quality?.pagination_truncated)).length });
     await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
     if (!fullScanCancelled) {
-      await fetch(`${BRIDGE_URL}/reports/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-        body: "{}",
-      }).catch(() => undefined);
+      await bridgePost("/reports/generate", {}).catch(() => undefined);
     }
     return { status, results };
   } catch (error) {
@@ -667,25 +705,13 @@ async function runAuthorizedExecution(authorizationId) {
     Number(stored.qianchuanSeed?.tab_id),
   );
   if (!selection.tab?.id) throw new Error("未找到千川标签页，请打开对应计划列表");
-  const previewResponse = await fetch(`${BRIDGE_URL}/actions/preflight/preview`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-    body: JSON.stringify({ authorization_id: authorizationId }),
-  });
-  const preview = await previewResponse.json();
-  if (!previewResponse.ok) throw new Error(preview.error || "执行授权预检失败");
+  const preview = await bridgePost("/actions/preflight/preview", { authorization_id: authorizationId });
   const probe = await chrome.tabs.sendMessage(selection.tab.id, {
     type: "qianchuan-execution-probe",
     request: preview.preview?.execution_request,
   });
   if (!probe?.ok || !probe?.ready) throw new Error(probe?.error || "当前千川页面尚未满足执行条件");
-  const consumedResponse = await fetch(`${BRIDGE_URL}/actions/preflight/consume`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-    body: JSON.stringify({ authorization_id: authorizationId }),
-  });
-  const consumed = await consumedResponse.json();
-  if (!consumedResponse.ok) throw new Error(consumed.error || "一次性授权消费失败");
+  const consumed = await bridgePost("/actions/preflight/consume", { authorization_id: authorizationId });
   const request = consumed.grant?.execution_request;
   if (!request) throw new Error("授权中缺少执行参数");
   let result;
@@ -694,21 +720,11 @@ async function runAuthorizedExecution(authorizationId) {
   } catch (error) {
     result = { ok: false, submitted: false, error: error.message || String(error) };
   }
-  await fetch(`${BRIDGE_URL}/actions/execution/result`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-    body: JSON.stringify({ action_id: consumed.grant.action_id, result }),
-  });
+  await bridgePost("/actions/execution/result", { action_id: consumed.grant.action_id, result });
   if (!result?.ok) throw new Error(result?.error || "预算提交失败");
   await new Promise((resolve) => setTimeout(resolve, 1500));
   await collectFromTab("qianchuan", selection.tab, "post-execution-readback");
-  const verificationResponse = await fetch(`${BRIDGE_URL}/actions/execution/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-    body: JSON.stringify({ action_id: consumed.grant.action_id }),
-  });
-  const verification = await verificationResponse.json();
-  if (!verificationResponse.ok) throw new Error(verification.error || "执行后验收失败");
+  const verification = await bridgePost("/actions/execution/verify", { action_id: consumed.grant.action_id });
   await chrome.tabs.update(selection.tab.id, { active: true });
   if (Number.isInteger(selection.tab.windowId)) await chrome.windows.update(selection.tab.windowId, { focused: true });
   return { ...result, verification: verification.verification };
@@ -725,16 +741,8 @@ async function storeAndPush(source, snapshot) {
 
   // Push first. A browser-cache quota error must never prevent the core sync.
   try {
-    const response = await fetch(`${BRIDGE_URL}/push`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Dian-Agent": "2",
-      },
-      body: JSON.stringify({ source, data: snapshot }),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    bridgeResult = { ok: true, ...(await response.json()) };
+    const payload = await bridgePost("/push", { source, data: snapshot });
+    bridgeResult = { ok: true, ...payload };
   } catch (error) {
     bridgeResult = { ok: false, error: error.message || String(error) };
   }
@@ -778,6 +786,9 @@ async function checkBridge() {
     const response = await fetch(`${BRIDGE_URL}/health`, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    if (data.auth_required) {
+      await getBridgeToken();
+    }
     await updateStatus("bridge", "本地 Agent 已连接", "ok");
     return { ok: true, data };
   } catch (error) {
@@ -851,8 +862,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "retry-failed-scan") {
       const stored = await chrome.storage.local.get("fullScan");
-      const failedIds = (stored.fullScan?.results || []).filter((item) => !item.ok).map((item) => item.id);
-      if (!failedIds.length) sendResponse({ ok: false, error: "没有需要重试的失败页面" });
+      const failedIds = (stored.fullScan?.results || []).filter(pageNeedsRescan).map((item) => item.id).filter(Boolean);
+      if (!failedIds.length) sendResponse({ ok: false, error: "没有需要补采的失败或低质量页面" });
       else {
         startFullScan("retry-failed-current-account", failedIds, "").catch(() => undefined);
         sendResponse({ ok: true, started: true, total: failedIds.length });

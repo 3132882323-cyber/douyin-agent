@@ -32,10 +32,28 @@ async function bridgeGet(path) {
   return response.json();
 }
 
+async function getBridgeToken() {
+  const stored = await chrome.storage.local.get("bridgeToken");
+  if (stored.bridgeToken) return stored.bridgeToken;
+  const response = await fetch(`${BRIDGE_URL}/auth/bootstrap`, {
+    cache: "no-store",
+    headers: { "X-Dian-Agent": "2" },
+  });
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok || !value.token) throw new Error(value.error || "无法领取本地 Agent 写入令牌");
+  await chrome.storage.local.set({ bridgeToken: value.token });
+  return value.token;
+}
+
 async function bridgePost(path, body = {}) {
+  const token = await getBridgeToken();
   const response = await fetch(`${BRIDGE_URL}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Dian-Agent": "2",
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({}));
