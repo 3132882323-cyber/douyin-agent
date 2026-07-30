@@ -82,7 +82,7 @@
 | ID | 状态 | 处理说明 |
 | --- | --- | --- |
 | LEGACY-1 | ✅ | `confirmed` 校验跳过 `ACTION_EXPIRED`；新鲜度交给 preflight 重读 |
-| LEGACY-2 | ✅ | `sendTabMessage`：probe/submit/采集统一失败后重注入 content script |
+| LEGACY-2 | ✅ | probe/采集失败可重注入；**submit 禁止** reinject 重放（防暂停开关二次点击） |
 | LEGACY-3 | ✅ | `consume_execution_authorization` 在锁内复核配额 |
 | LEGACY-4 | ⚠️ | `/health.secret_files` 增加默认第三方回调告警；仍需生产自设 `DIAN_AGENT_OAUTH_CALLBACK_URL` |
 | LEGACY-5 | ✅ | `set_data_dir` 清空 `_analysis_cache` |
@@ -122,4 +122,5 @@
 | 2026-07-30 | `9b4a62d` | 暂停验收与影子核验统一成功态；效果复查仅预算；补充 LEGACY-6～9 |
 | 2026-07-30 | `c596224` | 投放状态归一化：拒绝「未暂停」子串误判 |
 | 2026-07-30 | `8f98cb9` | 否定状态/错列字段/暂停控件与 toast 收紧 |
-| 2026-07-30 | 01f98ae | 收敛 LEGACY-1～9；暂停二次确认弹窗；授权失败可恢复 |
+| 2026-07-30 | `01f98ae` | 收敛 LEGACY-1～9；暂停二次确认弹窗；授权失败可恢复 |
+| 2026-07-30 | `3f472f8` | submit 禁止重放；传输失败不 restore；弹窗/快照合并收紧 |
