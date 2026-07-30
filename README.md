@@ -1,6 +1,6 @@
 # 店策 Agent：抖店 × 巨量千川经营副驾
 
-[![Version](https://img.shields.io/badge/version-3.3.1-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-3.4.1-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -9,7 +9,7 @@
 
 店策 Agent 是一个本地优先、默认不执行写操作的 Chromium 浏览器扩展与 AI Agent 数据桥，支持 Chrome、Edge、360 极速浏览器 X，并为 360 安全浏览器、QQ 浏览器、搜狗浏览器、联想浏览器等提供兼容包。它复用运营人员已经登录的抖店、巨量千川网页，在用户主动点击后采集可见经营数据，完成脱敏、本地保存、异常诊断，并生成千川调整建议、库存预警、直播/货架分析和每日经营报告。
 
-> 当前版本：`v3.3.1 Beta`。统一健康状态与真实账户运行模式；止损风险分可拆解查看，金额改为“预计可避免继续无效消耗”，执行前展示预算影响、当日消耗、额度与回滚条件，并按消耗速度动态安排复查。
+> 当前版本：`v3.4.1 Beta`。在只读投放策略模拟器上增加可审计的策略决策单；运营选择保 ROI、均衡经营或谨慎增长后，系统记录当时的计划范围、影响预估与选择时间，但仍只允许逐计划授权执行。
 
 ## 为什么做这个项目
 

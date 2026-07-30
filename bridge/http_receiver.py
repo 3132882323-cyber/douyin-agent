@@ -3330,6 +3330,100 @@ def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, A
     }
 
 
+def build_strategy_simulation(
+    queue_report: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare read-only operating policies before any campaign is authorized."""
+
+    settings = settings or load_agent_settings()
+    queue_report = queue_report or build_stop_loss_queue(settings)
+    queue = queue_report.get("items") if isinstance(queue_report.get("items"), list) else []
+    policies = [
+        {"key": "protect_roi", "label": "保 ROI", "description": "优先阻断高风险消耗，适合利润承压或预算紧张阶段。", "risk_threshold": 55, "action_strength": 1.0},
+        {"key": "balanced", "label": "均衡经营", "description": "只处理证据较充分的高风险计划，兼顾消耗与成交稳定。", "risk_threshold": 65, "action_strength": 0.8},
+        {"key": "cautious_growth", "label": "谨慎增长", "description": "仅处理最明确的亏损计划，其余保留预算继续观察。", "risk_threshold": 75, "action_strength": 0.5},
+    ]
+    scenarios: list[dict[str, Any]] = []
+    for policy in policies:
+        selected = [
+            item for item in queue
+            if item.get("bucket") == "must_handle" and int(item.get("risk_score") or 0) >= policy["risk_threshold"]
+        ]
+        budget_impact = 0.0
+        orders_at_risk = 0.0
+        for item in selected:
+            action = item.get("action_params") if isinstance(item.get("action_params"), dict) else {}
+            change = action.get("change") if isinstance(action.get("change"), dict) else {}
+            current_value, target_value = change.get("current_value"), change.get("target_value")
+            if isinstance(current_value, (int, float)) and isinstance(target_value, (int, float)):
+                budget_impact += max(0.0, float(current_value) - float(target_value)) * policy["action_strength"]
+            evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+            orders = evidence.get("orders")
+            if isinstance(orders, (int, float)):
+                orders_at_risk += max(0.0, float(orders)) * 0.1 * policy["action_strength"]
+        scenarios.append({
+            **policy,
+            "selected_plan_count": len(selected),
+            "selected_plan_names": [str(item.get("plan") or "千川计划") for item in selected[:5]],
+            "estimated_budget_impact": round(budget_impact, 2),
+            "estimated_avoided_waste_low": round(sum(float(item.get("estimated_savings_low") or 0) for item in selected) * policy["action_strength"], 2),
+            "estimated_avoided_waste_high": round(sum(float(item.get("estimated_savings_high") or 0) for item in selected) * policy["action_strength"], 2),
+            "estimated_orders_at_risk": round(orders_at_risk, 1),
+            "can_execute": False,
+        })
+    decision_store = load_strategy_decisions()
+    return {
+        "generated_at": _now_label(),
+        "recommended_policy": "balanced",
+        "recommended_reason": "默认采用均衡经营：只纳入证据充分的高风险计划，再由投手逐项确认。",
+        "scenarios": scenarios,
+        "execution_enabled": False,
+        "selected_decision": decision_store.get("current"),
+        "note": "这是基于当前快照的静态模拟，不会修改计划；订单风险为保守提示，不是因果预测。",
+    }
+
+
+def _strategy_decisions_path() -> Path:
+    return DATA_DIR / "strategy_decisions.json"
+
+
+def load_strategy_decisions() -> dict[str, Any]:
+    path = _strategy_decisions_path()
+    if not path.exists():
+        return {"schema_version": 1, "current": None, "history": []}
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+        return payload if isinstance(payload, dict) else {"schema_version": 1, "current": None, "history": []}
+    except (OSError, json.JSONDecodeError):
+        logger.exception("读取策略决策单失败: %s", path)
+        return {"schema_version": 1, "current": None, "history": []}
+
+
+def save_strategy_decision(policy_key: str) -> dict[str, Any]:
+    simulation = build_strategy_simulation()
+    scenario = next((item for item in simulation["scenarios"] if item["key"] == policy_key), None)
+    if not scenario:
+        raise ValueError("策略类型无效。")
+    now_ms = int(time.time() * 1000)
+    decision = {
+        "decision_id": hashlib.sha256(f"{policy_key}:{now_ms}".encode("utf-8")).hexdigest()[:20],
+        "policy_key": policy_key,
+        "policy_label": scenario["label"],
+        "selected_at_ms": now_ms,
+        "selected_at": _now_label(),
+        "scenario": scenario,
+        "execution_enabled": False,
+        "next_step": "策略已记录；请回到今日止损队列，逐个核对并授权计划。",
+    }
+    store = load_strategy_decisions()
+    history = store.get("history") if isinstance(store.get("history"), list) else []
+    history.append(decision)
+    _atomic_json_write(_strategy_decisions_path(), {"schema_version": 1, "current": decision, "history": history[-100:]})
+    return decision
+
+
 def _atomic_text_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -3694,7 +3788,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "3.3.1",
+                    "version": "3.4.1",
                     "mode": execution_mode,
                     "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}.get(execution_mode, "未知模式"),
                     "execution_enabled": execution_mode == "supervised",
@@ -3822,6 +3916,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/actions/stop-loss-queue":
             self._json(build_stop_loss_queue())
             return
+        if path == "/actions/strategy-simulation":
+            self._json(build_strategy_simulation())
+            return
         if path == "/actions/preflight":
             self._json(build_execution_preflight_report())
             return
@@ -3883,6 +3980,11 @@ class Handler(BaseHTTPRequestHandler):
                 settings = save_agent_settings(payload)
                 _invalidate_cache()
                 self._json({"ok": True, "settings": settings})
+                return
+            if path == "/actions/strategy/select":
+                decision = save_strategy_decision(str(payload.get("policy_key") or ""))
+                _invalidate_cache()
+                self._json({"ok": True, "decision": decision, "execution_enabled": False})
                 return
             if path == "/oauth/oceanengine/start":
                 result = OceanEngineOAuth(DATA_DIR).start_authorization(
