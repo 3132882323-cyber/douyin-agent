@@ -1699,7 +1699,7 @@ def verify_execution_result(action_id: str) -> dict[str, Any]:
 
 
 def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[str, Any]:
-    """Evaluate verified budget actions after a two-hour observation window."""
+    """Evaluate verified budget actions after a spend-sensitive observation window."""
 
     now_ms = int(now_ms or time.time() * 1000)
     items: list[dict[str, Any]] = []
@@ -1719,11 +1719,13 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
             "budget": change.get("current_value"),
         }
         after = _find_plan_readback(action)
-        due_at_ms = executed_at_ms + 2 * 60 * 60 * 1000
+        spend_value = before.get("spend")
+        observation_minutes = 30 if isinstance(spend_value, (int, float)) and spend_value >= 1000 else 120 if isinstance(spend_value, (int, float)) and spend_value >= 300 else 24 * 60
+        due_at_ms = executed_at_ms + observation_minutes * 60 * 1000
         fresh_after = bool(after and int(after.get("captured_at_ms") or 0) > executed_at_ms)
         if now_ms < due_at_ms:
             status = "waiting"
-            label = "等待 2 小时复查"
+            label = f"等待 {observation_minutes // 60} 小时复查" if observation_minutes >= 60 else f"等待 {observation_minutes} 分钟复查"
             verdict = "观察窗口尚未结束，不追加动作。"
         elif not fresh_after:
             status = "needs_reread"
@@ -1756,6 +1758,7 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
             "plan_name": target.get("name"),
             "executed_at_ms": executed_at_ms,
             "due_at_ms": due_at_ms,
+            "observation_window_minutes": observation_minutes,
             "status": status,
             "status_label": label,
             "verdict": verdict,
@@ -1769,7 +1772,7 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
         })
     items.sort(key=lambda item: (0 if item["status"] in {"review", "needs_reread"} else 1, -item["executed_at_ms"]))
     return {
-        "observation_window_hours": 2,
+        "observation_window_policy": "高消耗30分钟、普通消耗2小时、低消耗24小时",
         "items": items[:100],
         "summary": {
             "total": len(items),
@@ -1915,6 +1918,13 @@ def build_execution_preflight_report() -> dict[str, Any]:
             "current_value": current_value,
             "target_value": target_value,
             "operation_type": action.get("operation_type") if isinstance(action, dict) else "",
+            "impact_preview": {
+                "budget_change": round(float(target_value) - float(current_value), 2) if isinstance(current_value, (int, float)) and isinstance(target_value, (int, float)) else None,
+                "change_percent": round((float(target_value) - float(current_value)) / float(current_value) * 100, 1) if isinstance(current_value, (int, float)) and isinstance(target_value, (int, float)) and float(current_value) else None,
+                "today_spend": ((action or {}).get("evidence_ref") or {}).get("spend") if isinstance((action or {}).get("evidence_ref"), dict) else None,
+                "daily_budget_impact_limit": load_agent_settings().get("max_daily_budget_reduction"),
+                "rollback_condition": "执行后页面验收成功，且当前预算仍等于本次目标值。",
+            },
         },
         "readback": readback,
         "checks": checks,
@@ -3272,7 +3282,10 @@ def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, A
         target = float(evidence.get("roi_target") or settings.get("roi_target") or 1.5)
         roi_gap = 0.0 if not isinstance(roi, (int, float)) or target <= 0 else max(0.0, (target - float(roi)) / target)
         severity = {"stop_loss": 45, "reduce_budget": 35, "optimize": 18, "inspect_plans": 10}.get(action_type, 0)
-        risk_score = min(100, round(severity + min(30.0, spend / min_spend * 12.0) + min(25.0, roi_gap * 25.0)))
+        spend_component = min(30, round(spend / min_spend * 12.0))
+        roi_component = min(25, round(roi_gap * 25.0))
+        confidence_component = 0 if item.get("confidence") == "low" else 5 if item.get("confidence") == "medium" else 10
+        risk_score = min(100, severity + spend_component + roi_component + confidence_component)
         reduction = 0.30 if action_type == "stop_loss" else 0.20 if action_type == "reduce_budget" else 0.0
         saving_high = round(spend * reduction, 2)
         saving_low = round(saving_high * 0.5, 2)
@@ -3285,11 +3298,17 @@ def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, A
         queue.append({
             **item,
             "risk_score": risk_score,
+            "risk_components": [
+                {"key": "action", "label": "动作风险", "score": severity, "max_score": 45},
+                {"key": "spend", "label": "消耗风险", "score": spend_component, "max_score": 30},
+                {"key": "roi_gap", "label": "ROI偏差", "score": roi_component, "max_score": 25},
+                {"key": "confidence", "label": "数据可信度", "score": confidence_component, "max_score": 10},
+            ],
             "bucket": bucket,
             "bucket_label": {"must_handle": "必须处理", "observe": "继续观察", "data_missing": "补齐数据"}[bucket],
             "estimated_savings_low": saving_low,
             "estimated_savings_high": saving_high,
-            "estimated_savings_label": f"预计减少无效消耗 ¥{saving_low:g}–¥{saving_high:g}" if saving_high else "暂不估算节省金额",
+            "estimated_savings_label": f"预计可避免继续无效消耗 ¥{saving_low:g}–¥{saving_high:g}" if saving_high else "暂不估算可避免消耗",
             "execution_mode": mode,
             "can_start_execution": mode == "supervised" and action_type in {"stop_loss", "reduce_budget"},
         })
@@ -3307,7 +3326,7 @@ def build_stop_loss_queue(settings: dict[str, Any] | None = None) -> dict[str, A
             "estimated_savings_low": round(sum(item["estimated_savings_low"] for item in queue), 2),
             "estimated_savings_high": round(sum(item["estimated_savings_high"] for item in queue), 2),
         },
-        "estimate_note": "节省金额按当前消耗与建议降幅保守估算，不代表实际结算结果。",
+        "estimate_note": "金额按当前消耗与建议降幅保守估算，表示可能避免的后续无效消耗，不代表实际结算结果。",
     }
 
 
@@ -3670,12 +3689,15 @@ class Handler(BaseHTTPRequestHandler):
             catalog = list_snapshots()
             schema_warnings = _schema_version_check()
             disk_info = _disk_usage_check()
+            agent_settings = load_agent_settings()
+            execution_mode = str(agent_settings.get("execution_mode") or "observe")
             self._json(
                 {
                     "status": "ok",
-                    "version": "3.3.0",
-                    "mode": "supervised_execution",
-                    "execution_enabled": True,
+                    "version": "3.3.1",
+                    "mode": execution_mode,
+                    "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}.get(execution_mode, "未知模式"),
+                    "execution_enabled": execution_mode == "supervised",
                     "snapshot_count": len(catalog),
                     "schema_warnings": schema_warnings,
                     "disk": disk_info,
