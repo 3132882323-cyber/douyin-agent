@@ -37,7 +37,10 @@ const pauseButton = {
   disabled: false,
   getClientRects: () => [1],
   getAttribute: () => null,
-  click() { submitted = true; },
+  click() {
+    submitted = true;
+    row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+  },
 };
 const row = {
   innerText: "计划ID plan_123 春季止损计划 日预算 500 投放中",
@@ -155,6 +158,7 @@ function send(request, type = "qianchuan-supervised-submit") {
   assert.equal(pauseResult.target_value, "暂停");
 
   // Two explicit pause controls must fail closed.
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
   const pauseButton2 = {
     innerText: "停用",
     textContent: "停用",
@@ -174,6 +178,45 @@ function send(request, type = "qianchuan-supervised-submit") {
   const dualPause = await send(pauseRequest, "qianchuan-execution-probe");
   assert.equal(dualPause.ok, false);
   assert.match(dualPause.error, /多个暂停/);
+
+  // 「取消暂停」must not be treated as a pause control.
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  const cancelPause = {
+    innerText: "取消暂停",
+    textContent: "取消暂停",
+    disabled: false,
+    getClientRects: () => [1],
+    getAttribute: () => null,
+    click() {},
+  };
+  row.querySelectorAll = (selector) => {
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton, cancelPause];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, cancelPause];
+    }
+    return [];
+  };
+  const cancelOnly = await send(pauseRequest, "qianchuan-execution-probe");
+  assert.equal(cancelOnly.ok, false);
+  assert.match(cancelOnly.error, /未找到唯一暂停/);
+
+  // Negated active wording must not pass the status gate.
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 未启用";
+  row.querySelectorAll = (selector) => {
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton, pauseButton];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, pauseButton];
+    }
+    return [];
+  };
+  const negated = await send({
+    ...pauseRequest,
+    expected_current_value: "启用",
+  }, "qianchuan-execution-probe");
+  assert.equal(negated.ok, false);
+  assert.match(negated.error, /投放状态与授权不一致|授权缺少已投放状态/);
 
   console.log("content-qianchuan executor tests passed");
 })().catch((error) => {

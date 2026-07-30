@@ -17,7 +17,7 @@ from insights import (
     _clean_entity_name,
     _entity_identifier,
     _evidence_value,
-    _pick,
+    _pick_delivery_status_field,
     match_delivery_status,
     pause_plan_succeeded,
 )
@@ -229,7 +229,7 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
             spend = _evidence_value(record, ("消耗", "总消耗", "广告消耗"))
             roi = _evidence_value(record, ("支付roi", "roi", "整体roi"))
             orders = _evidence_value(record, ("成交订单", "支付订单", "成交订单数", "订单数"))
-            _, status_raw = _pick(record, ("投放状态", "计划状态", "状态"))
+            _, status_raw = _pick_delivery_status_field(record)
             status = match_delivery_status(status_raw)
             captured_at_ms = int(
                 data.get("captured_at")

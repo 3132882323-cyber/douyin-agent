@@ -629,6 +629,56 @@ class SnapshotStoreTests(unittest.TestCase):
         verification = http_receiver.verify_execution_result(confirmed["action_id"])
         self.assertFalse(verification["verified"])
 
+    def test_delivery_status_matching_rejects_negation_and_wrong_columns(self) -> None:
+        import insights
+
+        self.assertEqual("", insights.match_delivery_status("未启用"))
+        self.assertEqual("", insights.match_delivery_status("不生效中"))
+        self.assertEqual("", insights.match_delivery_status("取消暂停"))
+        self.assertEqual("投放中", insights.match_delivery_status("投放中"))
+        self.assertEqual("已暂停", insights.match_delivery_status("已暂停"))
+        self.assertFalse(insights.pause_plan_succeeded("取消暂停"))
+
+        label, value = insights._pick_delivery_status_field({
+            "审核状态": "启用",
+            "投放状态": "已暂停",
+            "学习状态": "学习中",
+        })
+        self.assertEqual("投放状态", label)
+        self.assertEqual("已暂停", value)
+
+        label, value = insights._pick_delivery_status_field({
+            "计划名称": "仅有裸状态",
+            "状态": "投放中",
+        })
+        self.assertEqual("状态", label)
+        self.assertEqual("投放中", value)
+
+        # Wrong-column must not invent pause proposals when 投放状态 is already paused.
+        http_receiver.save_agent_settings({"execution_mode": "supervised"})
+        captured_at = int(time.time() * 1000)
+        http_receiver.save_data("qianchuan", {
+            "schema_version": 2,
+            "page_type": "campaigns",
+            "captured_at": captured_at,
+            "account": {"key": "acct_col", "label": "列优先级账号", "confidence": "high"},
+            "quality": {"score": 92, "row_count": 1},
+            "tables": [{
+                "headers": ["计划ID", "计划名称", "审核状态", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                "rows": [["plan_col1", "错列计划", "启用", "已暂停", "500", "300", "0", "0"]],
+            }],
+        })
+        recs = http_receiver.build_plan_recommendations()
+        pause_items = [
+            item for item in recs
+            if item.get("action_params", {}).get("operation_type") == "pause_plan"
+            and (
+                item.get("action_params", {}).get("target_id") == "plan_col1"
+                or (item.get("action_params", {}).get("target_ref") or {}).get("id") == "plan_col1"
+            )
+        ]
+        self.assertEqual([], pause_items)
+
     def test_execution_quota_blocks_daily_count_budget_impact_and_cooldown(self) -> None:
         now_ms = int(time.time() * 1000)
         http_receiver.save_agent_settings({

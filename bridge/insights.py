@@ -324,8 +324,18 @@ PAUSE_SUCCESS_STATUSES = ("已暂停", "暂停中", "暂停")
 _DELIVERY_STATUS_LABELS = (*ACTIVE_DELIVERY_STATUSES, "已暂停", "未投放", "暂停")
 
 
+def _status_label_blocked_by_negation(text: str, label: str, idx: int) -> bool:
+    """True when a substring hit is a negated / cancelled form (未启用、取消暂停…)."""
+
+    if idx > 0 and text[idx - 1] in "未不":
+        return True
+    if label == "暂停" and idx >= 2 and text[idx - 2 : idx] == "取消":
+        return True
+    return False
+
+
 def match_delivery_status(status_raw: Any) -> str:
-    """Normalize a status cell without treating 未暂停 as 暂停."""
+    """Normalize a status cell without treating negated wording as active/paused."""
 
     text = str(status_raw or "").strip()
     if not text:
@@ -341,11 +351,11 @@ def match_delivery_status(status_raw: Any) -> str:
             idx = text.find(label, start)
             if idx < 0:
                 break
-            if label == "暂停" and idx > 0 and text[idx - 1] in "未不":
+            if _status_label_blocked_by_negation(text, label, idx):
                 start = idx + 1
                 continue
             return label
-    return first
+    return ""
 
 
 def pause_plan_succeeded(status: Any, *, target_value: Any = "暂停") -> bool:
@@ -361,6 +371,24 @@ def _pick(record: dict[str, Any], keywords: tuple[str, ...]) -> tuple[str, Any] 
         normalized = str(label).lower().replace(" ", "")
         if any(keyword.lower().replace(" ", "") in normalized for keyword in keywords):
             return str(label), value
+    return None, None
+
+
+def _pick_delivery_status_field(record: dict[str, Any]) -> tuple[str, Any] | tuple[None, None]:
+    """Prefer 投放/计划状态; only fall back to an exact bare 状态 column."""
+
+    items = [(str(label), value) for label, value in record.items()]
+    for want in ("投放状态", "计划状态"):
+        for label, value in items:
+            if label.replace(" ", "") == want:
+                return label, value
+    for label, value in items:
+        compact = label.replace(" ", "")
+        if compact.endswith("投放状态") or compact.endswith("计划状态"):
+            return label, value
+    for label, value in items:
+        if label.replace(" ", "") == "状态":
+            return label, value
     return None, None
 
 
@@ -407,7 +435,7 @@ def _action_params_for_plan(
     record = evidence.get("_record") if isinstance(evidence.get("_record"), dict) else {}
     budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
     plan_id = _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id"))
-    _, status_raw = _pick(record, ("投放状态", "计划状态", "状态"))
+    _, status_raw = _pick_delivery_status_field(record)
     active_status = match_delivery_status(status_raw)
     if active_status not in ACTIVE_DELIVERY_STATUSES:
         active_status = ""
@@ -585,7 +613,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
         ctr = _evidence_value(record, ("点击率", "ctr"))
         if spend is None and roi is None:
             continue
-        _, status_value = _pick(record, ("投放状态", "计划状态", "状态"))
+        _, status_value = _pick_delivery_status_field(record)
         if spend == 0 and pause_plan_succeeded(status_value):
             continue
 

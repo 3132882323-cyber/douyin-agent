@@ -167,8 +167,30 @@
     return matches[0];
   }
 
+  function rowShowsStatus(rowText, status) {
+    const text = String(rowText || "");
+    const label = String(status || "");
+    if (!label) return false;
+    let start = 0;
+    while (true) {
+      const idx = text.indexOf(label, start);
+      if (idx < 0) return false;
+      const prev = idx > 0 ? text[idx - 1] : "";
+      if ("未不".includes(prev)) {
+        start = idx + 1;
+        continue;
+      }
+      if (label === "暂停" && idx >= 2 && text.slice(idx - 2, idx) === "取消") {
+        start = idx + 1;
+        continue;
+      }
+      return true;
+    }
+  }
+
   function findPauseControl(row, expectedStatus) {
-    if (expectedStatus && !String(row.innerText || "").includes(expectedStatus)) {
+    const rowText = String(row.innerText || "");
+    if (expectedStatus && !rowShowsStatus(rowText, expectedStatus)) {
       throw new Error("当前计划投放状态与授权不一致。");
     }
     const candidates = Array.from(row.querySelectorAll("button, [role='switch'], input[type='checkbox']")).filter((node) => {
@@ -180,19 +202,20 @@
     });
     const explicitPause = candidates.filter((node) => {
       const label = `${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`;
+      if (/取消暂停|恢复投放|恢复启用/.test(label)) return false;
       return /暂停|停用/.test(label);
     });
     if (explicitPause.length === 1) return explicitPause[0];
     if (explicitPause.length > 1) throw new Error("发现多个暂停控件，已停止执行。");
 
-    // Fallback: only labeled, currently-on switches — not every pressed checkbox.
+    // Fallback: only labeled, currently-on switches — avoid bare「状态」columns/filters.
     const toggles = candidates.filter((node) => {
       const label = `${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`;
       const pressed = node.getAttribute("aria-checked") === "true"
         || node.getAttribute("aria-pressed") === "true"
         || node.checked === true;
       const isSwitch = node.getAttribute("role") === "switch" || node.type === "checkbox";
-      return pressed && isSwitch && /启用|投放|开启|状态|开关/.test(label);
+      return pressed && isSwitch && /启用|投放|开启|开关|启停/.test(label);
     });
     if (toggles.length === 1) return toggles[0];
     if (toggles.length > 1) throw new Error("发现多个启停控件，已停止执行。");
@@ -222,11 +245,25 @@
     const row = findAuthorizedPlanRow(request);
     const control = findPauseControl(row, String(request.expected_current_value || ""));
     control.click();
+    const expected = String(request.expected_current_value || "");
     const successObserved = await waitFor(() => {
       const notices = Array.from(document.querySelectorAll(
         "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
       )).filter(visible);
-      return notices.some((item) => /成功|已保存|已暂停|操作完成|修改完成|设置完成|暂停成功/.test(String(item.innerText || item.textContent || "")));
+      const toastText = notices.map((item) => String(item.innerText || item.textContent || "")).join("\n");
+      if (/已暂停|暂停成功/.test(toastText)) return true;
+      let rowText = "";
+      try {
+        rowText = String(findAuthorizedPlanRow(request).innerText || "");
+      } catch {
+        return false;
+      }
+      if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) return true;
+      // Generic success toast alone is not enough unless the row left the authorized active status.
+      if (/(?:操作|设置|修改)完成|已保存/.test(toastText) && expected && !rowShowsStatus(rowText, expected)) {
+        return true;
+      }
+      return false;
     });
     if (!successObserved) {
       throw new Error("已点击平台暂停，但未读取到成功回执；请立即在千川核对，系统不会重复提交。");
