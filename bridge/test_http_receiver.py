@@ -21,10 +21,10 @@ class SnapshotStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self._original_dir = http_receiver.DATA_DIR
         self._temp = tempfile.TemporaryDirectory()
-        http_receiver.DATA_DIR = Path(self._temp.name)
+        http_receiver.set_data_dir(Path(self._temp.name))
 
     def tearDown(self) -> None:
-        http_receiver.DATA_DIR = self._original_dir
+        http_receiver.set_data_dir(self._original_dir)
         self._temp.cleanup()
 
     def test_snapshots_are_partitioned_by_source_and_page_type(self) -> None:
@@ -193,6 +193,53 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(item["confidence"], "medium")
         self.assertFalse(draft["can_confirm"])
         self.assertIn("SNAPSHOT_TRUNCATED", {reason["code"] for reason in draft["blocked_reasons"]})
+
+    def test_official_api_budget_mismatch_lowers_plan_confidence(self) -> None:
+        now_ms = int(time.time() * 1000)
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": now_ms,
+                "channel": "browser",
+                "account": {"key": "acct_safe1234", "label": "主投放账号", "confidence": "high"},
+                "quality": {"score": 90, "metric_count": 0, "row_count": 1},
+                "tables": [
+                    {
+                        "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                        "rows": [["plan_987654", "对账测试计划", "800", "300", "0.60", "2"]],
+                    }
+                ],
+            },
+        )
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "plans",
+                "captured_at": now_ms,
+                "channel": "official_api",
+                "account": {
+                    "key": "acct_safe1234",
+                    "label": "主投放账号",
+                    "confidence": "high",
+                    "identity_source": "official_api",
+                },
+                "quality": {"score": 100, "row_count": 1, "pagination_truncated": False},
+                "tables": [
+                    {
+                        "headers": ["计划名称", "状态", "预算", "消耗"],
+                        "rows": [["对账测试计划", "投放中", "500", "300"]],
+                    }
+                ],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_safe1234"})
+        item = http_receiver.build_plan_recommendations()[0]
+        self.assertEqual(item["confidence"], "medium")
+        self.assertEqual(item["evidence"]["api_reconcile"]["reasons"], ["budget_mismatch"])
+        self.assertFalse(item["action_params"]["can_confirm"])
 
     def test_automation_readiness_builds_candidate_queue_without_execution(self) -> None:
         base = {

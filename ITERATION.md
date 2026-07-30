@@ -11,8 +11,8 @@
 | 阶段 | 目标 | 状态 |
 | --- | --- | --- |
 | **P0** | 截断/低质数据不可执行化 + Bridge 写入鉴权 + 工作台补采优先 | ✅ 已完成 |
-| **P1** | 选择器/页面类型回归、关键页 fixture、健康漂移告警、可配置深度页数 | ✅ 本轮完成 |
-| **P2** | 拆分 `http_receiver.py` / `sidepanel.js`；网页与官方 API 对账 | ⏳ 待开始 |
+| **P1** | 选择器/页面类型回归、关键页 fixture、健康漂移告警、可配置深度页数 | ✅ 已完成 |
+| **P2** | 拆分 `http_receiver.py` / `sidepanel.js`；网页与官方 API 对账 | ✅ 本轮完成（首刀） |
 | **P3** | 执行面按闸门扩展（单计划暂停等）；OAuth 回调可配置 | ⏳ 待开始 |
 
 ---
@@ -120,13 +120,24 @@ python -m unittest discover -s . -p "test_*.py"
 | 改版告警 | `check_selector_health`：连续 ≥2 次下降且每次 ≥15 分 →「疑似平台改版」；并修复行数对比误用 quality_score 的 bug |
 | 本地验证 | `.\run-tests.ps1` 或 `bash run-tests.sh` |
 
-### P2 — 可维护性与双通道可信度（下一优先）
+### P2 — 可维护性与双通道可信度（本轮已完成首刀）
 
-- [ ] 拆分 `http_receiver.py`：`storage` / `insights` / `actions` / `reports` / `http_api`  
-- [ ] 拆分 `sidepanel.js`：体检、任务、千川方案、设置  
-- [ ] 有 OAuth 时：网页快照 vs 官方 API 计划消耗/预算对账；偏差超阈值降置信度  
+- [x] 拆分 `http_receiver.py`：抽出 `state.py` + `storage.py`（快照/账号目录 I/O），facade 继续 re-export  
+- [ ] 继续拆分：`insights` / `actions` / `reports` / `http_api`（下一批）  
+- [ ] 拆分 `sidepanel.js`：体检、任务、千川方案、设置（下一批）  
+- [x] 有 OAuth 时：网页快照 vs 官方 API 计划预算/消耗对账；偏差超阈值降置信度  
 
-### P3 — 能力边界与运维加固
+#### P2 说明
+
+| 能力 | 说明 |
+| --- | --- |
+| `bridge/state.py` | 共享 `DATA_DIR` / 锁 / 缓存；测试用 `http_receiver.set_data_dir()` 同步 |
+| `bridge/storage.py` | `save_data` / `load_data` / `list_snapshots` / 账号目录 / `build_store_catalog` |
+| `bridge/reconcile.py` | 官方 `plans` 与浏览器计划行对账；预算或消耗偏差 ≥20% 或 ≥50 元 → `confidence=medium` |
+| 官方计划表 | `oceanengine_data` 的 `plans` 表增加「消耗」列，便于计划级对账 |
+| 无 OAuth | 对账跳过，行为与 P1 一致 |
+
+### P3 — 能力边界与运维加固（下一优先）
 
 - [ ] 产品文案三态对齐：`observe` / `shadow` / `supervised`  
 - [ ] 执行面扩展仍走同一闸门：单计划暂停 → 批量/放量继续默认关闭  
@@ -148,4 +159,5 @@ python -m unittest discover -s . -p "test_*.py"
 | 日期 | 提交 | 说明 |
 | --- | --- | --- |
 | 2026-07-30 | `136d238` | P0：截断阻断、Bridge Bearer、工作台补采 |
-| 2026-07-30 | （待提交） | P1：可配置深度页数、fixture 契约、连续质量骤降告警、CI |
+| 2026-07-30 | `8d5754f` | P1：可配置深度页数、fixture 契约、连续质量骤降告警、CI |
+| 2026-07-30 | （待提交） | P2 首刀：storage 拆分、网页/API 预算对账降置信度 |

@@ -399,7 +399,7 @@ class OceanEngineDataClient:
                     "tables": [_table(plans, (
                         ("ad_name", "计划名称"), ("status", "状态"),
                         ("_marketing_goal", "推广类型"), ("budget", "预算"),
-                        ("bid", "出价"), ("create_time", "创建时间"),
+                        ("stat_cost", "消耗"), ("bid", "出价"), ("create_time", "创建时间"),
                     ))],
                 },
                 {

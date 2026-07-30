@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import http_receiver
+import state
 
 
 class MultiStoreCatalogTests(unittest.TestCase):
@@ -33,6 +34,7 @@ class MultiStoreCatalogTests(unittest.TestCase):
             }
             with (
                 patch.object(http_receiver, "DATA_DIR", data_dir),
+                patch.object(state, "DATA_DIR", data_dir),
                 patch.object(http_receiver, "list_qianchuan_accounts", return_value=accounts),
                 patch.object(http_receiver, "load_sync_status", return_value=sync),
                 patch.object(
