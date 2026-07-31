@@ -681,9 +681,11 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(len({item["id"] for item in ops["all_tasks"]}), len(ops["all_tasks"]))
         report = http_receiver.generate_daily_report("2026-07-22")
         content = Path(report["path"]).read_text(encoding="utf-8")
-        self.assertIn("运营总管今日任务", content)
-        self.assertIn("货架运营", content)
-        self.assertIn("直播与内容运营", content)
+        self.assertEqual(ops["roles"], ["货架商品", "直播投放", "内容"])
+        self.assertIn("今日重点任务", content)
+        self.assertIn("货架商品", content)
+        self.assertIn("直播投放", content)
+        self.assertIn("## 内容", content)
 
     def test_operation_task_status_is_persisted(self) -> None:
         http_receiver.save_data("doudian", {"page_type": "shelf", "quality": {"score": 70}, "safe_metrics": {"曝光人数": "20", "点击人数": "2", "成交人数": "0"}, "signals": ["商品主图存在不良暗示，请优化"]})

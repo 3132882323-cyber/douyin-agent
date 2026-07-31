@@ -19,7 +19,7 @@
     <main class="panel-shell">
       <header>
         <div class="brand-mark">策</div>
-        <div><h1>店策 Agent</h1><p>运营总管 · 货架 · 直播 · 千川 · 库存</p></div>
+        <div><h1>店策 Agent</h1><p>货架商品 · 直播投放 · 内容</p></div>
         <span class="page-mode">独立经营工作台</span>
         <button id="refresh-button" class="icon-button" title="刷新" aria-label="刷新数据">↻</button>
       </header>
@@ -144,21 +144,11 @@
         </div>
       </section>
 
-      <nav id="role-nav" class="role-nav" aria-label="选择运营岗位">
-        <button class="active" data-role="运营总管">总管</button>
-        <button data-role="货架运营">货架</button>
-        <button data-role="直播运营">直播</button>
-        <button data-role="投放运营">投放</button>
-        <button data-role="商品运营">商品</button>
+      <nav id="role-nav" class="role-nav" aria-label="选择业务工作台">
+        <button class="active" data-role="货架商品">货架商品</button>
+        <button data-role="直播投放">直播投放</button>
+        <button data-role="内容">内容</button>
       </nav>
-
-      <section id="focus-toolbar" class="focus-toolbar" aria-label="总管页面显示方式">
-        <div>
-          <strong>总管聚焦模式</strong>
-          <small id="focus-summary">优先显示有任务的模块，减少无效滚动。</small>
-        </div>
-        <button id="focus-toggle" type="button" aria-pressed="true">显示全部模块</button>
-      </section>
 
       <section class="manager-card" aria-label="今日处置队列">
         <div class="section-heading manager-heading">
@@ -182,8 +172,8 @@
 
       <section class="workbench-switcher" aria-label="岗位工作台设置">
         <div>
-          <strong id="workbench-title">运营总管工作台</strong>
-          <small id="workbench-description">跨岗位查看风险、待确认动作和今日验收结果</small>
+          <strong id="workbench-title">货架商品工作台</strong>
+          <small id="workbench-description">把商品承接、库存和货架转化放在同一条经营链路中</small>
         </div>
         <label>当前班次
           <select id="workbench-scene">
@@ -242,21 +232,21 @@
         <div id="trend-list" class="trend-list empty-state">历史数据正在积累，完成两次巡检后开始展示变化</div>
       </section>
 
-      <section class="module-section" data-owner="货架运营">
+      <section class="module-section" data-owner="货架商品">
         <div class="section-heading"><h3>货架转化诊断</h3><span id="shelf-status">等待数据</span></div>
         <p class="section-intro">按“曝光 → 点击 → 成交”查找流失环节，只展示今天需要处理的问题。</p>
         <div id="shelf-metrics" class="metric-strip"></div>
         <div id="shelf-actions" class="stack empty-state">同步商城经营页面后，这里会告诉你先改主图、标题还是商品承接。</div>
       </section>
 
-      <section class="module-section" data-owner="直播运营">
+      <section class="module-section" data-owner="直播投放">
         <div class="section-heading"><h3>直播转化诊断</h3><span id="live-status">等待数据</span></div>
         <p class="section-intro">按“进房 → 商品点击 → 下单”定位问题，给出下一场直播的具体调整动作。</p>
         <div id="live-metrics" class="metric-strip"></div>
         <div id="live-actions" class="stack empty-state">同步店铺直播或千川直播大屏后，这里会生成直播调整清单。</div>
       </section>
 
-      <section class="module-section wide-module" data-owner="直播运营 投放运营">
+      <section class="module-section wide-module" data-owner="内容">
         <div class="section-heading"><h3>千川素材表现</h3><span id="creative-status">等待数据</span></div>
         <p class="section-intro">先判断哪些素材在消耗、哪些值得复用、哪些应该停止测试，再查看单条视频。</p>
         <div id="creative-metrics" class="metric-strip"></div>
@@ -267,7 +257,7 @@
         </details>
       </section>
 
-      <section class="module-section wide-module automation-section" data-owner="投放运营">
+      <section class="module-section wide-module automation-section" data-owner="直播投放">
         <div class="section-heading"><h3>自动化投放准备度</h3><span id="automation-status">影子模式</span></div>
         <p class="section-intro">先筛出可进入执行器的计划，再完成账号、计划 ID、数据质量、人工授权和执行前回读。首批只允许受监督降低单计划预算，并在提交后自动回读验收。</p>
         <div class="automation-path" aria-label="自动化投放演进路径">
@@ -305,14 +295,14 @@
         <div id="automation-candidates" class="stack empty-state">同步千川计划后，这里会显示哪些动作可授权、哪些被阻止以及下一步怎么补齐。</div>
       </section>
 
-      <section class="module-section shadow-section" data-owner="投放运营">
+      <section class="module-section shadow-section" data-owner="直播投放">
         <div class="section-heading"><h3>人工操作核验</h3><span id="shadow-count">0 项</span></div>
         <p class="section-intro">插件不会自动修改计划。你在千川人工操作后，再回来读取页面核对结果。</p>
         <div id="shadow-summary" class="metric-strip"></div>
         <div id="shadow-actions" class="stack empty-state">确认调整方案后，这里会提示人工操作步骤和核验结果。</div>
       </section>
 
-      <section class="module-section" data-owner="投放运营">
+      <section class="module-section" data-owner="直播投放">
         <div class="section-heading"><h3>今日投放调整</h3><span id="plan-count">0 项</span></div>
         <p class="section-intro">按优先级逐项处理；每条建议都包含判断依据、调整范围和验收指标。</p>
         <div id="plans" class="stack empty-state">同步千川计划和报表后，这里会生成今天的止损、观察和放量清单。</div>
@@ -324,7 +314,7 @@
         <div id="stop-loss-queue" class="stack empty-state">同步千川计划和报表后，这里会生成今日止损优先级。</div>
       </section>
 
-      <section class="module-section inventory-section" data-owner="商品运营">
+      <section class="module-section inventory-section" data-owner="货架商品">
         <div class="section-heading"><h3>库存风险与补货</h3><span id="inventory-count">0 项</span></div>
         <p class="section-intro">默认显示最紧急的 4 项。先保障主推商品不断货，再决定是否继续放量。</p>
         <div id="inventory" class="stack inventory-grid empty-state">同步商品或库存页面后，这里会按紧急程度排列补货任务。</div>

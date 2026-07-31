@@ -14,14 +14,13 @@ const REPORT_TEMPLATE_LABELS = {
 };
 
 let latestBrief = "";
-let currentRole = "运营总管";
+let currentRole = "货架商品";
 let currentOps = null;
 let currentOperationsContext = null;
 let scanPoller = null;
 let scanStartTime = 0;
 let workbenchScene = "daily";
 let templateChecks = {};
-let focusOnlyActionable = true;
 let managerQueueExpanded = false;
 let currentPreflightSession = null;
 let qianchuanSyncPromise = null;
@@ -30,51 +29,41 @@ let currentOperationContext = null;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const ROLE_WORKBENCH = {
-  "运营总管": {
-    title: "运营总管工作台",
-    description: "跨岗位查看风险、待确认动作和今日验收结果",
-    tasks: [
-      ["assign_top_actions", "确认今日三件事", "每项任务明确负责人、截止时间和验收指标"],
-      ["review_pending_actions", "审核待确认投放方案", "账号、计划、当前值和目标值均已核对"],
-      ["close_daily_loop", "检查昨日任务结果", "已完成、待观察和无效建议都有结论"],
-    ],
-  },
-  "货架运营": {
-    title: "货架运营工作台",
-    description: "聚焦曝光、点击、成交和商品承接问题",
+  "货架商品": {
+    title: "货架商品工作台",
+    description: "把商品承接、库存和货架转化放在同一条经营链路中",
     tasks: [
       ["shelf_funnel", "核对货架漏斗", "定位曝光、点击或成交环节的最大损失"],
-      ["shelf_assets", "检查主图与标题", "高曝光低点击商品已建立优化任务"],
-      ["shelf_search", "检查搜索和推荐卡", "潜力商品的搜索词与推荐卡状态已核对"],
+      ["stock_risk", "检查主推商品库存", "缺货风险、可售天数和流量安排已经对齐"],
+      ["shelf_assets", "检查商品承接", "主图、标题、搜索卡和成交表现已建立优化任务"],
     ],
   },
-  "直播运营": {
-    title: "直播运营工作台",
-    description: "围绕进房、商品点击、成交和直播承接执行",
+  "直播投放": {
+    title: "直播投放工作台",
+    description: "把直播漏斗、千川消耗和受控执行放在同一个决策面板",
     tasks: [
-      ["live_funnel", "核对直播漏斗", "进房、商品点击和成交瓶颈已定位"],
-      ["live_script", "检查话术和商品顺序", "开场钩子、主推品和利益点已经确认"],
-      ["live_review", "记录异常时间点", "流量或转化异常已关联到对应直播时段"],
+      ["live_funnel", "核对直播与投放漏斗", "进房、商品点击、成交、消耗和 ROI 瓶颈已定位"],
+      ["ad_risk", "处理高消耗低转化计划", "每项调整都有依据、幅度、授权和观察窗口"],
+      ["live_review", "复盘直播投放结果", "异常时段已关联到计划调整和下一次复查任务"],
     ],
   },
-  "投放运营": {
-    title: "千川投手工作台",
-    description: "只处理止损、观察、换素材和具备条件的放量计划",
+  "内容": {
+    title: "内容工作台",
+    description: "独立管理素材、视频、脚本和创意测试，不与投放操作混在一起",
     tasks: [
-      ["ad_account", "锁定千川账号与日期", "账号、统计周期和归因口径已核对"],
-      ["ad_risk", "处理高消耗低转化计划", "每项调整都有依据、幅度和观察窗口"],
-      ["ad_creative", "检查计划与素材表现", "衰退素材和待测素材已进入测试清单"],
+      ["content_performance", "检查内容表现", "停测、复用和补测素材已经分组"],
+      ["content_pipeline", "补齐内容测试池", "脚本、钩子、卖点和视频版本都有明确测试任务"],
+      ["content_review", "沉淀有效内容", "有效素材已记录适用人群、场景和复用方式"],
     ],
   },
-  "商品运营": {
-    title: "商品运营工作台",
-    description: "优先处理断货风险、可售天数和投放库存冲突",
-    tasks: [
-      ["stock_risk", "检查缺货与极低库存", "高风险 SKU 已补货或限制流量"],
-      ["stock_cover", "核对预计可售天数", "直播主推品和放量品库存满足计划"],
-      ["stock_sync", "同步投放与库存动作", "缺货商品没有继续扩大千川消耗"],
-    ],
-  },
+};
+
+const ROLE_MIGRATION = {
+  运营总管: "货架商品",
+  货架运营: "货架商品",
+  商品运营: "货架商品",
+  直播运营: "直播投放",
+  投放运营: "直播投放",
 };
 
 const SCENE_WORKBENCH = {
@@ -106,7 +95,7 @@ function localDateKey() {
 }
 
 function workbenchTasks() {
-  const role = ROLE_WORKBENCH[currentRole] || ROLE_WORKBENCH["运营总管"];
+  const role = ROLE_WORKBENCH[currentRole] || ROLE_WORKBENCH["货架商品"];
   const scene = SCENE_WORKBENCH[workbenchScene] || SCENE_WORKBENCH.daily;
   return [scene.task, ...role.tasks.slice(0, 2)].map(([id, title, acceptance]) => ({ id, title, acceptance }));
 }
@@ -116,7 +105,7 @@ function templateCheckKey(taskId) {
 }
 
 function renderWorkbench() {
-  const role = ROLE_WORKBENCH[currentRole] || ROLE_WORKBENCH["运营总管"];
+  const role = ROLE_WORKBENCH[currentRole] || ROLE_WORKBENCH["货架商品"];
   const scene = SCENE_WORKBENCH[workbenchScene] || SCENE_WORKBENCH.daily;
   document.getElementById("workbench-title").textContent = role.title;
   document.getElementById("workbench-description").textContent = role.description;
@@ -494,42 +483,10 @@ function setModuleActionCount(childId, count) {
 }
 
 function applyModuleVisibility() {
-  const toolbar = document.getElementById("focus-toolbar");
-  const toggle = document.getElementById("focus-toggle");
-  const summary = document.getElementById("focus-summary");
-  const managerView = currentRole === "运营总管";
-  toolbar.hidden = !managerView;
-
-  let roleModules = 0;
-  let actionableModules = 0;
-  let hiddenEmptyModules = 0;
   document.querySelectorAll(".module-section").forEach((section) => {
     const owners = String(section.dataset.owner || "").split(/\s+/).filter(Boolean);
-    const belongsToRole = managerView || owners.includes(currentRole);
-    const actionable = Number(section.dataset.actionCount || 0) > 0;
-    if (belongsToRole) {
-      roleModules += 1;
-      if (actionable) actionableModules += 1;
-    }
-    const hideForFocus = managerView && focusOnlyActionable && !actionable;
-    section.hidden = !belongsToRole || hideForFocus;
-    if (belongsToRole && hideForFocus) hiddenEmptyModules += 1;
+    section.hidden = !owners.includes(currentRole);
   });
-
-  if (!managerView) return;
-  toggle.setAttribute("aria-pressed", String(focusOnlyActionable));
-  toolbar.classList.toggle("showing-all", !focusOnlyActionable);
-  if (focusOnlyActionable) {
-    toggle.textContent = hiddenEmptyModules ? `显示全部模块（${hiddenEmptyModules}）` : "已经显示全部";
-    toggle.disabled = hiddenEmptyModules === 0;
-    summary.textContent = actionableModules
-      ? `已显示 ${actionableModules} 个有任务模块，隐藏 ${hiddenEmptyModules} 个暂无任务模块。`
-      : "当前没有专项任务；可显示全部模块查看经营指标和数据状态。";
-  } else {
-    toggle.disabled = false;
-    toggle.textContent = "只看需要处理";
-    summary.textContent = `当前显示全部 ${roleModules} 个经营模块。`;
-  }
 }
 
 function recommendationCard(item, kind) {
@@ -775,6 +732,23 @@ function taskModuleTarget(item = {}) {
   }[item.owner] || "";
 }
 
+function taskBusinessRole(item = {}) {
+  const context = `${item.title || ""} ${item.action || ""} ${item.suggestion || ""} ${item.evidence || ""}`;
+  if (/(素材|视频|创意|内容|脚本|话术|钩子|口播|封面)/.test(context)) return "内容";
+  if (/(库存|补货|断货|可售|货架|主图|标题|搜索|推荐卡|商城|商品卡)/.test(context)) return "货架商品";
+  if (/(直播|进房|场次|开播|投放|千川|计划|ROI|消耗|预算|出价)/i.test(context)) return "直播投放";
+  return {
+    货架运营: "货架商品",
+    商品运营: "货架商品",
+    直播运营: "直播投放",
+    投放运营: "直播投放",
+  }[item.owner] || "货架商品";
+}
+
+function taskBelongsToCurrentRole(item = {}) {
+  return taskBusinessRole(item) === currentRole;
+}
+
 function revealModuleByChildId(targetId) {
   const target = targetId ? document.getElementById(targetId) : null;
   const section = target?.closest(".module-section");
@@ -802,7 +776,7 @@ function taskCard(item, options = {}) {
   card.className = `task-card ${item.level || "info"}`;
   const meta = document.createElement("div");
   meta.className = "task-meta";
-  const owner = String(item.owner || "运营").replace("运营总管", "总管").replace("运营", "");
+  const owner = taskBusinessRole(item);
   const queuePrefix = options.queueIndex ? `第 ${options.queueIndex} 项 · ` : "";
   meta.textContent = `${queuePrefix}${item.level === "high" ? "立即处理" : item.level === "opportunity" ? "增长机会" : "今日处理"} · ${owner || "运营"}`;
   const title = document.createElement("strong"); title.textContent = item.title || "运营任务";
@@ -909,7 +883,7 @@ function roleTasks(ops, opportunity = false) {
   const levelPriority = { high: 0, warning: 1, info: 2, opportunity: 3 };
   const statusPriority = { doing: 0, todo: 1, observing: 2 };
   return source
-    .filter((item) => item.status !== "done" && (currentRole === "运营总管" || item.owner === currentRole) && (opportunity ? item.level === "opportunity" : item.level !== "opportunity"))
+    .filter((item) => item.status !== "done" && taskBelongsToCurrentRole(item) && (opportunity ? item.level === "opportunity" : item.level !== "opportunity"))
     .sort((a, b) => {
       const levelDelta = (levelPriority[a.level] ?? 9) - (levelPriority[b.level] ?? 9);
       if (levelDelta) return levelDelta;
@@ -942,10 +916,8 @@ function renderOperations(ops, shelf, live, creative, coverage = []) {
   const allGrowth = roleTasks(ops, true);
   const visibleTasks = managerQueueExpanded ? allTasks : allTasks.slice(0, 3);
   const expand = document.getElementById("manager-expand");
-  document.getElementById("task-heading").textContent = currentRole === "运营总管" ? "今日处置队列" : `${currentRole} · 今日处置队列`;
-  document.getElementById("manager-queue-caption").textContent = currentRole === "运营总管"
-    ? "跨岗位按紧急程度排列，先处理风险，再进入观察。"
-    : "按紧急程度排列，完成动作后再进入观察。";
+  document.getElementById("task-heading").textContent = `${currentRole} · 今日处置队列`;
+  document.getElementById("manager-queue-caption").textContent = "按紧急程度排列，完成动作后再进入观察。";
   document.getElementById("manager-count").textContent = `${allTasks.length} 项待处理`;
   expand.hidden = allTasks.length <= 3;
   expand.textContent = managerQueueExpanded ? "收起队列" : `查看全部 ${allTasks.length} 项`;
@@ -953,7 +925,7 @@ function renderOperations(ops, shelf, live, creative, coverage = []) {
   renderTasks("manager-tasks", visibleTasks, { queue: true, showModuleLink: true });
   document.getElementById("growth-count").textContent = `${allGrowth.length} 项`;
   renderTasks("growth-tasks", allGrowth.slice(0, 3), { showModuleLink: true });
-  const scoped = (ops.all_tasks || []).filter((item) => currentRole === "运营总管" || item.owner === currentRole);
+  const scoped = (ops.all_tasks || []).filter(taskBelongsToCurrentRole);
   const done = scoped.filter((item) => item.status === "done").length;
   document.getElementById("progress-rate").textContent = scoped.length ? `${Math.round(done / scoped.length * 100)}%` : "--";
   document.getElementById("doing-count").textContent = scoped.filter((item) => item.status === "doing").length;
@@ -1794,10 +1766,10 @@ async function syncRecentQianchuanPage() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference", "focusOnlyActionable", "lastQianchuanManualSync"]);
-  if (stored.preferredRole) currentRole = stored.preferredRole;
+  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference", "lastQianchuanManualSync"]);
+  if (stored.preferredRole) currentRole = ROLE_MIGRATION[stored.preferredRole] || stored.preferredRole;
+  if (!ROLE_WORKBENCH[currentRole]) currentRole = "货架商品";
   if (SCENE_WORKBENCH[stored.workbenchScene]) workbenchScene = stored.workbenchScene;
-  focusOnlyActionable = stored.focusOnlyActionable !== false;
   selectedQianchuanAccount = String(stored.scanAccountPreference || "");
   if (stored.templateChecks && typeof stored.templateChecks === "object") {
     const today = `${localDateKey()}:`;
@@ -1805,6 +1777,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await chrome.storage.local.set({ templateChecks });
   }
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item.dataset.role === currentRole));
+  await chrome.storage.local.set({ preferredRole: currentRole });
   restoreQianchuanSyncUi(stored.lastQianchuanManualSync || {});
   renderWorkbench();
   applyModuleVisibility();
@@ -1878,11 +1851,6 @@ document.getElementById("sync-oceanengine-data").addEventListener("click", async
     button.disabled = false;
     button.textContent = "同步官方数据";
   }
-});
-document.getElementById("focus-toggle").addEventListener("click", async () => {
-  focusOnlyActionable = !focusOnlyActionable;
-  await chrome.storage.local.set({ focusOnlyActionable });
-  applyModuleVisibility();
 });
 document.getElementById("context-action").addEventListener("click", () => {
   if (!currentOperationContext?.selected_store?.key) {

@@ -2634,7 +2634,7 @@ def build_ops_manager() -> dict[str, Any]:
         "today_top_actions": active[:10],
         "all_tasks": tasks,
         "progress": {**progress, "total": len(tasks), "completed_rate": round(progress["done"] / len(tasks) * 100) if tasks else 0},
-        "roles": ["运营总管", "货架运营", "直播运营", "投放运营", "商品运营"],
+        "roles": ["货架商品", "直播投放", "内容"],
         "modules": {"shelf": {"status": shelf["data_status"], "action_count": len(shelf["recommendations"])}, "live": {"status": live["data_status"], "action_count": len(live["recommendations"])}, "qianchuan": {"action_count": len(plans)}, "creative": {"status": creative["data_status"], "action_count": len(creative["recommendations"])}, "inventory": {"alert_count": len(inventory)}},
         "mode": "read_only",
     }
@@ -3602,19 +3602,19 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
         f"- 自动巡检：{scan.get('status', 'idle')}；成功 {scan.get('success', 0)} 页，失败 {scan.get('failed', 0)} 页，低质量 {scan.get('low_quality', 0)} 页。",
         f"- 数据体检：{scan_receipt['readiness_label']}；覆盖率 {scan_receipt['summary']['coverage_rate']}%；需复核 {scan_receipt['summary']['needs_review']} 页。",
         "",
-        "## 运营总管今日任务",
+        "## 今日重点任务",
         "",
     ])
     for index, item in enumerate(ops["today_top_actions"][:8], 1):
         source_key = item.get("source", "")
         data_time = freshness_map.get(source_key, {}).get("saved_at", "未知")
         lines.extend([f"{index}. **[{item['owner']}] {item['title']}**：{item['action']}", f"   - 依据：{item['evidence']}｜验收：{item['acceptance']}｜数据时间：{data_time}"])
-    lines.extend(["", "## 货架运营", ""])
+    lines.extend(["", "## 货架商品", ""])
     for item in action_center["shelf_analysis"]["recommendations"]:
         lines.append(f"- **{item['title']}**：{item['action']}（{item['evidence']}）")
     if not action_center["shelf_analysis"]["recommendations"]:
         lines.append("- 暂无货架专项建议。")
-    lines.extend(["", "## 直播与内容运营", ""])
+    lines.extend(["", "## 直播投放", ""])
     for item in action_center["live_analysis"]["recommendations"]:
         lines.append(f"- **{item['title']}**：{item['action']}（{item['evidence']}）")
     if not action_center["live_analysis"]["recommendations"]:
@@ -3631,7 +3631,7 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
             lines.extend([f"{index}. **{item['plan']}**：{item['suggestion']}", f"   - 依据：{item['reason']}｜数据时间：{qianchuan_time}"])
     else:
         lines.append("- 暂无可执行建议；请同步千川计划列表和报表页面。")
-    lines.extend(["", "## 千川视频库与直播引流素材", ""])
+    lines.extend(["", "## 内容", ""])
     creative = action_center["creative_analysis"]
     summary = creative["summary"]
     lines.append(f"- 视频 {summary['total_videos']} 条；在投/有消耗 {summary['spending_videos']} 条；未测试 {summary['untested_videos']} 条；高风险 {summary['risky_videos']} 条；高潜 {summary['high_potential_videos']} 条。")
@@ -3734,7 +3734,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/3.0.1"
+    server_version = "DianAgent/3.5.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -3788,7 +3788,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "3.4.1",
+                    "version": "3.5.0",
                     "mode": execution_mode,
                     "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}.get(execution_mode, "未知模式"),
                     "execution_enabled": execution_mode == "supervised",
