@@ -170,7 +170,7 @@ TOOLS = [
     ),
     Tool(
         name="get_ops_manager",
-        description="以运营总管视角汇总货架、直播、千川和库存，输出今日优先任务、负责人和验收标准",
+        description="按货架商品、直播投放和内容三条业务链路汇总数据，输出今日优先任务、负责人和验收标准",
         inputSchema={"type": "object", "properties": {}, "required": []},
     ),
     Tool(
