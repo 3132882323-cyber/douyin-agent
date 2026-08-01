@@ -784,9 +784,19 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual("", insights.match_delivery_status("未启用"))
         self.assertEqual("", insights.match_delivery_status("不生效中"))
         self.assertEqual("", insights.match_delivery_status("取消暂停"))
+        self.assertEqual("", insights.match_delivery_status("可暂停"))
         self.assertEqual("投放中", insights.match_delivery_status("投放中"))
         self.assertEqual("已暂停", insights.match_delivery_status("已暂停"))
+        self.assertEqual("暂停中", insights.match_delivery_status("暂停中"))
+        self.assertEqual("暂停", insights.match_delivery_status("暂停"))
         self.assertFalse(insights.pause_plan_succeeded("取消暂停"))
+        self.assertFalse(insights.pause_plan_succeeded("可暂停"))
+        self.assertFalse(insights.pause_plan_succeeded("暂停"))
+        self.assertTrue(insights.pause_plan_succeeded("已暂停"))
+        self.assertTrue(insights.pause_plan_succeeded("暂停中"))
+        self.assertFalse(insights.delivery_is_inactive("可暂停"))
+        self.assertTrue(insights.delivery_is_inactive("暂停"))
+        self.assertTrue(insights.delivery_is_inactive("暂停中"))
 
         label, value = insights._pick_delivery_status_field({
             "审核状态": "启用",

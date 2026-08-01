@@ -238,6 +238,182 @@ function send(request, type = "qianchuan-supervised-submit") {
   assert.equal(negated.ok, false);
   assert.match(negated.error, /投放状态与授权不一致|授权缺少已投放状态/);
 
+  // Unrelated toast must never count as pause success.
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中 暂停";
+  submitted = false;
+  pauseButton.click = () => { submitted = true; };
+  context.document.querySelectorAll = (selector) => {
+    if (selector.includes("table-row") || selector.startsWith("tr,")) return [row];
+    if (selector.includes("shopName")) return [{ innerText: "测试店铺", getClientRects: () => [1] }];
+    if (selector.includes("[role='alert']") || selector.includes("toast")) {
+      return [{ innerText: "计划X 已暂停", getClientRects: () => [1] }];
+    }
+    return [];
+  };
+  const toastAlone = await send(pauseRequest);
+  assert.equal(toastAlone.ok, false);
+  assert.equal(toastAlone.platform_mutation_attempted, true);
+  assert.match(toastAlone.error, /未读取到成功回执/);
+
+  // Late confirm dialog (after the initial 1.8s window) still gets clicked once.
+  let pauseClickedAt = 0;
+  let confirmClicks = 0;
+  const confirmBtn = {
+    innerText: "确认暂停",
+    textContent: "确认暂停",
+    disabled: false,
+    getClientRects: () => [1],
+    getAttribute: () => null,
+    click() {
+      confirmClicks += 1;
+      pauseClickedAt = 0; // hide dialog after confirm
+      row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+    },
+  };
+  const lateDialog = {
+    innerText: "确认要暂停该计划吗？\n取消\n确认暂停",
+    textContent: "确认要暂停该计划吗？",
+    getClientRects: () => [1],
+    querySelectorAll: (selector) => (selector === "button" ? [
+      {
+        innerText: "取消",
+        textContent: "取消",
+        disabled: false,
+        getClientRects: () => [1],
+        getAttribute: () => null,
+        click() {},
+      },
+      confirmBtn,
+    ] : []),
+  };
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  submitted = false;
+  pauseButton.click = () => {
+    submitted = true;
+    pauseClickedAt = fakeNow;
+  };
+  row.querySelectorAll = (selector) => {
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton, pauseButton];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, pauseButton];
+    }
+    return [];
+  };
+  context.document.querySelectorAll = (selector) => {
+    if (selector.includes("table-row") || selector.startsWith("tr,")) return [row];
+    if (selector.includes("shopName")) return [{ innerText: "测试店铺", getClientRects: () => [1] }];
+    if (selector.includes("[role='dialog']") || selector.includes("modal") || selector.includes("Modal")) {
+      // Appear only after the early 1.8s dismiss window has timed out.
+      const late = pauseClickedAt > 0 && (fakeNow - pauseClickedAt) >= 2000;
+      return late ? [lateDialog] : [];
+    }
+    return [];
+  };
+  const lateConfirm = await send(pauseRequest);
+  assert.equal(lateConfirm.ok, true);
+  assert.equal(lateConfirm.submitted, true);
+  assert.equal(confirmClicks, 1);
+
+  // Lingering dialog after confirm must not block row status success.
+  let lingerDialog = true;
+  confirmClicks = 0;
+  const lingerConfirm = {
+    innerText: "确认",
+    textContent: "确认",
+    disabled: false,
+    getClientRects: () => [1],
+    getAttribute: () => null,
+    click() {
+      confirmClicks += 1;
+      row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+      // Dialog node stays mounted (common fade-out / keep-alive).
+    },
+  };
+  const lingerModal = {
+    innerText: "确认暂停该计划？\n取消\n确认",
+    textContent: "确认暂停该计划？",
+    getClientRects: () => [1],
+    querySelectorAll: (selector) => (selector === "button" ? [
+      {
+        innerText: "取消",
+        textContent: "取消",
+        disabled: false,
+        getClientRects: () => [1],
+        getAttribute: () => null,
+        click() {},
+      },
+      lingerConfirm,
+    ] : []),
+  };
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  submitted = false;
+  pauseButton.click = () => {
+    submitted = true;
+    lingerDialog = true;
+  };
+  row.querySelectorAll = (selector) => {
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton, pauseButton];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, pauseButton];
+    }
+    return [];
+  };
+  context.document.querySelectorAll = (selector) => {
+    if (selector.includes("table-row") || selector.startsWith("tr,")) return [row];
+    if (selector.includes("shopName")) return [{ innerText: "测试店铺", getClientRects: () => [1] }];
+    if (selector.includes("[role='dialog']") || selector.includes("modal") || selector.includes("Modal")) {
+      return lingerDialog ? [lingerModal] : [];
+    }
+    return [];
+  };
+  const lingerResult = await send(pauseRequest);
+  assert.equal(lingerResult.ok, true);
+  assert.equal(lingerResult.submitted, true);
+  assert.equal(confirmClicks, 1);
+
+  // Switch-off alone without paused status text must not succeed.
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  submitted = false;
+  confirmClicks = 0;
+  pauseClickedAt = 0;
+  const switchControl = {
+    innerText: "启停开关",
+    textContent: "启停开关",
+    disabled: false,
+    role: "switch",
+    type: undefined,
+    checked: true,
+    attrs: { "aria-checked": "true", "aria-pressed": "true", role: "switch", "aria-label": "启停开关" },
+    getClientRects: () => [1],
+    getAttribute(name) { return this.attrs[name] ?? null; },
+    click() {
+      submitted = true;
+      this.checked = false;
+      this.attrs["aria-checked"] = "false";
+      this.attrs["aria-pressed"] = "false";
+      // Status text stays「投放中」— must fail.
+    },
+  };
+  row.querySelectorAll = (selector) => {
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, switchControl];
+    }
+    return [];
+  };
+  context.document.querySelectorAll = (selector) => {
+    if (selector.includes("table-row") || selector.startsWith("tr,")) return [row];
+    if (selector.includes("shopName")) return [{ innerText: "测试店铺", getClientRects: () => [1] }];
+    return [];
+  };
+  const switchOnly = await send(pauseRequest);
+  assert.equal(switchOnly.ok, false);
+  assert.equal(switchOnly.platform_mutation_attempted, true);
+  assert.match(switchOnly.error, /未读取到成功回执/);
+
   console.log("content-qianchuan executor tests passed");
 })().catch((error) => {
   console.error(error);

@@ -320,17 +320,28 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
 
 
 ACTIVE_DELIVERY_STATUSES = ("投放中", "启用", "生效中", "运行中")
-PAUSE_SUCCESS_STATUSES = ("已暂停", "暂停中", "暂停")
-_DELIVERY_STATUS_LABELS = (*ACTIVE_DELIVERY_STATUSES, "已暂停", "未投放", "暂停")
+# Verify / skip-active only; bare「暂停」is too often a button label or compound wording.
+PAUSE_SUCCESS_STATUSES = ("已暂停", "暂停中")
+_DELIVERY_STATUS_LABELS = (*ACTIVE_DELIVERY_STATUSES, "已暂停", "暂停中", "未投放", "暂停")
+
+
+_STATUS_TOKEN_BOUNDARIES = frozenset(" \t\n|/·•,，。;；:：【】[]()（）-—_")
 
 
 def _status_label_blocked_by_negation(text: str, label: str, idx: int) -> bool:
-    """True when a substring hit is a negated / cancelled form (未启用、取消暂停…)."""
+    """True when a substring hit is a negated / cancelled / compound form (未启用、取消暂停、可暂停…)."""
 
     if idx > 0 and text[idx - 1] in "未不":
         return True
-    if label == "暂停" and idx >= 2 and text[idx - 2 : idx] == "取消":
-        return True
+    if label == "暂停":
+        if idx >= 2 and text[idx - 2 : idx] == "取消":
+            return True
+        # Bare「暂停」must be a standalone token — not inside 可暂停 / 暂停投放按钮 copy.
+        if idx > 0 and text[idx - 1] not in _STATUS_TOKEN_BOUNDARIES:
+            return True
+        end = idx + len(label)
+        if end < len(text) and text[end] not in _STATUS_TOKEN_BOUNDARIES:
+            return True
     return False
 
 
@@ -359,11 +370,17 @@ def match_delivery_status(status_raw: Any) -> str:
 
 
 def pause_plan_succeeded(status: Any, *, target_value: Any = "暂停") -> bool:
+    """True only for concrete paused delivery states (not bare「暂停」/「可暂停」)."""
+
     matched = match_delivery_status(status)
-    target = str(target_value or "暂停").strip()
-    if matched and matched == target:
-        return True
     return matched in PAUSE_SUCCESS_STATUSES
+
+
+def delivery_is_inactive(status: Any) -> bool:
+    """Zero-spend skip helper: paused or not delivering."""
+
+    matched = match_delivery_status(status)
+    return matched in {"已暂停", "暂停中", "暂停", "未投放"}
 
 
 def _pick(record: dict[str, Any], keywords: tuple[str, ...]) -> tuple[str, Any] | tuple[None, None]:
@@ -665,7 +682,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
         if spend is None and roi is None:
             continue
         _, status_value = _pick_delivery_status_field(record)
-        if spend == 0 and pause_plan_succeeded(status_value):
+        if spend == 0 and delivery_is_inactive(status_value):
             continue
 
         plan_roi_target = _extract_labeled_number(record, "ROI目标")

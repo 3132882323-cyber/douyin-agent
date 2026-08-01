@@ -171,6 +171,7 @@
     const text = String(rowText || "");
     const label = String(status || "");
     if (!label) return false;
+    const boundaries = " \t\n|/·•,，。;；:：【】[]()（）-—_";
     let start = 0;
     while (true) {
       const idx = text.indexOf(label, start);
@@ -180,9 +181,17 @@
         start = idx + 1;
         continue;
       }
-      if (label === "暂停" && idx >= 2 && text.slice(idx - 2, idx) === "取消") {
-        start = idx + 1;
-        continue;
+      if (label === "暂停") {
+        if (idx >= 2 && text.slice(idx - 2, idx) === "取消") {
+          start = idx + 1;
+          continue;
+        }
+        // Bare「暂停」must be a token — not 可暂停 / button chrome.
+        const next = idx + label.length < text.length ? text[idx + label.length] : "";
+        if ((prev && !boundaries.includes(prev)) || (next && !boundaries.includes(next))) {
+          start = idx + 1;
+          continue;
+        }
       }
       return true;
     }
@@ -248,43 +257,28 @@
       const control = findPauseControl(row, String(request.expected_current_value || ""));
       control.click();
       platformMutationAttempted = true;
-      await dismissPauseConfirmationIfPresent();
-      const expected = String(request.expected_current_value || "");
+      let pauseConfirmClicked = Boolean(await dismissPauseConfirmationIfPresent());
       const successObserved = await waitFor(() => {
-        const notices = Array.from(document.querySelectorAll(
-          "[role='alert'], [class*='toast'], [class*='message'], [class*='notification']",
-        )).filter(visible);
-        const toastText = notices.map((item) => String(item.innerText || item.textContent || "")).join("\n");
-        if (/已暂停|暂停成功/.test(toastText)) return true;
-        let rowText = "";
+        // Status first: confirm dialogs often linger in DOM after click and must not
+        // block an already-updated row status.
         try {
-          rowText = String(findAuthorizedPlanRow(request).innerText || "");
-        } catch {
-          return false;
-        }
-        // Do NOT treat bare「暂停」as success — the pause button label itself contains it.
-        if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) {
-          return true;
-        }
-        // Only the clicked control flipping off counts — not an arbitrary checkbox in the row.
-        if (expected && !rowShowsStatus(rowText, expected)) {
-          let currentControl = control;
-          try {
-            const currentRow = findAuthorizedPlanRow(request);
-            if (currentRow !== row) {
-              currentControl = findPauseControl(currentRow, "");
-            }
-          } catch {
-            currentControl = control;
+          const rowText = String(findAuthorizedPlanRow(request).innerText || "");
+          // Only concrete paused statuses. Never toast-alone, never switch-off-alone,
+          // never bare「暂停」(button label / 可暂停).
+          if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) {
+            return true;
           }
-          const off = currentControl.getAttribute("aria-checked") === "false"
-            || currentControl.getAttribute("aria-pressed") === "false"
-            || currentControl.checked === false;
-          if (off) return true;
+        } catch {
+          // Row may briefly disappear during refresh.
         }
-        // Generic success toast alone is not enough unless the row left the authorized active status.
-        if (/(?:操作|设置|修改)完成|已保存/.test(toastText) && expected && !rowShowsStatus(rowText, expected)) {
-          return true;
+        const dialog = findPauseConfirmDialog();
+        if (dialog && !pauseConfirmClicked) {
+          const confirms = pauseConfirmButtons(dialog);
+          if (confirms.length !== 1) {
+            throw new Error("检测到暂停确认弹窗，但未找到唯一确认按钮；已停止，请在千川核对。");
+          }
+          confirms[0].click();
+          pauseConfirmClicked = true;
         }
         return false;
       });
@@ -316,29 +310,34 @@
     }
   }
 
-  async function dismissPauseConfirmationIfPresent() {
-    const dialog = await waitFor(() => {
-      // Prefer real dialog/modal nodes; avoid matching whole table rows via class*='confirm'.
-      const nodes = Array.from(document.querySelectorAll(
-        "[role='dialog'], [class*='modal'], [class*='Modal']",
-      )).filter(visible);
-      return nodes.find((node) => {
-        const text = String(node.innerText || node.textContent || "");
-        return /暂停|停用/.test(text) && /(确认|确定)/.test(text);
-      }) || null;
-    }, 1800);
-    if (!dialog) return false;
+  function findPauseConfirmDialog() {
+    const nodes = Array.from(document.querySelectorAll(
+      "[role='dialog'], [class*='modal'], [class*='Modal']",
+    )).filter(visible);
+    return nodes.find((node) => {
+      const text = String(node.innerText || node.textContent || "");
+      return /暂停|停用/.test(text) && /(确认|确定)/.test(text);
+    }) || null;
+  }
+
+  function pauseConfirmButtons(dialog) {
     const buttons = Array.from(dialog.querySelectorAll("button")).filter((button) => (
       visible(button)
       && !button.disabled
       && button.getAttribute("aria-disabled") !== "true"
     ));
     // Never click a bare「暂停/停用」again — that can toggle the plan back on.
-    const confirms = buttons.filter((button) => {
+    return buttons.filter((button) => {
       const label = String(button.innerText || button.textContent || "").trim();
       if (/取消|关闭|再想想/.test(label)) return false;
       return /^(确认|确定)(暂停|停用)?$/.test(label) || /^(确认|确定)(并)?(暂停|停用)$/.test(label);
     });
+  }
+
+  async function dismissPauseConfirmationIfPresent() {
+    const dialog = await waitFor(() => findPauseConfirmDialog(), 1800);
+    if (!dialog) return false;
+    const confirms = pauseConfirmButtons(dialog);
     if (confirms.length !== 1) {
       throw new Error("检测到暂停确认弹窗，但未找到唯一确认按钮；已停止，请在千川核对。");
     }
