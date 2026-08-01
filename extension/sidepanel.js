@@ -720,6 +720,28 @@ function renderCreativeAnalysis(creative = {}) {
       return card;
     }));
   }
+  const memory = creative.memory || {};
+  document.getElementById("content-memory-status").textContent = memory.verified_pattern_count
+    ? `${memory.verified_pattern_count} 条较可信规律`
+    : `${memory.observation_count || 0} 条素材经验`;
+  document.getElementById("content-memory-note").textContent = memory.note || "内容记忆仅使用当前店铺数据。";
+  const memoryContainer = document.getElementById("content-memory-patterns");
+  const patterns = memory.patterns || [];
+  if (!patterns.length) {
+    empty(memoryContainer, "尚未沉淀出可复用规律；继续同步不同素材的完整漏斗数据。");
+  } else {
+    memoryContainer.className = "content-memory-patterns";
+    memoryContainer.replaceChildren(...patterns.map((item) => {
+      const card = document.createElement("article"); card.className = `content-memory-pattern ${item.direction || "mixed"}`;
+      const title = document.createElement("strong"); title.textContent = `${item.dimension} · ${item.value}`;
+      const detail = document.createElement("p");
+      detail.textContent = `${item.win_count || 0} 条胜出 / ${item.risk_count || 0} 条风险${item.average_roi == null ? "" : ` · 平均 ROI ${item.average_roi}`}`;
+      const confidence = document.createElement("span");
+      confidence.textContent = item.confidence === "high" ? "高可信" : item.confidence === "medium" ? "较可信" : "仅作线索";
+      card.append(title, detail, confidence);
+      return card;
+    }));
+  }
   renderTasks("creative-actions", recommendations);
   const container = document.getElementById("creative-videos");
   const videos = creative.videos || [];

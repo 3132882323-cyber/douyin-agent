@@ -2426,6 +2426,108 @@ def build_automation_readiness(recommendations: list[dict[str, Any]] | None = No
     }
 
 
+def _content_memory_path(account_key: str) -> Path:
+    safe_key = account_key if SAFE_KEY.fullmatch(account_key) else "unknown"
+    return DATA_DIR / "content_memory" / f"{safe_key}.json"
+
+
+def _duration_bucket(value: Any) -> str:
+    text = str(value or "").strip()
+    parts = [int(item) for item in re.findall(r"\d+", text)]
+    if not parts:
+        return "时长未知"
+    seconds = parts[-1] + (parts[-2] * 60 if len(parts) >= 2 else 0)
+    if seconds <= 15:
+        return "15秒内"
+    if seconds <= 30:
+        return "16-30秒"
+    if seconds <= 60:
+        return "31-60秒"
+    return "60秒以上"
+
+
+def _update_content_memory(videos: list[dict[str, Any]], settings: dict[str, Any]) -> dict[str, Any]:
+    account_key = str(settings.get("qianchuan_account_key") or "unknown").lower()
+    path = _content_memory_path(account_key)
+    saved: dict[str, Any] = {"schema_version": 1, "account_key": account_key, "observations": []}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                saved.update(loaded)
+        except (OSError, json.JSONDecodeError):
+            pass
+    observations = saved.get("observations") if isinstance(saved.get("observations"), list) else []
+    known = {str(item.get("fingerprint") or "") for item in observations if isinstance(item, dict)}
+    for video in videos:
+        evidence = video.get("evidence") if isinstance(video.get("evidence"), dict) else {}
+        observed_at_ms = int(video.get("observed_at_ms") or 0)
+        fingerprint = hashlib.sha256(f"{account_key}|{observed_at_ms}|{video.get('name')}".encode("utf-8")).hexdigest()[:24]
+        if fingerprint in known:
+            continue
+        tags = [item.strip() for item in re.split(r"[,，|/#]+", str(evidence.get("tags") or "")) if item.strip()][:8]
+        outcome = "winner" if video.get("funnel_stage") == "scalable" else "risk" if video.get("level") == "high" else "learning"
+        observations.append({
+            "fingerprint": fingerprint,
+            "observed_at_ms": observed_at_ms,
+            "name": str(video.get("name") or "")[:120],
+            "outcome": outcome,
+            "tags": tags,
+            "source": str(evidence.get("source") or "来源未知")[:60],
+            "duration_bucket": _duration_bucket(evidence.get("duration")),
+            "roi": evidence.get("roi"),
+            "ctr": evidence.get("ctr"),
+            "orders": evidence.get("orders"),
+            "spend": evidence.get("spend"),
+        })
+        known.add(fingerprint)
+    observations = observations[-1000:]
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in observations:
+        if not isinstance(item, dict):
+            continue
+        facets = [("时长", str(item.get("duration_bucket") or "时长未知")), ("来源", str(item.get("source") or "来源未知"))]
+        facets.extend(("标签", str(tag)) for tag in item.get("tags", []) if tag)
+        for facet in facets:
+            groups.setdefault(facet, []).append(item)
+    patterns: list[dict[str, Any]] = []
+    for (dimension, value), samples in groups.items():
+        unique_names = {str(item.get("name") or "") for item in samples}
+        wins = [item for item in samples if item.get("outcome") == "winner"]
+        risks = [item for item in samples if item.get("outcome") == "risk"]
+        roi_values = [float(item["roi"]) for item in samples if isinstance(item.get("roi"), (int, float))]
+        if not wins and not risks:
+            continue
+        direction = "winner" if len(wins) > len(risks) else "risk" if len(risks) > len(wins) else "mixed"
+        patterns.append({
+            "dimension": dimension,
+            "value": value,
+            "direction": direction,
+            "sample_count": len(unique_names),
+            "win_count": len({str(item.get("name") or "") for item in wins}),
+            "risk_count": len({str(item.get("name") or "") for item in risks}),
+            "average_roi": round(sum(roi_values) / len(roi_values), 2) if roi_values else None,
+            "confidence": "high" if len(unique_names) >= 5 else "medium" if len(unique_names) >= 2 else "low",
+        })
+    patterns.sort(key=lambda item: (0 if item["confidence"] == "high" else 1 if item["confidence"] == "medium" else 2, -(item["win_count"] + item["risk_count"])))
+    payload = {
+        "schema_version": 1,
+        "account_key": account_key,
+        "updated_at": _now_label(),
+        "observations": observations,
+        "patterns": patterns[:30],
+    }
+    _atomic_json_write(path, payload)
+    return {
+        "observation_count": len(observations),
+        "pattern_count": len(patterns),
+        "verified_pattern_count": sum(item["confidence"] in {"medium", "high"} for item in patterns),
+        "patterns": patterns[:8],
+        "note": "同一店铺至少积累 2 条不同素材后才标记为较可信规律；单条素材只作为线索。",
+    }
+
+
 def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Analyze Qianchuan video-library rows for live-stream acquisition work."""
     settings = settings or load_agent_settings()
@@ -2521,6 +2623,7 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
         videos.append(
             {
                 "id": f"creative-{entry['table_index']}-{entry['row_index']}",
+                "observed_at_ms": int(entry.get("captured_at_ms") or 0),
                 "name": name,
                 "level": level,
                 "status": status,
@@ -2574,6 +2677,13 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
 
     priority = {"high": 0, "warning": 1, "opportunity": 2, "info": 3}
     videos.sort(key=lambda item: (priority.get(item["level"], 9), -(item["evidence"].get("spend") or 0)))
+    memory = _update_content_memory(videos, settings) if videos else {
+        "observation_count": 0,
+        "pattern_count": 0,
+        "verified_pattern_count": 0,
+        "patterns": [],
+        "note": "同步素材数据后开始为当前店铺积累内容记忆。",
+    }
     return {
         "generated_at": _now_label(),
         "data_status": "ready" if videos else "missing",
@@ -2591,6 +2701,7 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
         "videos": videos[:30],
         "recommendations": recommendations,
         "test_matrix": test_matrix[:4],
+        "memory": memory,
         "analysis_method": "素材漏斗：展示 → 点击 → 成交 → ROI；每轮测试只改变一个内容变量。",
         "mode": "read_only",
     }
@@ -3620,6 +3731,12 @@ def _render_selected_report(
         f"- {item.get('title', '内容建议')}：{item.get('action', '')}（依据：{item.get('evidence', '')}）"
         for item in creative.get('recommendations', [])[:8]
     ]
+    memory = creative.get("memory") if isinstance(creative.get("memory"), dict) else {}
+    for item in memory.get("patterns", [])[:5]:
+        confidence = {"high": "高可信", "medium": "较可信", "low": "仅作线索"}.get(str(item.get("confidence") or ""), "仅作线索")
+        content_review.append(
+            f"- 本店内容记忆：{item.get('dimension')}“{item.get('value')}”｜胜出 {item.get('win_count', 0)} 条｜风险 {item.get('risk_count', 0)} 条｜{confidence}"
+        )
     execution_log = [
         "- 所有预算、暂停、恢复动作均需单计划、单次授权，并以页面回读作为成功条件。",
         "- 本日报只记录建议与回执，不把建议数量当作投放结果；实际结果需下一周期复盘。",
@@ -3790,6 +3907,15 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
     lines.append(f"- 视频 {summary['total_videos']} 条；在投/有消耗 {summary['spending_videos']} 条；未测试 {summary['untested_videos']} 条；高风险 {summary['risky_videos']} 条；高潜 {summary['high_potential_videos']} 条。")
     for item in creative["recommendations"][:8]:
         lines.append(f"- **{item['title']}**：{item['action']}（{item['evidence']}）")
+    content_memory = creative.get("memory") if isinstance(creative.get("memory"), dict) else {}
+    lines.extend(["", "### 本店内容记忆", ""])
+    patterns = content_memory.get("patterns") if isinstance(content_memory.get("patterns"), list) else []
+    if patterns:
+        for item in patterns[:8]:
+            confidence = {"high": "高可信", "medium": "较可信", "low": "仅作线索"}.get(str(item.get("confidence") or ""), "仅作线索")
+            lines.append(f"- {item.get('dimension')} **{item.get('value')}**：胜出 {item.get('win_count', 0)} 条，风险 {item.get('risk_count', 0)} 条，{confidence}。")
+    else:
+        lines.append("- 尚未积累足够的不同素材，暂不输出店铺内容规律。")
     lines.extend(["", "## 经营数据明细", ""])
     lines.extend([
         f"- 千川计划建议：{len(plans)} 条；可进入受监督动作的计划需具备唯一计划标识、当前状态和页面回读。",
