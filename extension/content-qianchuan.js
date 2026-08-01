@@ -194,6 +194,49 @@
     return { ok: true, ready: true, plan_id: planId, current_value: expected, target_value: target };
   }
 
+  function findPlanRow(request) {
+    const planId = String(request.plan_id || "").trim();
+    const planName = String(request.plan_name || "").trim();
+    const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']")).filter(visible);
+    const matches = rows.filter((row) => {
+      const text = String(row.innerText || "").replace(/\s+/g, " ");
+      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
+      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+    });
+    if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止执行。" : "当前页面未找到授权计划，请打开对应计划列表。");
+    return matches[0];
+  }
+
+  function statusText(row) {
+    return String(row.innerText || "").replace(/\s+/g, " ").trim();
+  }
+
+  function pausePlanProbe(request) {
+    if (request?.operation_type !== "pause_plan" || request?.mode !== "supervised_submit") throw new Error("当前页面不是受监督暂停动作。");
+    const account = detectAccountContext();
+    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    if (String(request.expected_current_value || "") !== "投放中" && !["启用", "生效中", "运行中"].includes(String(request.expected_current_value || ""))) throw new Error("当前计划状态不是可暂停状态。");
+    if (String(request.target_value || "") !== "暂停") throw new Error("暂停目标无效。");
+    const row = findPlanRow(request);
+    const buttons = Array.from(row.querySelectorAll("button, [role='button'], [role='switch']")).filter((button) => visible(button) && !button.disabled && /^(暂停|停用)$/.test(String(button.innerText || button.textContent || "").trim()));
+    if (buttons.length !== 1) throw new Error(buttons.length ? "发现多个暂停按钮，已停止执行。" : "未找到唯一暂停按钮。");
+    return { ok: true, ready: true, plan_id: request.plan_id, status: statusText(row) };
+  }
+
+  async function supervisedPauseSubmit(request) {
+    pausePlanProbe(request);
+    const row = findPlanRow(request);
+    const button = Array.from(row.querySelectorAll("button, [role='button'], [role='switch']")).filter((item) => visible(item) && !item.disabled && /^(暂停|停用)$/.test(String(item.innerText || item.textContent || "").trim()))[0];
+    if (!button) throw new Error("未找到唯一暂停按钮，页面未做任何修改。");
+    button.click();
+    const success = await waitFor(() => {
+      const text = statusText(findPlanRow(request));
+      return /(?:已暂停|暂停中)(?:\s|$)/.test(text) || /(^|\s)暂停(\s|$)/.test(text);
+    }, 10000);
+    if (!success) throw new Error("已点击暂停，但未读取到暂停状态；请立即在千川核对，系统不会重复提交。");
+    return { ok: true, mode: "supervised_submit", plan_id: request.plan_id, target_value: "暂停", submitted: true, platform_success_observed: true };
+  }
+
   async function supervisedBudgetSubmit(request) {
     probeBudgetExecution(request);
     if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
@@ -273,14 +316,14 @@
       return true;
     }
     if (message.type === "qianchuan-supervised-submit") {
-      supervisedBudgetSubmit(message.request)
+      (message.request?.operation_type === "pause_plan" ? supervisedPauseSubmit(message.request) : supervisedBudgetSubmit(message.request))
         .then(sendResponse)
         .catch((error) => sendResponse({ ok: false, error: error.message || String(error), submitted: false }));
       return true;
     }
     if (message.type === "qianchuan-execution-probe") {
       try {
-        sendResponse(probeBudgetExecution(message.request));
+        sendResponse(message.request?.operation_type === "pause_plan" ? pausePlanProbe(message.request) : probeBudgetExecution(message.request));
       } catch (error) {
         sendResponse({ ok: false, ready: false, error: error.message || String(error) });
       }

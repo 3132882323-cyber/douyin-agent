@@ -816,6 +816,14 @@ class SnapshotStoreTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_feedback_supports_deferred_without_distorting_helpful_rate(self) -> None:
+        http_receiver.save_feedback("task-1", "up", context="建议 A")
+        http_receiver.save_feedback("task-2", "defer", context="建议 B")
+        stats = http_receiver.get_feedback_stats()
+        self.assertEqual(stats["total"], 2)
+        self.assertEqual(stats["deferred"], 1)
+        self.assertEqual(stats["helpful_rate"], 100.0)
+
     def test_http_action_confirmation_records_but_never_executes(self) -> None:
         server = ThreadingHTTPServer(("127.0.0.1", 0), http_receiver.Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

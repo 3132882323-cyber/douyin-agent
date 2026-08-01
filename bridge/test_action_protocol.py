@@ -118,6 +118,24 @@ class ActionProtocolTests(unittest.TestCase):
         self.assertTrue(restore["can_confirm"])
         self.assertEqual(25.0, restore["change"]["change_percent"])
 
+    def test_pause_plan_requires_active_status_and_is_confirmable(self):
+        pause = self._draft(
+            operation_type="pause_plan",
+            operation_label="暂停单计划",
+            field="投放状态",
+            current_value="投放中",
+            target_value="暂停",
+        )
+        self.assertTrue(pause["can_confirm"])
+        blocked = self._draft(
+            operation_type="pause_plan",
+            operation_label="暂停单计划",
+            field="投放状态",
+            current_value="已暂停",
+            target_value="暂停",
+        )
+        self.assertIn("CURRENT_STATUS_UNVERIFIED", {item["code"] for item in blocked["blocked_reasons"]})
+
 
 if __name__ == "__main__":
     unittest.main()
