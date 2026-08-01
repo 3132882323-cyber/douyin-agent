@@ -227,6 +227,12 @@
         <div><strong id="data-freshness">--</strong><small>数据状态</small></div>
       </section>
 
+      <section class="value-ledger-card" aria-label="经营价值账本">
+        <div class="section-heading"><h3>经营价值账本</h3><span id="value-ledger-status">等待执行复盘</span></div>
+        <div id="value-ledger-metrics" class="metric-strip"></div>
+        <p id="value-ledger-note" class="section-intro">完成受监督执行和效果复查后，这里会记录 Agent 参与的预算范围与有效率。</p>
+      </section>
+
       <section class="template-card">
         <div class="section-heading">
           <h3 id="template-heading">本班次标准动作</h3>
@@ -259,6 +265,8 @@
         <div class="section-heading"><h3>千川素材表现</h3><span id="creative-status">等待数据</span></div>
         <p class="section-intro">先判断哪些素材在消耗、哪些值得复用、哪些应该停止测试，再查看单条视频。</p>
         <div id="creative-metrics" class="metric-strip"></div>
+        <div class="content-analysis-method"><strong>内容漏斗诊断</strong><span id="creative-analysis-method">展示 → 点击 → 成交 → ROI</span></div>
+        <div id="creative-test-matrix" class="creative-test-matrix empty-state">同步素材数据后，这里会生成单变量测试矩阵。</div>
         <div id="creative-actions" class="stack empty-state">同步巨量千川视频库后，这里会给出停测、复用和补测建议。</div>
         <details class="inner-fold">
           <summary>展开单条视频明细 <span id="creative-count">0 条</span></summary>

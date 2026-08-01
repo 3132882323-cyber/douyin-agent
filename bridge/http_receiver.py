@@ -1816,6 +1816,46 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
     }
 
 
+def build_value_ledger() -> dict[str, Any]:
+    """Summarize verified operating value without presenting estimates as settled revenue."""
+
+    effectiveness = build_execution_effectiveness_report()
+    items = effectiveness.get("items", [])
+    evaluated = [item for item in items if item.get("status") in {"effective", "review"}]
+    effective = [item for item in evaluated if item.get("status") == "effective"]
+    protected_budget = 0.0
+    reviewed_spend = 0.0
+    paused_plans = 0
+    for item in evaluated:
+        before = item.get("before") if isinstance(item.get("before"), dict) else {}
+        spend = before.get("spend")
+        if isinstance(spend, (int, float)):
+            reviewed_spend += max(0.0, float(spend))
+    for item in effective:
+        change = item.get("change") if isinstance(item.get("change"), dict) else {}
+        source, target = change.get("from"), change.get("to")
+        if isinstance(source, (int, float)) and isinstance(target, (int, float)):
+            protected_budget += max(0.0, float(source) - float(target))
+        elif str(target or "") == "暂停":
+            paused_plans += 1
+    effective_rate = round(len(effective) / len(evaluated) * 100, 1) if evaluated else None
+    return {
+        "generated_at": _now_label(),
+        "summary": {
+            "verified_actions": len(items),
+            "evaluated_actions": len(evaluated),
+            "effective_actions": len(effective),
+            "effective_rate": effective_rate,
+            "protected_budget_capacity": round(protected_budget, 2),
+            "paused_plans": paused_plans,
+            "reviewed_spend": round(reviewed_spend, 2),
+            "waiting_review": sum(item.get("status") in {"waiting", "needs_reread"} for item in items),
+        },
+        "recent": effective[:5],
+        "note": "受控预算幅度和复盘消耗用于衡量 Agent 参与范围，不等同于实际节省、结算收入或增量 GMV。",
+    }
+
+
 def build_execution_preflight_report() -> dict[str, Any]:
     """Recheck a short-lived session against the latest Qianchuan page."""
 
@@ -2325,6 +2365,10 @@ def build_automation_readiness(recommendations: list[dict[str, Any]] | None = No
             and isinstance(current_value, (int, float))
             and isinstance(target_value, (int, float))
             and float(target_value) < float(current_value)
+        ) or (
+            action.get("operation_type") == "pause_plan"
+            and str(current_value or "") in {"投放中", "启用", "生效中", "运行中"}
+            and str(target_value or "") == "暂停"
         )
         if readiness["status"] in {"confirmable", "preflight_ready"} and not pilot_eligible:
             readiness = {
@@ -2332,11 +2376,11 @@ def build_automation_readiness(recommendations: list[dict[str, Any]] | None = No
                 "status": "blocked",
                 "status_label": "试运行暂不开放",
                 "stage": "qualification",
-                "next_step": "首批受监督执行只开放降低预算止损；放量和其他动作继续人工处理。",
+                "next_step": "首批受监督执行只开放降低预算或暂停单计划；放量和其他动作继续人工处理。",
                 "can_enter_preflight": False,
                 "blocked_reasons": [
                     *readiness.get("blocked_reasons", []),
-                    {"code": "PILOT_SCOPE_RESTRICTED", "message": "首批只允许降低预算，不开放自动放量。"},
+                    {"code": "PILOT_SCOPE_RESTRICTED", "message": "首批只允许降低预算或暂停单计划，不开放自动放量。"},
                 ],
             }
         items.append(
@@ -2408,6 +2452,31 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
         _, source = _pick(record, ("来源",))
         _, duration = _pick(record, ("时长",))
         assessment_text = str(assessment or "")
+        if ctr is None and isinstance(clicks, (int, float)) and isinstance(impressions, (int, float)) and impressions > 0:
+            ctr = round(float(clicks) / float(impressions) * 100, 2)
+        cvr = round(float(orders) / float(clicks) * 100, 2) if isinstance(orders, (int, float)) and isinstance(clicks, (int, float)) and clicks > 0 else None
+        cpc = round(float(spend) / float(clicks), 2) if isinstance(spend, (int, float)) and isinstance(clicks, (int, float)) and clicks > 0 else None
+        cost_per_order = round(float(spend) / float(orders), 2) if isinstance(spend, (int, float)) and isinstance(orders, (int, float)) and orders > 0 else None
+        if spend == 0:
+            funnel_stage = "untested"
+            funnel_label = "尚未进入测试"
+            test_hypothesis = "先固定人群、预算和时段，只测试一个钩子变量。"
+        elif ctr is not None and ctr < 1:
+            funnel_stage = "hook"
+            funnel_label = "钩子吸引不足"
+            test_hypothesis = "保留商品与人群，仅替换前 3 秒视觉、口播或字幕钩子。"
+        elif (orders or 0) == 0 and (clicks or 0) > 0:
+            funnel_stage = "conversion"
+            funnel_label = "点击后转化不足"
+            test_hypothesis = "保留有效钩子，单独测试卖点、价格利益点和直播间承接。"
+        elif roi is not None and roi >= roi_target and (orders or 0) >= 3:
+            funnel_stage = "scalable"
+            funnel_label = "结构可复制"
+            test_hypothesis = "保留胜出钩子，分别替换卖点、场景或主播，验证可复制性。"
+        else:
+            funnel_stage = "learning"
+            funnel_label = "数据积累中"
+            test_hypothesis = "继续积累完整转化窗口，暂不同时修改多个变量。"
         evidence = {
             "spend": spend,
             "roi": roi,
@@ -2415,6 +2484,9 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
             "impressions": impressions,
             "clicks": clicks,
             "ctr": ctr,
+            "cvr": cvr,
+            "cpc": cpc,
+            "cost_per_order": cost_per_order,
             "assessment": assessment_text[:80],
             "tags": str(tags or "")[:80],
             "source": str(source or "")[:80],
@@ -2452,6 +2524,9 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
                 "name": name,
                 "level": level,
                 "status": status,
+                "funnel_stage": funnel_stage,
+                "funnel_label": funnel_label,
+                "test_hypothesis": test_hypothesis,
                 "suggestion": suggestion,
                 "action_params": _ap,
                 "evidence": evidence,
@@ -2465,6 +2540,23 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
     untested = [item for item in videos if item["status"] == "尚未测试"]
     spending = [item for item in videos if (item["evidence"].get("spend") or 0) > 0]
     measured = [item for item in videos if item["evidence"].get("roi") is not None or item["evidence"].get("ctr") is not None]
+    funnel_counts = {
+        key: sum(item.get("funnel_stage") == key for item in videos)
+        for key in ("untested", "hook", "conversion", "learning", "scalable")
+    }
+    test_matrix: list[dict[str, Any]] = []
+    for stage, label in (("hook", "钩子测试"), ("conversion", "承接测试"), ("scalable", "胜出结构变体"), ("untested", "首轮基准测试")):
+        matched = [item for item in videos if item.get("funnel_stage") == stage]
+        if not matched:
+            continue
+        test_matrix.append({
+            "stage": stage,
+            "label": label,
+            "count": len(matched),
+            "hypothesis": matched[0].get("test_hypothesis"),
+            "success_metric": "点击率提升且转化不下降" if stage == "hook" else "成交率或 ROI 提升" if stage == "conversion" else "变体达到原素材核心效率" if stage == "scalable" else "取得可比较的展示、点击和成交数据",
+            "guardrail": "同一轮只改变一个变量，并保持人群、预算、出价和测试时段可比。",
+        })
     recommendations: list[dict[str, Any]] = []
     if not videos:
         recommendations.append({"level": "info", "owner": "投放运营", "title": "同步千川视频库", "action": "登录巨量千川，打开素材工具中的视频库后点击同步或重新巡查。", "acceptance": "视频库出现素材数量、消耗和素材评估。", "evidence": "当前没有可识别的视频库表格。"})
@@ -2492,9 +2584,14 @@ def build_qianchuan_creative_analysis(settings: dict[str, Any] | None = None) ->
             "risky_videos": len(risky),
             "high_potential_videos": len(opportunities),
             "total_spend": round(sum(item["evidence"].get("spend") or 0 for item in videos), 2),
+            "hook_bottleneck_videos": funnel_counts["hook"],
+            "conversion_bottleneck_videos": funnel_counts["conversion"],
+            "scalable_structure_videos": funnel_counts["scalable"],
         },
         "videos": videos[:30],
         "recommendations": recommendations,
+        "test_matrix": test_matrix[:4],
+        "analysis_method": "素材漏斗：展示 → 点击 → 成交 → ROI；每轮测试只改变一个内容变量。",
         "mode": "read_only",
     }
 
@@ -3991,6 +4088,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/actions/effectiveness":
             self._json(build_execution_effectiveness_report())
+            return
+        if path == "/value-ledger":
+            self._json(build_value_ledger())
             return
         if path == "/trends":
             self._json(build_trends(int(query.get("days", ["7"])[0]), query.get("source", [None])[0], query.get("page_type", [None])[0]))

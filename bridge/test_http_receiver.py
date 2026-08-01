@@ -223,19 +223,29 @@ class SnapshotStoreTests(unittest.TestCase):
         }
         confirmable = http_receiver.build_action_draft(**base)
         preflight = http_receiver.transition_action(confirmable, "confirmed")
+        pause = http_receiver.build_action_draft(**{
+            **base,
+            "operation_type": "pause_plan",
+            "operation_label": "暂停单计划",
+            "field": "投放状态",
+            "current_value": "投放中",
+            "target_value": "暂停",
+            "page_type": "qianchuan_live",
+        })
         blocked = http_receiver.build_action_draft(**{**base, "target_id": "", "account_key": ""})
         report = http_receiver.build_automation_readiness(
             [
                 {"plan": "待授权计划", "level": "high", "action_params": confirmable},
                 {"plan": "已授权计划", "level": "high", "action_params": preflight},
+                {"plan": "直播暂停计划", "level": "high", "action_params": pause},
                 {"plan": "缺少身份计划", "level": "warning", "action_params": blocked},
                 {"plan": "人工建议", "level": "warning"},
             ]
         )
         self.assertFalse(report["execution_enabled"])
-        self.assertEqual(4, report["summary"]["total"])
+        self.assertEqual(5, report["summary"]["total"])
         self.assertEqual(1, report["summary"]["preflight_ready"])
-        self.assertEqual(1, report["summary"]["confirmable"])
+        self.assertEqual(2, report["summary"]["confirmable"])
         self.assertEqual(1, report["summary"]["blocked"])
         self.assertEqual(1, report["summary"]["manual_only"])
         self.assertEqual("preflight_ready", report["items"][0]["status"])
@@ -510,6 +520,47 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(analysis["summary"]["high_potential_videos"], 1)
         self.assertEqual(analysis["videos"][0]["name"], "低效素材 B")
         self.assertTrue(any("高消耗低转化" in item["title"] for item in analysis["recommendations"]))
+
+    def test_creative_analysis_builds_funnel_diagnosis_and_single_variable_tests(self) -> None:
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "video_library",
+                "quality": {"score": 90, "row_count": 2},
+                "tables": [{
+                    "headers": ["视频", "消耗", "展示", "点击数", "成交订单", "支付ROI"],
+                    "rows": [
+                        ["钩子偏弱", "200", "10000", "50", "1", "0.5"],
+                        ["承接偏弱", "200", "5000", "100", "0", "0"],
+                    ],
+                }],
+            },
+        )
+        analysis = http_receiver.build_qianchuan_creative_analysis()
+        self.assertEqual(analysis["summary"]["hook_bottleneck_videos"], 1)
+        self.assertEqual(analysis["summary"]["conversion_bottleneck_videos"], 1)
+        self.assertEqual(analysis["videos"][0]["evidence"]["ctr"], 2.0)
+        self.assertTrue(any(item["stage"] == "hook" for item in analysis["test_matrix"]))
+        self.assertTrue(any(item["stage"] == "conversion" for item in analysis["test_matrix"]))
+
+    def test_value_ledger_is_conservative_and_does_not_claim_revenue(self) -> None:
+        original = http_receiver.build_execution_effectiveness_report
+        http_receiver.build_execution_effectiveness_report = lambda: {
+            "items": [
+                {"status": "effective", "before": {"spend": 300}, "change": {"from": 500, "to": 400}},
+                {"status": "review", "before": {"spend": 200}, "change": {"from": 400, "to": 320}},
+                {"status": "waiting", "before": {"spend": 100}, "change": {"from": 300, "to": 240}},
+            ]
+        }
+        try:
+            ledger = http_receiver.build_value_ledger()
+        finally:
+            http_receiver.build_execution_effectiveness_report = original
+        self.assertEqual(ledger["summary"]["effective_rate"], 50.0)
+        self.assertEqual(ledger["summary"]["protected_budget_capacity"], 100.0)
+        self.assertEqual(ledger["summary"]["reviewed_spend"], 500.0)
+        self.assertIn("不等同于实际节省", ledger["note"])
 
     def test_qianchuan_accounts_are_partitioned_and_selectable(self) -> None:
         def snapshot(account_key: str, label: str, video: str) -> dict:
