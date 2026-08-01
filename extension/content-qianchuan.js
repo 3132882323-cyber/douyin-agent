@@ -266,6 +266,16 @@
         if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) {
           return true;
         }
+        // Switch flipped off + authorized active status gone is a stronger signal than toast alone.
+        if (expected && !rowShowsStatus(rowText, expected)) {
+          const switches = Array.from(row.querySelectorAll("[role='switch'], input[type='checkbox']")).filter(visible);
+          const offSwitch = switches.find((node) => (
+            node.getAttribute("aria-checked") === "false"
+            || node.getAttribute("aria-pressed") === "false"
+            || node.checked === false
+          ));
+          if (offSwitch) return true;
+        }
         // Generic success toast alone is not enough unless the row left the authorized active status.
         if (/(?:操作|设置|修改)完成|已保存/.test(toastText) && expected && !rowShowsStatus(rowText, expected)) {
           return true;

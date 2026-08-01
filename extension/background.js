@@ -739,12 +739,14 @@ async function runAuthorizedExecution(authorizationId) {
       { reinject: false },
     );
   } catch (error) {
-    // Transport failure after consume: assume mutation may have started; do not restore.
+    const message = error.message || String(error);
+    // Pure transport / no-receiver errors never reached the page executor.
+    const noReceiver = /Receiving end does not exist|Could not establish connection|message port closed/i.test(message);
     result = {
       ok: false,
       submitted: false,
-      platform_mutation_attempted: true,
-      error: error.message || String(error),
+      platform_mutation_attempted: !noReceiver,
+      error: message,
     };
   }
   if (result?.ok && result?.submitted === true) {
