@@ -562,6 +562,42 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(ledger["summary"]["reviewed_spend"], 500.0)
         self.assertIn("不等同于实际节省", ledger["note"])
 
+    def test_content_memory_deduplicates_snapshots_and_stays_account_scoped(self) -> None:
+        captured_at = int(time.time() * 1000)
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "video_library",
+                "captured_at": captured_at,
+                "account": {"key": "acct_memory01", "label": "内容记忆店铺", "confidence": "high"},
+                "quality": {"score": 90, "row_count": 3},
+                "tables": [{
+                    "headers": ["视频", "消耗", "点击率", "成交订单", "支付ROI", "标签", "来源", "时长"],
+                    "rows": [
+                        ["胜出 A", "300", "2.0", "5", "2.2", "利益点", "自制", "00:18"],
+                        ["胜出 B", "280", "1.8", "4", "2.0", "利益点", "自制", "00:22"],
+                        ["风险 C", "250", "0.5", "0", "0", "利益点", "自制", "00:20"],
+                    ],
+                }],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_memory01"})
+        first = http_receiver.build_qianchuan_creative_analysis()["memory"]
+        second = http_receiver.build_qianchuan_creative_analysis()["memory"]
+        self.assertEqual(first["observation_count"], 3)
+        self.assertEqual(second["observation_count"], 3)
+        tag_pattern = next(item for item in second["patterns"] if item["dimension"] == "标签" and item["value"] == "利益点")
+        self.assertEqual(tag_pattern["direction"], "winner")
+        self.assertEqual(tag_pattern["confidence"], "medium")
+        report = http_receiver.generate_daily_report("2026-08-01")
+        self.assertIn("本店内容记忆", report["content"])
+        self.assertIn("利益点", report["content"])
+
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_other01"})
+        other = http_receiver.build_qianchuan_creative_analysis()["memory"]
+        self.assertEqual(other["observation_count"], 0)
+
     def test_qianchuan_accounts_are_partitioned_and_selectable(self) -> None:
         def snapshot(account_key: str, label: str, video: str) -> dict:
             return {
