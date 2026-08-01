@@ -430,6 +430,82 @@ function send(request, type = "qianchuan-supervised-submit") {
   assert.equal(bareStatusPause.submitted, true);
   row._statusInnerText = null;
 
+  // Status-column cell that only hosts a「暂停」button must not false-succeed.
+  const statusPauseBtn = {
+    innerText: "暂停",
+    textContent: "暂停",
+    disabled: false,
+    getClientRects: () => [1],
+    getAttribute: () => null,
+    click() { submitted = true; },
+  };
+  const statusCell = {
+    innerText: "暂停",
+    textContent: "暂停",
+    cloneNode() {
+      const state = { text: "暂停" };
+      const btn = {
+        remove() { state.text = ""; },
+        set textContent(_value) { state.text = ""; },
+      };
+      return {
+        get innerText() { return state.text; },
+        get textContent() { return state.text; },
+        querySelectorAll(selector) {
+          if (/button|switch|input|a|textarea|select/.test(selector)) return [btn];
+          return [];
+        },
+      };
+    },
+  };
+  const nameCell = {
+    innerText: "计划ID plan_123 春季止损计划 日预算 500 投放中",
+    textContent: "计划ID plan_123 春季止损计划 日预算 500 投放中",
+  };
+  const headerRow = {
+    querySelectorAll(selector) {
+      if (/th|td|columnheader|cell/.test(selector)) {
+        return [
+          { innerText: "计划", textContent: "计划" },
+          { innerText: "投放状态", textContent: "投放状态" },
+        ];
+      }
+      return [];
+    },
+  };
+  const table = {
+    querySelector(selector) {
+      if (selector.includes("thead tr") || selector.includes("role='row'") || selector === "tr") return headerRow;
+      return null;
+    },
+  };
+  row.closest = (selector) => (String(selector).includes("table") ? table : null);
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中 暂停";
+  row._statusInnerText = null;
+  row.querySelectorAll = (selector) => {
+    if (selector === "td, [role='cell']" || (selector.includes("td") && selector.includes("cell"))) {
+      return [nameCell, statusCell];
+    }
+    if (selector === "input") return [input];
+    if (selector === "button") return [submitButton, statusPauseBtn];
+    if (selector.includes("button") || selector.includes("switch") || selector.includes("checkbox")) {
+      return [submitButton, statusPauseBtn];
+    }
+    return [];
+  };
+  submitted = false;
+  context.document.querySelectorAll = (selector) => {
+    if (selector.includes("table-row") || selector.startsWith("tr,")) return [row];
+    if (selector.includes("shopName")) return [{ innerText: "测试店铺", getClientRects: () => [1] }];
+    return [];
+  };
+  const statusColButtonOnly = await send(pauseRequest);
+  assert.equal(statusColButtonOnly.ok, false);
+  assert.equal(statusColButtonOnly.platform_mutation_attempted, true);
+  assert.match(statusColButtonOnly.error, /未读取到成功回执/);
+  delete row.closest;
+  row._statusInnerText = null;
+
   // Switch-off alone without paused status text must not succeed.
   row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
   submitted = false;

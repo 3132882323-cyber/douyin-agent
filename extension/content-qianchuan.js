@@ -227,11 +227,11 @@
     }
   }
 
-  function rowTextExcludingControls(row) {
+  function textExcludingControls(root) {
     // Ignore button/switch chrome (loading「暂停中」、操作列「暂停」).
     try {
-      if (typeof row.cloneNode === "function") {
-        const clone = row.cloneNode(true);
+      if (root && typeof root.cloneNode === "function") {
+        const clone = root.cloneNode(true);
         const nodes = clone.querySelectorAll?.(
           "button, [role='button'], [role='switch'], input, a, textarea, select",
         );
@@ -246,16 +246,25 @@
     } catch {
       // Fall through.
     }
-    return String(row.innerText || "").replace(/\s+/g, " ").trim();
+    return String(root?.innerText || root?.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  function rowTextExcludingControls(row) {
+    return textExcludingControls(row);
   }
 
   function findDeliveryStatusText(row) {
     // Prefer the 投放状态 / 计划状态 / 状态 column — same field Bridge verify reads.
+    // Always strip controls inside the cell: a status column that only hosts a
+    // 「暂停」button must not count as paused.
     try {
       const table = typeof row.closest === "function"
         ? (row.closest("table") || row.closest("[role='table']"))
         : null;
-      const headerRow = table?.querySelector?.("thead tr, tr") || null;
+      const headerRow = table?.querySelector?.("thead tr")
+        || table?.querySelector?.("[role='row']:first-child")
+        || table?.querySelector?.("tr")
+        || null;
       const headerCells = headerRow
         ? Array.from(headerRow.querySelectorAll("th, td, [role='columnheader'], [role='cell']"))
         : [];
@@ -265,9 +274,7 @@
       if (index < 0) index = headers.findIndex((label) => label === "状态");
       if (index >= 0) {
         const cells = Array.from(row.querySelectorAll("td, [role='cell']"));
-        if (cells[index]) {
-          return String(cells[index].innerText || cells[index].textContent || "").replace(/\s+/g, " ").trim();
-        }
+        if (cells[index]) return textExcludingControls(cells[index]);
       }
     } catch {
       // Fall through to control-stripped row text.
