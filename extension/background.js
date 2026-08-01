@@ -740,8 +740,9 @@ async function runAuthorizedExecution(authorizationId) {
     );
   } catch (error) {
     const message = error.message || String(error);
-    // Pure transport / no-receiver errors never reached the page executor.
-    const noReceiver = /Receiving end does not exist|Could not establish connection|message port closed/i.test(message);
+    // Only treat "never reached content script" as safe to restore.
+    // "message port closed" can happen after click while waiting for a response.
+    const noReceiver = /Receiving end does not exist|Could not establish connection/i.test(message);
     result = {
       ok: false,
       submitted: false,
