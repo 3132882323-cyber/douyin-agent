@@ -827,22 +827,23 @@ function taskCard(item, options = {}) {
     const fbLabel = document.createElement("small"); fbLabel.textContent = "这条建议有用吗？";
     const fbUp = document.createElement("button"); fbUp.className = "fb-btn"; fbUp.textContent = "\u{1F44D} \u6709\u7528"; fbUp.setAttribute("aria-label", `对"${item.title || '建议'}"点赞`);
     const fbDown = document.createElement("button"); fbDown.className = "fb-btn"; fbDown.textContent = "\u{1F44E} \u6CA1\u7528"; fbDown.setAttribute("aria-label", `对"${item.title || '建议'}"点踩`);
+    const fbDefer = document.createElement("button"); fbDefer.className = "fb-btn"; fbDefer.textContent = "稍后处理"; fbDefer.setAttribute("aria-label", `暂不处理"${item.title || '建议'}"`);
     const fbStatus = document.createElement("small"); fbStatus.className = "fb-status";
-    [fbUp, fbDown].forEach((btn, index) => {
+    [fbUp, fbDown, fbDefer].forEach((btn, index) => {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
           await bridgeFetch("/feedback", {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-            body: JSON.stringify({ task_id: item.id, rating: index === 0 ? "up" : "down", context: item.title || "" }),
+            body: JSON.stringify({ task_id: item.id, rating: index === 0 ? "up" : index === 1 ? "down" : "defer", context: item.title || "" }),
           });
-          fbStatus.textContent = "感谢反馈";
-          fbUp.disabled = true; fbDown.disabled = true;
+          fbStatus.textContent = index === 2 ? "已记为稍后处理" : "感谢反馈";
+          fbUp.disabled = true; fbDown.disabled = true; fbDefer.disabled = true;
         } catch { fbStatus.textContent = "反馈失败"; btn.disabled = false; }
       });
     });
-    feedback.append(fbLabel, fbUp, fbDown, fbStatus);
+    feedback.append(fbLabel, fbUp, fbDown, fbDefer, fbStatus);
     card.append(feedback);
   }
   if (options.showModuleLink && taskModuleTarget(item)) {
@@ -1908,8 +1909,10 @@ document.getElementById("preflight-stop").addEventListener("click", async (event
 document.getElementById("preflight-authorize").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   if (!currentPreflightSession?.session_id) return;
-  const verb = button.dataset.operationType === "restore_budget" ? "恢复预算" : "降低预算";
-  const confirmationText = `确认${verb}至${button.dataset.targetValue || ""}`;
+  const operationType = button.dataset.operationType || "adjust_budget";
+  const confirmationText = operationType === "pause_plan"
+    ? "确认暂停该计划"
+    : `确认${operationType === "restore_budget" ? "恢复预算" : "降低预算"}至${button.dataset.targetValue || ""}`;
   const entered = window.prompt(`这是最后一次人工授权，不会立即修改千川。\n请输入：${confirmationText}`, "");
   if (entered === null) return;
   button.disabled = true;

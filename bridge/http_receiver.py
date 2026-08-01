@@ -51,6 +51,15 @@ DEFAULT_CUSTOM_REPORT_TEMPLATE = """# 店策 Agent 经营日志 - {{date}}
 ## 千川计划
 {{plans}}
 
+## 经营数据明细
+{{metrics}}
+
+## 内容与素材复盘
+{{content_review}}
+
+## 执行与风险台账
+{{execution_log}}
+
 ## 库存风险
 {{inventory}}
 
@@ -1028,20 +1037,27 @@ def _action_params_for_plan(
     """Generate a policy-checked operation draft tied to a fresh account snapshot."""
     record = evidence.get("_record") if isinstance(evidence.get("_record"), dict) else {}
     budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
+    delivery_status = _evidence_value(record, ("投放状态", "计划状态", "状态"))
     plan_id = _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id"))
     operation_type = "replace_creative"
     operation_label = "优化素材"
     field = "素材"
     target_value: Any = None
 
-    if action_type in {"stop_loss", "reduce_budget", "scale_cautiously"}:
+    if action_type == "stop_loss" and str(entry.get("page_type") or "") in {"qianchuan_live", "campaigns"} and delivery_status:
+        operation_type = "pause_plan"
+        operation_label = "暂停单计划"
+        field = "投放状态"
+        target_value = "暂停"
+        budget = delivery_status
+    elif action_type in {"stop_loss", "reduce_budget", "scale_cautiously"}:
         operation_type = "adjust_budget"
         field = "预算"
         percent = -30 if action_type == "stop_loss" else -20 if action_type == "reduce_budget" else 10
         operation_label = f"{'降低' if percent < 0 else '增加'}预算 {abs(percent)}%"
         target_value = round(budget * (1 + percent / 100), 2) if budget and budget > 0 else None
 
-    current_label = f"{budget:g}" if budget and budget > 0 else "待重新读取"
+    current_label = f"{budget:g}" if isinstance(budget, (int, float)) and budget > 0 else str(budget or "待重新读取")
     target_label = f"{target_value:g}" if isinstance(target_value, (int, float)) else "待重新计算"
     copy_text = (
         f"{plan} | 预算 {current_label} → {target_label}"
@@ -1234,7 +1250,11 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
     plan_id = str(target.get("id") or "")
     if not account_key or not plan_id:
         return None
-    snapshot = load_data("qianchuan", "campaigns", account_key=account_key)
+    evidence = action.get("evidence_ref") if isinstance(action.get("evidence_ref"), dict) else {}
+    page_type = str(evidence.get("page_type") or "campaigns")
+    if page_type not in {"campaigns", "qianchuan_live"}:
+        page_type = "campaigns"
+    snapshot = load_data("qianchuan", page_type, account_key=account_key)
     data = (snapshot or {}).get("data", {})
     if not isinstance(data, dict):
         return None
@@ -1259,6 +1279,7 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
             if _entity_identifier(record, ("计划id", "项目id", "广告组id", "单元id")) != plan_id:
                 continue
             budget = _evidence_value(record, ("日预算", "每日预算", "预算上限", "预算"))
+            delivery_status = _evidence_value(record, ("投放状态", "计划状态", "状态"))
             spend = _evidence_value(record, ("消耗", "总消耗", "广告消耗"))
             roi = _evidence_value(record, ("支付roi", "roi", "整体roi"))
             orders = _evidence_value(record, ("成交订单", "支付订单", "成交订单数", "订单数"))
@@ -1273,6 +1294,7 @@ def _find_plan_readback(action: dict[str, Any]) -> dict[str, Any] | None:
                 "plan_id": plan_id,
                 "plan_name": _clean_entity_name(next(iter(record.values()), ""), str(target.get("name") or plan_id)),
                 "current_value": budget,
+                "delivery_status": delivery_status,
                 "spend": spend,
                 "roi": roi,
                 "orders": orders,
@@ -1440,14 +1462,18 @@ def start_execution_preflight(action_id: str) -> dict[str, Any]:
     current_value = change.get("current_value")
     target_value = change.get("target_value")
     operation_type = str(action.get("operation_type") or "")
-    if operation_type not in {"adjust_budget", "restore_budget"}:
-        raise ValueError("首批受监督执行只开放降低预算和恢复原预算。")
-    if not isinstance(current_value, (int, float)) or not isinstance(target_value, (int, float)):
-        raise ValueError("预算数据不完整，不能执行。")
-    if operation_type == "adjust_budget" and float(target_value) >= float(current_value):
-        raise ValueError("降低预算动作不能增加预算。")
-    if operation_type == "restore_budget" and float(target_value) <= float(current_value):
-        raise ValueError("恢复预算动作必须回到更高的原预算。")
+    if operation_type not in {"adjust_budget", "restore_budget", "pause_plan"}:
+        raise ValueError("首批受监督执行只开放降低预算、恢复原预算和暂停单计划。")
+    if operation_type == "pause_plan":
+        if str(current_value or "") not in {"投放中", "启用", "生效中", "运行中"} or str(target_value or "") != "暂停":
+            raise ValueError("暂停动作必须绑定当前仍在投放的单计划。")
+    else:
+        if not isinstance(current_value, (int, float)) or not isinstance(target_value, (int, float)):
+            raise ValueError("预算数据不完整，不能执行。")
+        if operation_type == "adjust_budget" and float(target_value) >= float(current_value):
+            raise ValueError("降低预算动作不能增加预算。")
+        if operation_type == "restore_budget" and float(target_value) <= float(current_value):
+            raise ValueError("恢复预算动作必须回到更高的原预算。")
     quota = assess_execution_quota(action)
     if not quota["allowed"]:
         raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
@@ -1460,7 +1486,7 @@ def start_execution_preflight(action_id: str) -> dict[str, Any]:
         "state": "awaiting_reread",
         "started_at_ms": now_ms,
         "expires_at_ms": now_ms + 3 * 60 * 1000,
-        "pilot_scope": "reduce_or_restore_budget",
+        "pilot_scope": "reduce_restore_or_pause_single_plan",
         "operation_type": operation_type,
         "current_value": current_value,
         "target_value": target_value,
@@ -1507,8 +1533,12 @@ def authorize_execution_preflight(session_id: str, confirmation_text: str) -> di
     if report.get("state") != "ready_for_final_confirmation":
         raise ValueError("执行前检查尚未全部通过，不能生成最终授权。")
     action = report.get("action") if isinstance(report.get("action"), dict) else {}
-    verb = "恢复预算" if session.get("operation_type") == "restore_budget" else "降低预算"
-    expected_text = f"确认{verb}至{action.get('target_value')}"
+    if session.get("operation_type") == "restore_budget":
+        expected_text = f"确认恢复预算至{action.get('target_value')}"
+    elif session.get("operation_type") == "pause_plan":
+        expected_text = "确认暂停该计划"
+    else:
+        expected_text = f"确认降低预算至{action.get('target_value')}"
     if str(confirmation_text or "").strip() != expected_text:
         raise ValueError(f"确认口令不一致，请完整输入：{expected_text}")
 
@@ -1823,7 +1853,8 @@ def build_execution_preflight_report() -> dict[str, Any]:
     started_at_ms = int(stored.get("started_at_ms") or 0)
     current_value = change.get("current_value")
     target_value = change.get("target_value")
-    observed = (readback or {}).get("current_value")
+    operation_type = str((action or {}).get("operation_type") or "")
+    observed = (readback or {}).get("delivery_status") if operation_type == "pause_plan" else (readback or {}).get("current_value")
     checks = [
         {
             "id": "fresh_reread",
@@ -1851,8 +1882,11 @@ def build_execution_preflight_report() -> dict[str, Any]:
         },
         {
             "id": "current_value_match",
-            "label": "当前预算未被其他人修改",
+            "label": "当前计划状态未被其他人修改" if operation_type == "pause_plan" else "当前预算未被其他人修改",
             "passed": bool(
+                observed in {"投放中", "启用", "生效中", "运行中"}
+                and str(current_value or "") in {"投放中", "启用", "生效中", "运行中"}
+                if operation_type == "pause_plan" else
                 isinstance(observed, (int, float))
                 and isinstance(current_value, (int, float))
                 and abs(float(observed) - float(current_value)) <= 0.01
@@ -1862,17 +1896,15 @@ def build_execution_preflight_report() -> dict[str, Any]:
         {
             "id": "pilot_scope",
             "label": "符合首批止损或回滚范围",
-            "passed": bool(
+            "passed": (
+                operation_type == "pause_plan" and str(current_value or "") in {"投放中", "启用", "生效中", "运行中"} and str(target_value or "") == "暂停"
+            ) if operation_type == "pause_plan" else bool(
                 isinstance(current_value, (int, float))
                 and isinstance(target_value, (int, float))
                 and float(current_value) > 0
-                and (
-                    0 < (float(current_value) - float(target_value)) / float(current_value) <= 0.30
-                    if action and action.get("operation_type") == "adjust_budget"
-                    else 0 < (float(target_value) - float(current_value)) / float(current_value) <= 0.50
-                )
+                and (0 < (float(current_value) - float(target_value)) / float(current_value) <= 0.30 if operation_type == "adjust_budget" else 0 < (float(target_value) - float(current_value)) / float(current_value) <= 0.50)
             ),
-            "detail": "降低预算不超过 30%；恢复预算必须绑定原执行记录且增幅不超过 50%。",
+            "detail": "当前状态为投放中且目标为暂停。" if operation_type == "pause_plan" else "降低预算不超过 30%；恢复预算必须绑定原执行记录且增幅不超过 50%。",
         },
     ]
 
@@ -2691,8 +2723,8 @@ def load_feedback() -> list[dict[str, Any]]:
 
 
 def save_feedback(task_id: str, rating: str, comment: str = "", context: str = "") -> dict[str, Any]:
-    if rating not in {"up", "down"}:
-        raise ValueError("rating must be 'up' or 'down'")
+    if rating not in {"up", "down", "defer"}:
+        raise ValueError("rating must be 'up', 'down' or 'defer'")
     with _state_lock:
         feedback = load_feedback()
         entry = {
@@ -2711,12 +2743,15 @@ def get_feedback_stats() -> dict[str, Any]:
     feedback = load_feedback()
     up = sum(1 for item in feedback if item.get("rating") == "up")
     down = sum(1 for item in feedback if item.get("rating") == "down")
-    total = up + down
+    deferred = sum(1 for item in feedback if item.get("rating") == "defer")
+    total = up + down + deferred
+    rated = up + down
     return {
         "total": total,
         "helpful": up,
         "not_helpful": down,
-        "helpful_rate": round(up / total * 100, 1) if total else 0,
+        "deferred": deferred,
+        "helpful_rate": round(up / rated * 100, 1) if rated else 0,
         "recent": feedback[-10:],
     }
 
@@ -3474,6 +3509,22 @@ def _render_selected_report(
         f"{item['title']}：{item.get('action') or item.get('detail') or ''}"
         for item in insights.get("alerts", [])[:6]
     ]
+    plan_items = action_center.get("plan_recommendations", [])
+    creative = action_center.get("creative_analysis") if isinstance(action_center.get("creative_analysis"), dict) else {}
+    creative_summary = creative.get("summary") if isinstance(creative.get("summary"), dict) else {}
+    metrics = [
+        f"- 计划建议 {len(plan_items)} 条；今日待办 {len(ops.get('today_top_actions', []))} 条；库存预警 {len(action_center.get('inventory_alerts', []))} 条",
+        f"- 内容样本 {creative_summary.get('total_videos', 0)} 条；有消耗 {creative_summary.get('spending_videos', 0)} 条；未测试 {creative_summary.get('untested_videos', 0)} 条",
+        f"- 数据覆盖 {scan_receipt['summary'].get('coverage_rate', 0)}%；需人工复核 {scan_receipt['summary'].get('needs_review', 0)} 项",
+    ]
+    content_review = [
+        f"- {item.get('title', '内容建议')}：{item.get('action', '')}（依据：{item.get('evidence', '')}）"
+        for item in creative.get('recommendations', [])[:8]
+    ]
+    execution_log = [
+        "- 所有预算、暂停、恢复动作均需单计划、单次授权，并以页面回读作为成功条件。",
+        "- 本日报只记录建议与回执，不把建议数量当作投放结果；实际结果需下一周期复盘。",
+    ]
     scan_status = (
         f"巡检 {scan.get('status', 'idle')}，成功 {scan.get('success', 0)} 页，"
         f"失败 {scan.get('failed', 0)} 页；体检覆盖率 {scan_receipt['summary']['coverage_rate']}%，"
@@ -3489,6 +3540,9 @@ def _render_selected_report(
         "inventory": _report_list(inventory, "暂无库存预警。"),
         "alerts": _report_list(alerts, "暂无其他异常。"),
         "scan_status": scan_status,
+        "metrics": _report_list(metrics, "暂无可用经营数据"),
+        "content_review": _report_list(content_review, "暂无内容复盘建议"),
+        "execution_log": _report_list(execution_log, "暂无执行记录"),
     }
     if template_key == "brief":
         return [
@@ -3637,6 +3691,14 @@ def generate_daily_report(report_date: str | None = None) -> dict[str, Any]:
     lines.append(f"- 视频 {summary['total_videos']} 条；在投/有消耗 {summary['spending_videos']} 条；未测试 {summary['untested_videos']} 条；高风险 {summary['risky_videos']} 条；高潜 {summary['high_potential_videos']} 条。")
     for item in creative["recommendations"][:8]:
         lines.append(f"- **{item['title']}**：{item['action']}（{item['evidence']}）")
+    lines.extend(["", "## 经营数据明细", ""])
+    lines.extend([
+        f"- 千川计划建议：{len(plans)} 条；可进入受监督动作的计划需具备唯一计划标识、当前状态和页面回读。",
+        f"- 内容样本：{summary['total_videos']} 条；有消耗 {summary['spending_videos']} 条；未测试 {summary['untested_videos']} 条；高风险 {summary['risky_videos']} 条。",
+        f"- 数据覆盖：{scan_receipt['summary']['coverage_rate']}%；需要复核：{scan_receipt['summary']['needs_review']} 项；低质量页面：{scan.get('low_quality', 0)} 项。",
+        "- 口径：消耗、ROI、成交、点击率等只作为当前周期诊断输入，不能替代平台结算数据。",
+    ])
+    lines.extend(["", "## 执行与风险台账", "", "- 预算调整、暂停、恢复均按单计划执行，必须经过授权；平台回执和下一次同步结果分别记录。", "- 失败或状态不一致的动作自动停留在人工处理，不重试、不批量扩散。"])
     lines.extend(["", "## 库存预警", ""])
     inventory = action_center["inventory_alerts"]
     if inventory:
