@@ -43,6 +43,19 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .connection.error > span { background: #f04438; }
 .connection strong { display: block; font-size: 12px; }
 .connection p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+.priority-reminder { display: grid; grid-column: 1 / -1; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 15px 16px; border: 2px solid #f04438; border-radius: 14px; background: linear-gradient(135deg, #fff1f0, #fff); box-shadow: 0 8px 22px rgba(180,35,24,.12); }
+.priority-reminder-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #d92d20; color: white; font-size: 22px; font-weight: 900; }
+.priority-reminder-copy { min-width: 0; }
+.priority-reminder-copy > span { display: block; color: #b42318; font-size: 12px; font-weight: 900; letter-spacing: .08em; }
+.priority-reminder-copy strong { display: block; margin-top: 3px; color: #b42318; font-size: 17px; line-height: 1.35; }
+.priority-reminder-copy p { margin: 4px 0 0; color: #7a271a; font-size: 12px; line-height: 1.5; }
+.priority-reminder button { min-height: 40px; padding: 0 15px; border: 1px solid #d92d20; border-radius: 9px; background: #d92d20; color: white; cursor: pointer; font-size: 14px; font-weight: 800; }
+.priority-reminder.checking { border-color: #f79009; background: #fffaeb; box-shadow: none; }
+.priority-reminder.checking .priority-reminder-icon { background: #f79009; }
+.priority-reminder.checking .priority-reminder-copy > span,
+.priority-reminder.checking .priority-reminder-copy strong { color: #b54708; }
+.priority-reminder.checking .priority-reminder-copy p { color: #7a2e0e; }
+.priority-reminder.checking button { border-color: #f79009; background: #f79009; }
 .oauth-card { border-color: #b2ccff; background: linear-gradient(145deg, #f5f8ff, #fff); }
 .panel-shell > .store-switcher { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, .7fr) auto; gap: 12px; align-items: end; padding: 14px 16px; border: 1px solid #b2ccff; border-radius: 14px; background: linear-gradient(135deg, #f5f8ff, #fff); }
 .store-switcher-copy { display: grid; gap: 3px; }
@@ -115,6 +128,11 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .next-best-action button { flex: none; min-height: 32px; padding: 0 12px; border: 1px solid #2563eb; border-radius: 8px; background: #2563eb; color: white; cursor: pointer; font-size: 9px; font-weight: 700; }
 .next-best-action.empty { border-color: var(--line); background: #fff; }
 .next-best-action.empty button { border-color: #d0d5dd; background: #f9fafb; color: #667085; }
+.next-best-action.urgent { border: 2px solid #f04438; background: #fff5f4; }
+.next-best-action.urgent span,
+.next-best-action.urgent strong { color: #b42318; }
+.next-best-action.urgent strong { font-size: 15px; }
+.next-best-action.urgent button { border-color: #d92d20; background: #d92d20; }
 .focus-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #b2ccff; border-radius: 12px; background: #f5f8ff; }
 .focus-toolbar strong { display: block; color: #1849a9; font-size: 11px; }
 .focus-toolbar small { display: block; margin-top: 3px; color: #475467; font-size: 9px; line-height: 1.4; }
@@ -203,12 +221,18 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .queue-stat small { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
 .queue-stat.urgent { background: #fef3f2; }
 .queue-stat.urgent strong { color: var(--red); }
+.queue-stat.urgent strong { font-size: 18px; }
 .queue-stat.doing { background: #eff8ff; }
 .queue-stat.doing strong { color: #175cd3; }
 .queue-stat.observing { background: #fffaeb; }
 .queue-stat.observing strong { color: var(--amber); }
 .task-card { padding: 12px; border: 1px solid var(--line); border-left: 3px solid #f79009; border-radius: 12px; background: white; }
 .task-card.high { border-left-color: var(--red); }
+.task-card.high { border-width: 1px 1px 1px 5px; border-color: #fda29b; background: #fffafa; }
+.task-card.high .task-meta,
+.task-card.high > strong,
+.task-card.high .task-detail strong { color: #b42318; }
+.task-card.high > strong { font-size: 17px; }
 .task-card.opportunity { border-left-color: var(--green); }
 .task-meta { margin-bottom: 5px; color: #2563eb; font-size: 9px; font-weight: 800; letter-spacing: .04em; }
 .task-card strong { display: block; font-size: 11px; }
@@ -649,6 +673,9 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 }
 
 @media (max-width: 520px) {
+  .priority-reminder { grid-template-columns: 36px minmax(0, 1fr); }
+  .priority-reminder-icon { width: 36px; height: 36px; }
+  .priority-reminder button { grid-column: 1 / -1; width: 100%; }
   .next-best-action { align-items: stretch; flex-direction: column; }
   .next-best-action button { width: 100%; }
   .store-switcher { grid-template-columns: 1fr; }

@@ -972,6 +972,7 @@ function renderNextBestAction(items = []) {
   const button = document.getElementById("next-best-action-button");
   const next = items.find((item) => item.status === "doing") || items[0];
   panel.classList.toggle("empty", !next);
+  panel.classList.toggle("urgent", next?.level === "high");
   if (!next) {
     title.textContent = "当前岗位没有待处理事项";
     detail.textContent = "可以检查增长机会，或同步最新数据生成下一轮建议。";
@@ -983,6 +984,45 @@ function renderNextBestAction(items = []) {
   detail.textContent = next.action || next.acceptance || next.evidence || "打开处置队列查看依据和验收标准。";
   button.textContent = next.status === "doing" ? "继续处理" : "开始处理";
   button.dataset.target = "manager-tasks";
+}
+
+function renderPriorityReminder() {
+  const panel = document.getElementById("priority-reminder");
+  const title = document.getElementById("priority-reminder-title");
+  const detail = document.getElementById("priority-reminder-detail");
+  const button = document.getElementById("priority-reminder-action");
+  const context = currentOperationContext || {};
+  const tasks = currentOps ? roleTasks(currentOps, false) : [];
+  const urgent = tasks.find((item) => item.level === "high");
+  const blockers = context.blockers || [];
+  if (context.state === "blocked" || context.state === "review" || blockers.length) {
+    panel.hidden = false;
+    panel.className = "priority-reminder";
+    title.textContent = context.state === "blocked" ? "经营数据未准备好，暂时不要直接做投放决策" : "重要数据需要复核";
+    detail.textContent = context.next_action || blockers[0] || "请先完成一次全店巡检并核对当前店铺。";
+    button.textContent = context.selected_store?.key ? "立即补齐数据" : "选择并绑定店铺";
+    button.dataset.mode = "data";
+    return;
+  }
+  if (urgent) {
+    panel.hidden = false;
+    panel.className = "priority-reminder";
+    title.textContent = `紧急：${urgent.title || "处理今日高风险事项"}`;
+    detail.textContent = urgent.action || urgent.evidence || "请优先完成该任务，再处理其他经营事项。";
+    button.textContent = urgent.status === "doing" ? "继续处理" : "立即处理";
+    button.dataset.mode = "task";
+    return;
+  }
+  if (!currentOps || context.state === "checking") {
+    panel.hidden = false;
+    panel.className = "priority-reminder checking";
+    title.textContent = "正在检查今天最重要的经营事项";
+    detail.textContent = "完成数据核对后，只在这里保留需要立刻关注的提醒。";
+    button.textContent = "正在检查";
+    button.dataset.mode = "checking";
+    return;
+  }
+  panel.hidden = true;
 }
 
 function renderOperations(ops, shelf, live, creative, coverage = []) {
@@ -999,6 +1039,7 @@ function renderOperations(ops, shelf, live, creative, coverage = []) {
   expand.textContent = managerQueueExpanded ? "收起队列" : `查看全部 ${allTasks.length} 项`;
   renderQueueStats(allTasks);
   renderNextBestAction(allTasks);
+  renderPriorityReminder();
   renderTasks("manager-tasks", visibleTasks, { queue: true, showModuleLink: true });
   document.getElementById("growth-count").textContent = `${allGrowth.length} 项`;
   renderTasks("growth-tasks", allGrowth.slice(0, 3), { showModuleLink: true });
@@ -1272,6 +1313,7 @@ function renderOperationContext(payload = {}) {
   }));
   const action = document.getElementById("context-action");
   action.textContent = state === "ready" ? "查看数据体检" : payload.selected_store?.key ? "补齐经营数据" : "选择并绑定店铺";
+  renderPriorityReminder();
 }
 
 function renderHealthMonitor(health = {}) {
@@ -1942,6 +1984,15 @@ document.getElementById("context-action").addEventListener("click", () => {
   const receipt = document.getElementById("scan-receipt-card");
   receipt.open = true;
   document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+document.getElementById("priority-reminder-action").addEventListener("click", (event) => {
+  const mode = event.currentTarget.dataset.mode;
+  if (mode === "checking") return;
+  if (mode === "data") {
+    document.getElementById("context-action").click();
+    return;
+  }
+  document.getElementById("manager-tasks")?.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 document.getElementById("manager-expand").addEventListener("click", () => {
   managerQueueExpanded = !managerQueueExpanded;
