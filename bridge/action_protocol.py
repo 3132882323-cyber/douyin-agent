@@ -160,6 +160,8 @@ def build_action_draft(
     elif operation_type == "pause_plan":
         if str(current_value or "") not in {"投放中", "启用", "生效中", "运行中"}:
             blocked.append(_block("CURRENT_STATUS_UNVERIFIED", "未确认计划当前处于投放状态，禁止生成暂停动作。"))
+        if str(target_value or "") != "暂停":
+            blocked.append(_block("TARGET_STATUS_INVALID", "暂停计划的目标状态必须明确为“暂停”。"))
 
     risk_level = "high" if operation_type in {"pause_plan", "restore_budget"} or (change_percent or 0) > 0 else "medium"
     action: dict[str, Any] = {
