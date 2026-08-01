@@ -4021,7 +4021,7 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/3.5.0"
+    server_version = "DianAgent/3.5.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -4075,7 +4075,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "3.5.0",
+                    "version": "3.5.1",
                     "mode": execution_mode,
                     "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}.get(execution_mode, "未知模式"),
                     "execution_enabled": execution_mode == "supervised",

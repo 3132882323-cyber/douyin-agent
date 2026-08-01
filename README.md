@@ -1,6 +1,6 @@
 # 店策 Agent｜抖音电商智能经营大脑
 
-[![Version](https://img.shields.io/badge/version-3.5.0-2563eb)](extension/manifest.json)
+[![Version](https://img.shields.io/badge/version-3.5.1-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
 [![Mode](https://img.shields.io/badge/data-local--first-7c3aed)](SECURITY.md)
@@ -19,7 +19,7 @@
 
 **它不是一块只负责展示数字的看板，而是一个能理解问题、协助执行、验证结果，并且越用越懂这家店的经营 Agent。**
 
-> 当前版本：`v3.5.0 Beta`。产品由“货架商品、直播投放、内容”三大工作台组成，支持经营诊断、千川单计划受监督控制、内容漏斗分析、店铺内容记忆、经营价值账本和飞书/钉钉日志。
+> 当前版本：`v3.5.1 Beta`。产品由“货架商品、直播投放、内容”三大工作台组成，支持经营诊断、千川单计划受监督控制、内容漏斗分析、店铺内容记忆、经营价值账本和飞书/钉钉日志。
 
 ## 30 秒项目介绍
 
@@ -208,7 +208,7 @@ Windows 用户双击 `build_browser_packages.bat`，生成 `dist/dian-agent-mode
 4. 选择对应的生成目录。
 5. 将“店策 Agent”固定到工具栏。
 
-也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `3.5.0`。首次安装会打开轻量引导页；点击工具栏图标先进入轻量哨兵，需要深入分析时再打开完整工作台。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
+也可以在 Chrome/Edge 中直接加载项目的 `extension` 文件夹。安装成功后扩展详情应显示版本 `3.5.1`。首次安装会打开轻量引导页；点击工具栏图标先进入轻量哨兵，需要深入分析时再打开完整工作台。360、QQ、搜狗等双核浏览器访问抖店和千川时必须使用“极速模式”，不能使用 IE 兼容模式。
 
 完整浏览器矩阵和故障处理见 [浏览器适配说明](BROWSER_SUPPORT.md)。
 
