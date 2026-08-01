@@ -262,7 +262,9 @@
         } catch {
           return false;
         }
-        if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) return true;
+        if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中") || rowShowsStatus(rowText, "暂停")) {
+          return true;
+        }
         // Generic success toast alone is not enough unless the row left the authorized active status.
         if (/(?:操作|设置|修改)完成|已保存/.test(toastText) && expected && !rowShowsStatus(rowText, expected)) {
           return true;
@@ -299,10 +301,14 @@
 
   async function dismissPauseConfirmationIfPresent() {
     const dialog = await waitFor(() => {
+      // Prefer real dialog/modal nodes; avoid matching whole table rows via class*='confirm'.
       const nodes = Array.from(document.querySelectorAll(
-        "[role='dialog'], [class*='modal'], [class*='Modal'], [class*='dialog'], [class*='confirm']",
+        "[role='dialog'], [class*='modal'], [class*='Modal']",
       )).filter(visible);
-      return nodes.find((node) => /暂停|停用/.test(String(node.innerText || node.textContent || ""))) || null;
+      return nodes.find((node) => {
+        const text = String(node.innerText || node.textContent || "");
+        return /暂停|停用/.test(text) && /(确认|确定)/.test(text);
+      }) || null;
     }, 1800);
     if (!dialog) return false;
     const buttons = Array.from(dialog.querySelectorAll("button")).filter((button) => (
@@ -310,10 +316,11 @@
       && !button.disabled
       && button.getAttribute("aria-disabled") !== "true"
     ));
+    // Never click a bare「暂停/停用」again — that can toggle the plan back on.
     const confirms = buttons.filter((button) => {
       const label = String(button.innerText || button.textContent || "").trim();
       if (/取消|关闭|再想想/.test(label)) return false;
-      return /^(确认|确定|暂停|停用)$/.test(label) || /^(确认|确定)(暂停|停用)$/.test(label);
+      return /^(确认|确定)(暂停|停用)?$/.test(label) || /^(确认|确定)(并)?(暂停|停用)$/.test(label);
     });
     if (confirms.length !== 1) return false;
     confirms[0].click();

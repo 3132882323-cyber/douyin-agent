@@ -270,6 +270,45 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(item["evidence"]["api_reconcile"]["reasons"], ["budget_mismatch"])
         self.assertFalse(item["action_params"]["can_confirm"])
 
+    def test_official_plans_root_fallback_when_account_selected(self) -> None:
+        """Selected account must still reconcile against root-only official_api plans."""
+        now_ms = int(time.time() * 1000)
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": now_ms,
+                "account": {"key": "acct_rootplan", "label": "根目录对账账号", "confidence": "high"},
+                "quality": {"score": 90, "row_count": 1},
+                "tables": [{
+                    "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_root1", "根目录对账计划", "800", "300", "0.60", "2"]],
+                }],
+            },
+        )
+        # Official plans without account partition — only global qianchuan/plans.json.
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "plans",
+                "captured_at": now_ms,
+                "channel": "official_api",
+                "quality": {"score": 100, "row_count": 1, "pagination_truncated": False},
+                "tables": [{
+                    "headers": ["计划ID", "计划名称", "预算", "消耗"],
+                    "rows": [["plan_root1", "根目录对账计划", "500", "300"]],
+                }],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_rootplan"})
+        item = http_receiver.build_plan_recommendations()[0]
+        reconcile = item["evidence"]["api_reconcile"]
+        self.assertTrue(reconcile["matched"])
+        self.assertIn("budget_mismatch", reconcile["reasons"])
+        self.assertEqual(500.0, reconcile["official_budget"])
+
     def test_automation_readiness_builds_candidate_queue_without_execution(self) -> None:
         base = {
             "operation_type": "adjust_budget",

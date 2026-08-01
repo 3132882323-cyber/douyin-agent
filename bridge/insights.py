@@ -588,14 +588,23 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
     records = _table_records("doudian", {"qianchuan_campaigns", "qianchuan_live", "qianchuan_report"})
     records.extend(_table_records("qianchuan", {"campaigns", "qianchuan_live", "report"}))
     selected_account = str(settings.get("qianchuan_account_key") or "").lower()
-    official_index = official_plan_index(
-        load_data("qianchuan", "plans", account_key=selected_account or None)
+    official_snapshot = (
+        load_data("qianchuan", "plans", account_key=selected_account)
         if selected_account
         else load_data("qianchuan", "plans", account_key="")
     )
-    if not official_index and selected_account:
-        # Fall back to latest account-scoped plans if explicit load missed channel tag.
-        official_index = official_plan_index(load_data("qianchuan", "plans", account_key=selected_account))
+    official_index = official_plan_index(official_snapshot)
+    if not official_index:
+        # Official API plans are often stored only under the global qianchuan/ root.
+        root_plans = load_data("qianchuan", "plans", account_key="")
+        root_data = root_plans.get("data") if isinstance((root_plans or {}).get("data"), dict) else root_plans
+        if isinstance(root_data, dict):
+            root_account = str((root_data.get("account") or {}).get("key") or "").lower()
+            channel = str(root_data.get("channel") or "")
+            if channel == "official_api" and (
+                not selected_account or not root_account or root_account == selected_account
+            ):
+                official_index = official_plan_index(root_plans)
 
     for entry in records:
         if selected_account and str(entry.get("account_key") or "").lower() != selected_account:
