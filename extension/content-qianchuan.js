@@ -197,6 +197,35 @@
     }
   }
 
+  function rowTextExcludingControls(row) {
+    // Success checks must ignore button/switch chrome (e.g. loading「暂停中」).
+    try {
+      if (typeof row.cloneNode === "function") {
+        const clone = row.cloneNode(true);
+        const nodes = clone.querySelectorAll?.(
+          "button, [role='button'], [role='switch'], input, a, textarea, select",
+        );
+        if (nodes) {
+          Array.from(nodes).forEach((node) => {
+            if (typeof node.remove === "function") node.remove();
+            else node.textContent = "";
+          });
+          return String(clone.innerText || clone.textContent || "").replace(/\s+/g, " ").trim();
+        }
+      }
+    } catch {
+      // Fall through.
+    }
+    return String(row.innerText || "").replace(/\s+/g, " ").trim();
+  }
+
+  function rowShowsPauseSuccess(row, expectedActive) {
+    const statusText = rowTextExcludingControls(row);
+    // Still showing the authorized active status → not done (also rejects button-only「暂停中」).
+    if (expectedActive && rowShowsStatus(statusText, expectedActive)) return false;
+    return rowShowsStatus(statusText, "已暂停") || rowShowsStatus(statusText, "暂停中");
+  }
+
   function findPauseControl(row, expectedStatus) {
     const rowText = String(row.innerText || "");
     if (expectedStatus && !rowShowsStatus(rowText, expectedStatus)) {
@@ -258,14 +287,12 @@
       control.click();
       platformMutationAttempted = true;
       let pauseConfirmClicked = Boolean(await dismissPauseConfirmationIfPresent());
+      const expectedActive = String(request.expected_current_value || "");
       const successObserved = await waitFor(() => {
         // Status first: confirm dialogs often linger in DOM after click and must not
         // block an already-updated row status.
         try {
-          const rowText = String(findAuthorizedPlanRow(request).innerText || "");
-          // Only concrete paused statuses. Never toast-alone, never switch-off-alone,
-          // never bare「暂停」(button label / 可暂停).
-          if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) {
+          if (rowShowsPauseSuccess(findAuthorizedPlanRow(request), expectedActive)) {
             return true;
           }
         } catch {

@@ -377,10 +377,13 @@ def pause_plan_succeeded(status: Any, *, target_value: Any = "暂停") -> bool:
 
 
 def delivery_is_inactive(status: Any) -> bool:
-    """Zero-spend skip helper: paused or not delivering."""
+    """Zero-spend skip helper for already-paused plans.
+
+    Does not treat「未投放」as inactive here — those rows may still need optimize tips.
+    """
 
     matched = match_delivery_status(status)
-    return matched in {"已暂停", "暂停中", "暂停", "未投放"}
+    return matched in {"已暂停", "暂停中", "暂停"}
 
 
 def _pick(record: dict[str, Any], keywords: tuple[str, ...]) -> tuple[str, Any] | tuple[None, None]:

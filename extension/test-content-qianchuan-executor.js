@@ -44,7 +44,17 @@ const pauseButton = {
 };
 const row = {
   innerText: "计划ID plan_123 春季止损计划 日预算 500 投放中",
+  // Status-column text for cloneNode success checks (excludes button chrome).
+  _statusInnerText: null,
   getClientRects: () => [1],
+  cloneNode() {
+    const text = this._statusInnerText != null ? this._statusInnerText : this.innerText;
+    return {
+      innerText: text,
+      textContent: text,
+      querySelectorAll() { return []; },
+    };
+  },
   querySelectorAll: (selector) => {
     if (selector === "input") return [input];
     if (selector === "button") return [submitButton, pauseButton];
@@ -237,6 +247,26 @@ function send(request, type = "qianchuan-supervised-submit") {
   }, "qianchuan-execution-probe");
   assert.equal(negated.ok, false);
   assert.match(negated.error, /投放状态与授权不一致|授权缺少已投放状态/);
+
+  // Button loading「暂停中」must not count as pause success while still 投放中.
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中 暂停中";
+  row._statusInnerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  submitted = false;
+  pauseButton.innerText = "暂停中";
+  pauseButton.textContent = "暂停中";
+  pauseButton.click = () => { submitted = true; };
+  context.document.querySelectorAll = (selector) => {
+    if (selector.includes("table-row") || selector.startsWith("tr,")) return [row];
+    if (selector.includes("shopName")) return [{ innerText: "测试店铺", getClientRects: () => [1] }];
+    return [];
+  };
+  const loadingPause = await send(pauseRequest);
+  assert.equal(loadingPause.ok, false);
+  assert.equal(loadingPause.platform_mutation_attempted, true);
+  assert.match(loadingPause.error, /未读取到成功回执/);
+  pauseButton.innerText = "暂停";
+  pauseButton.textContent = "暂停";
+  row._statusInnerText = null;
 
   // Unrelated toast must never count as pause success.
   row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中 暂停";
