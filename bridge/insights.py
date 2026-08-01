@@ -580,6 +580,62 @@ def _plan_workbench_fields(item: dict[str, Any], task_states: dict[str, Any]) ->
     }
 
 
+def _snapshot_channel_and_account(snapshot: dict[str, Any] | None) -> tuple[str, str]:
+    if not isinstance(snapshot, dict):
+        return "", ""
+    data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else snapshot
+    if not isinstance(data, dict):
+        return "", ""
+    channel = str(data.get("channel") or "")
+    account_key = str((data.get("account") or {}).get("key") or "").lower()
+    return channel, account_key
+
+
+def _official_plan_index_for_settings(selected_account: str) -> dict[str, Any]:
+    """Prefer account-scoped official_api plans; fall back to root only when safe."""
+
+    selected_account = str(selected_account or "").lower()
+    account_snap = (
+        load_data("qianchuan", "plans", account_key=selected_account)
+        if selected_account
+        else None
+    )
+    root_snap = load_data("qianchuan", "plans", account_key="")
+
+    account_channel, _ = _snapshot_channel_and_account(account_snap)
+    if account_snap and account_channel == "official_api":
+        account_index = official_plan_index(account_snap)
+        if account_index:
+            return account_index
+
+    root_channel, root_account = _snapshot_channel_and_account(root_snap)
+    if root_channel == "official_api":
+        allow_root = True
+        if selected_account:
+            if root_account and root_account != selected_account:
+                allow_root = False
+            elif not root_account:
+                known = [
+                    str(item.get("key") or "").lower()
+                    for item in (_facade().list_qianchuan_accounts() or [])
+                    if isinstance(item, dict) and item.get("key")
+                ]
+                allow_root = len(known) <= 1
+        if allow_root:
+            root_index = official_plan_index(root_snap)
+            if root_index:
+                return root_index
+
+    # Legacy snapshots without channel tags.
+    if account_snap:
+        account_index = official_plan_index(account_snap)
+        if account_index:
+            return account_index
+    if not selected_account and root_snap:
+        return official_plan_index(root_snap) or {}
+    return {}
+
+
 def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     settings = settings or load_agent_settings()
     roi_target = float(settings["roi_target"])
@@ -588,23 +644,7 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
     records = _table_records("doudian", {"qianchuan_campaigns", "qianchuan_live", "qianchuan_report"})
     records.extend(_table_records("qianchuan", {"campaigns", "qianchuan_live", "report"}))
     selected_account = str(settings.get("qianchuan_account_key") or "").lower()
-    official_snapshot = (
-        load_data("qianchuan", "plans", account_key=selected_account)
-        if selected_account
-        else load_data("qianchuan", "plans", account_key="")
-    )
-    official_index = official_plan_index(official_snapshot)
-    if not official_index:
-        # Official API plans are often stored only under the global qianchuan/ root.
-        root_plans = load_data("qianchuan", "plans", account_key="")
-        root_data = root_plans.get("data") if isinstance((root_plans or {}).get("data"), dict) else root_plans
-        if isinstance(root_data, dict):
-            root_account = str((root_data.get("account") or {}).get("key") or "").lower()
-            channel = str(root_data.get("channel") or "")
-            if channel == "official_api" and (
-                not selected_account or not root_account or root_account == selected_account
-            ):
-                official_index = official_plan_index(root_plans)
+    official_index = _official_plan_index_for_settings(selected_account)
 
     for entry in records:
         if selected_account and str(entry.get("account_key") or "").lower() != selected_account:

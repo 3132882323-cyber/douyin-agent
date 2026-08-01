@@ -92,10 +92,16 @@ const context = {
   HTMLInputElement: MockInput,
   Event: class { constructor(type) { this.type = type; } },
   MutationObserver: class { observe() {} },
-  setTimeout(callback, delay) { if (delay < 1000) callback(); return 1; },
+  Date: { now: () => fakeNow },
+  setTimeout(callback, delay = 0) {
+    fakeNow += Number(delay) || 0;
+    callback();
+    return 1;
+  },
   clearTimeout() {},
   console,
 };
+let fakeNow = 1_700_000_000_000;
 context.globalThis = context;
 vm.runInNewContext(source, context, { filename: "content-qianchuan.js" });
 
@@ -157,8 +163,22 @@ function send(request, type = "qianchuan-supervised-submit") {
   assert.equal(pauseResult.platform_success_observed, true);
   assert.equal(pauseResult.target_value, "暂停");
 
-  // Two explicit pause controls must fail closed.
+  // Bare「暂停」button label must not count as a paused status.
+  submitted = false;
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中 暂停";
+  pauseButton.click = () => { submitted = true; /* status unchanged */ };
+  const falsePause = await send(pauseRequest);
+  assert.equal(falsePause.ok, false);
+  assert.equal(falsePause.platform_mutation_attempted, true);
+  assert.match(falsePause.error, /未读取到成功回执/);
+
+  // Restore pause button success path for later cases.
+  pauseButton.click = () => {
+    submitted = true;
+    row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+  };
   row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  submitted = false;
   const pauseButton2 = {
     innerText: "停用",
     textContent: "停用",

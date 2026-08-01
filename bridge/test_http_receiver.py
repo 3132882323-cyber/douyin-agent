@@ -309,6 +309,57 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertIn("budget_mismatch", reconcile["reasons"])
         self.assertEqual(500.0, reconcile["official_budget"])
 
+    def test_stale_account_plans_yield_to_root_official_api(self) -> None:
+        now_ms = int(time.time() * 1000)
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": now_ms,
+                "account": {"key": "acct_staleplan", "label": "过期plans账号", "confidence": "high"},
+                "quality": {"score": 90, "row_count": 1},
+                "tables": [{
+                    "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_stale1", "过期对账计划", "800", "300", "0.60", "2"]],
+                }],
+            },
+        )
+        # Stale browser plans under the account partition (not official_api).
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "plans",
+                "captured_at": now_ms - 10_000,
+                "channel": "browser",
+                "account": {"key": "acct_staleplan", "label": "过期plans账号"},
+                "quality": {"score": 80, "row_count": 1},
+                "tables": [{
+                    "headers": ["计划ID", "计划名称", "预算", "消耗"],
+                    "rows": [["plan_stale1", "过期对账计划", "999", "300"]],
+                }],
+            },
+        )
+        http_receiver.save_data(
+            "qianchuan",
+            {
+                "schema_version": 2,
+                "page_type": "plans",
+                "captured_at": now_ms,
+                "channel": "official_api",
+                "quality": {"score": 100, "row_count": 1},
+                "tables": [{
+                    "headers": ["计划ID", "计划名称", "预算", "消耗"],
+                    "rows": [["plan_stale1", "过期对账计划", "500", "300"]],
+                }],
+            },
+        )
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_staleplan"})
+        item = http_receiver.build_plan_recommendations()[0]
+        self.assertEqual(500.0, item["evidence"]["api_reconcile"]["official_budget"])
+        self.assertIn("budget_mismatch", item["evidence"]["api_reconcile"]["reasons"])
+
     def test_automation_readiness_builds_candidate_queue_without_execution(self) -> None:
         base = {
             "operation_type": "adjust_budget",

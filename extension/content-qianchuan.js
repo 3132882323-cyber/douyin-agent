@@ -262,7 +262,8 @@
         } catch {
           return false;
         }
-        if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中") || rowShowsStatus(rowText, "暂停")) {
+        // Do NOT treat bare「暂停」as success — the pause button label itself contains it.
+        if (rowShowsStatus(rowText, "已暂停") || rowShowsStatus(rowText, "暂停中")) {
           return true;
         }
         // Generic success toast alone is not enough unless the row left the authorized active status.
@@ -322,7 +323,9 @@
       if (/取消|关闭|再想想/.test(label)) return false;
       return /^(确认|确定)(暂停|停用)?$/.test(label) || /^(确认|确定)(并)?(暂停|停用)$/.test(label);
     });
-    if (confirms.length !== 1) return false;
+    if (confirms.length !== 1) {
+      throw new Error("检测到暂停确认弹窗，但未找到唯一确认按钮；已停止，请在千川核对。");
+    }
     confirms[0].click();
     return true;
   }
