@@ -167,38 +167,68 @@
     return matches[0];
   }
 
+  // Keep in sync with bridge/insights.py delivery-status helpers.
+  const ACTIVE_DELIVERY_STATUSES = ["投放中", "启用", "生效中", "运行中"];
+  const PAUSE_SUCCESS_STATUSES = ["已暂停", "暂停中", "暂停"];
+  const DELIVERY_STATUS_LABELS = [...ACTIVE_DELIVERY_STATUSES, "已暂停", "暂停中", "未投放", "暂停"];
+  const STATUS_TOKEN_BOUNDARIES = " \t\n|/·•,，。;；:：【】[]()（）-—_";
+
+  function statusLabelBlocked(text, label, idx) {
+    const prev = idx > 0 ? text[idx - 1] : "";
+    if ("未不".includes(prev)) return true;
+    if (label === "暂停") {
+      if (idx >= 2 && text.slice(idx - 2, idx) === "取消") return true;
+      if (prev && !STATUS_TOKEN_BOUNDARIES.includes(prev)) return true;
+      const next = idx + label.length < text.length ? text[idx + label.length] : "";
+      if (next && !STATUS_TOKEN_BOUNDARIES.includes(next)) return true;
+    }
+    return false;
+  }
+
+  function matchDeliveryStatus(statusRaw) {
+    const text = String(statusRaw || "").trim();
+    if (!text) return "";
+    if (DELIVERY_STATUS_LABELS.includes(text)) return text;
+    const first = text.split(/\r?\n/)[0].trim();
+    if (DELIVERY_STATUS_LABELS.includes(first)) return first;
+    const labels = [...DELIVERY_STATUS_LABELS].sort((a, b) => b.length - a.length);
+    for (const label of labels) {
+      let start = 0;
+      while (true) {
+        const idx = text.indexOf(label, start);
+        if (idx < 0) break;
+        if (statusLabelBlocked(text, label, idx)) {
+          start = idx + 1;
+          continue;
+        }
+        return label;
+      }
+    }
+    return "";
+  }
+
+  function pausePlanSucceeded(statusRaw) {
+    return PAUSE_SUCCESS_STATUSES.includes(matchDeliveryStatus(statusRaw));
+  }
+
   function rowShowsStatus(rowText, status) {
     const text = String(rowText || "");
     const label = String(status || "");
     if (!label) return false;
-    const boundaries = " \t\n|/·•,，。;；:：【】[]()（）-—_";
     let start = 0;
     while (true) {
       const idx = text.indexOf(label, start);
       if (idx < 0) return false;
-      const prev = idx > 0 ? text[idx - 1] : "";
-      if ("未不".includes(prev)) {
+      if (statusLabelBlocked(text, label, idx)) {
         start = idx + 1;
         continue;
-      }
-      if (label === "暂停") {
-        if (idx >= 2 && text.slice(idx - 2, idx) === "取消") {
-          start = idx + 1;
-          continue;
-        }
-        // Bare「暂停」must be a token — not 可暂停 / button chrome.
-        const next = idx + label.length < text.length ? text[idx + label.length] : "";
-        if ((prev && !boundaries.includes(prev)) || (next && !boundaries.includes(next))) {
-          start = idx + 1;
-          continue;
-        }
       }
       return true;
     }
   }
 
   function rowTextExcludingControls(row) {
-    // Success checks must ignore button/switch chrome (e.g. loading「暂停中」).
+    // Ignore button/switch chrome (loading「暂停中」、操作列「暂停」).
     try {
       if (typeof row.cloneNode === "function") {
         const clone = row.cloneNode(true);
@@ -219,16 +249,43 @@
     return String(row.innerText || "").replace(/\s+/g, " ").trim();
   }
 
-  function rowShowsPauseSuccess(row, expectedActive) {
-    const statusText = rowTextExcludingControls(row);
-    // Still showing the authorized active status → not done (also rejects button-only「暂停中」).
+  function findDeliveryStatusText(row) {
+    // Prefer the 投放状态 / 计划状态 / 状态 column — same field Bridge verify reads.
+    try {
+      const table = typeof row.closest === "function"
+        ? (row.closest("table") || row.closest("[role='table']"))
+        : null;
+      const headerRow = table?.querySelector?.("thead tr, tr") || null;
+      const headerCells = headerRow
+        ? Array.from(headerRow.querySelectorAll("th, td, [role='columnheader'], [role='cell']"))
+        : [];
+      const headers = headerCells.map((cell) => String(cell.innerText || cell.textContent || "").replace(/\s+/g, "").trim());
+      let index = headers.findIndex((label) => label === "投放状态" || label === "计划状态");
+      if (index < 0) index = headers.findIndex((label) => label.endsWith("投放状态") || label.endsWith("计划状态"));
+      if (index < 0) index = headers.findIndex((label) => label === "状态");
+      if (index >= 0) {
+        const cells = Array.from(row.querySelectorAll("td, [role='cell']"));
+        if (cells[index]) {
+          return String(cells[index].innerText || cells[index].textContent || "").replace(/\s+/g, " ").trim();
+        }
+      }
+    } catch {
+      // Fall through to control-stripped row text.
+    }
+    return rowTextExcludingControls(row);
+  }
+
+  function rowShowsPauseSuccess(row, expectedActive, _control = null) {
+    const statusText = findDeliveryStatusText(row);
+    // Still on the authorized active status → not done (blocks button-loading「暂停中」).
     if (expectedActive && rowShowsStatus(statusText, expectedActive)) return false;
-    return rowShowsStatus(statusText, "已暂停") || rowShowsStatus(statusText, "暂停中");
+    // Token-safe paused states only (已暂停 / 暂停中 / standalone 暂停). Never toast.
+    return pausePlanSucceeded(statusText);
   }
 
   function findPauseControl(row, expectedStatus) {
-    const rowText = String(row.innerText || "");
-    if (expectedStatus && !rowShowsStatus(rowText, expectedStatus)) {
+    const statusText = findDeliveryStatusText(row);
+    if (expectedStatus && !rowShowsStatus(statusText, expectedStatus) && !rowShowsStatus(String(row.innerText || ""), expectedStatus)) {
       throw new Error("当前计划投放状态与授权不一致。");
     }
     const candidates = Array.from(row.querySelectorAll("button, [role='switch'], input[type='checkbox']")).filter((node) => {
@@ -286,27 +343,34 @@
       const control = findPauseControl(row, String(request.expected_current_value || ""));
       control.click();
       platformMutationAttempted = true;
-      let pauseConfirmClicked = Boolean(await dismissPauseConfirmationIfPresent());
+      await dismissPauseConfirmationIfPresent();
       const expectedActive = String(request.expected_current_value || "");
+      let lastConfirmDialog = null;
+      let confirmsOnDialog = 0;
+      let nextConfirmAt = 0;
       const successObserved = await waitFor(() => {
-        // Status first: confirm dialogs often linger in DOM after click and must not
-        // block an already-updated row status.
+        // Status first: lingering confirm dialogs must not block an updated status cell.
         try {
-          if (rowShowsPauseSuccess(findAuthorizedPlanRow(request), expectedActive)) {
-            return true;
-          }
+          if (rowShowsPauseSuccess(findAuthorizedPlanRow(request), expectedActive)) return true;
         } catch {
           // Row may briefly disappear during refresh.
         }
         const dialog = findPauseConfirmDialog();
-        if (dialog && !pauseConfirmClicked) {
-          const confirms = pauseConfirmButtons(dialog);
-          if (confirms.length !== 1) {
-            throw new Error("检测到暂停确认弹窗，但未找到唯一确认按钮；已停止，请在千川核对。");
-          }
-          confirms[0].click();
-          pauseConfirmClicked = true;
+        if (!dialog) return false;
+        if (dialog !== lastConfirmDialog) {
+          lastConfirmDialog = dialog;
+          confirmsOnDialog = 0;
         }
+        // Up to 2 clicks per dialog instance (first miss / animation); new dialog resets.
+        if (confirmsOnDialog >= 2) return false;
+        if (confirmsOnDialog > 0 && Date.now() < nextConfirmAt) return false;
+        const confirms = pauseConfirmButtons(dialog);
+        if (confirms.length !== 1) {
+          throw new Error("检测到暂停确认弹窗，但未找到唯一确认按钮；已停止，请在千川核对。");
+        }
+        confirms[0].click();
+        confirmsOnDialog += 1;
+        nextConfirmAt = Date.now() + 800;
         return false;
       });
       if (!successObserved) {

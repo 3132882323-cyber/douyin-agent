@@ -320,8 +320,9 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
 
 
 ACTIVE_DELIVERY_STATUSES = ("投放中", "启用", "生效中", "运行中")
-# Verify / skip-active only; bare「暂停」is too often a button label or compound wording.
-PAUSE_SUCCESS_STATUSES = ("已暂停", "暂停中")
+# Status-column values only. Content strips button chrome before matching; bare「暂停」
+# is accepted only via match_delivery_status token rules (rejects 可暂停 / 取消暂停).
+PAUSE_SUCCESS_STATUSES = ("已暂停", "暂停中", "暂停")
 _DELIVERY_STATUS_LABELS = (*ACTIVE_DELIVERY_STATUSES, "已暂停", "暂停中", "未投放", "暂停")
 
 
@@ -370,7 +371,7 @@ def match_delivery_status(status_raw: Any) -> str:
 
 
 def pause_plan_succeeded(status: Any, *, target_value: Any = "暂停") -> bool:
-    """True only for concrete paused delivery states (not bare「暂停」/「可暂停」)."""
+    """True for paused delivery states after token-safe normalization."""
 
     matched = match_delivery_status(status)
     return matched in PAUSE_SUCCESS_STATUSES

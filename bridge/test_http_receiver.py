@@ -791,7 +791,7 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual("暂停", insights.match_delivery_status("暂停"))
         self.assertFalse(insights.pause_plan_succeeded("取消暂停"))
         self.assertFalse(insights.pause_plan_succeeded("可暂停"))
-        self.assertFalse(insights.pause_plan_succeeded("暂停"))
+        self.assertTrue(insights.pause_plan_succeeded("暂停"))
         self.assertTrue(insights.pause_plan_succeeded("已暂停"))
         self.assertTrue(insights.pause_plan_succeeded("暂停中"))
         self.assertFalse(insights.delivery_is_inactive("可暂停"))

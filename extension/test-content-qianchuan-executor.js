@@ -40,11 +40,14 @@ const pauseButton = {
   click() {
     submitted = true;
     row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+    // Flat innerText mocks cannot safely strip button labels by string replace
+    // (「暂停」would corrupt「已暂停」); set status-only text like a real cell.
+    row._statusInnerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
   },
 };
 const row = {
   innerText: "计划ID plan_123 春季止损计划 日预算 500 投放中",
-  // Status-column text for cloneNode success checks (excludes button chrome).
+  // When set, cloneNode returns this (simulates row after removing control nodes).
   _statusInnerText: null,
   getClientRects: () => [1],
   cloneNode() {
@@ -176,6 +179,7 @@ function send(request, type = "qianchuan-supervised-submit") {
   // Bare「暂停」button label must not count as a paused status.
   submitted = false;
   row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中 暂停";
+  row._statusInnerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
   pauseButton.click = () => { submitted = true; /* status unchanged */ };
   const falsePause = await send(pauseRequest);
   assert.equal(falsePause.ok, false);
@@ -186,8 +190,10 @@ function send(request, type = "qianchuan-supervised-submit") {
   pauseButton.click = () => {
     submitted = true;
     row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+    row._statusInnerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
   };
   row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  row._statusInnerText = null;
   submitted = false;
   const pauseButton2 = {
     innerText: "停用",
@@ -298,6 +304,7 @@ function send(request, type = "qianchuan-supervised-submit") {
       confirmClicks += 1;
       pauseClickedAt = 0; // hide dialog after confirm
       row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+      row._statusInnerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
     },
   };
   const lateDialog = {
@@ -357,6 +364,7 @@ function send(request, type = "qianchuan-supervised-submit") {
     click() {
       confirmClicks += 1;
       row.innerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
+      row._statusInnerText = "计划ID plan_123 春季止损计划 日预算 500 已暂停";
       // Dialog node stays mounted (common fade-out / keep-alive).
     },
   };
@@ -402,6 +410,25 @@ function send(request, type = "qianchuan-supervised-submit") {
   assert.equal(lingerResult.ok, true);
   assert.equal(lingerResult.submitted, true);
   assert.equal(confirmClicks, 1);
+
+  // Status-column bare「暂停」(controls stripped) is success; button-only「暂停」is not.
+  row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
+  row._statusInnerText = null;
+  submitted = false;
+  pauseButton.click = () => {
+    submitted = true;
+    row.innerText = "计划ID plan_123 春季止损计划 日预算 500 暂停 暂停";
+    row._statusInnerText = "暂停";
+  };
+  context.document.querySelectorAll = (selector) => {
+    if (selector.includes("table-row") || selector.startsWith("tr,")) return [row];
+    if (selector.includes("shopName")) return [{ innerText: "测试店铺", getClientRects: () => [1] }];
+    return [];
+  };
+  const bareStatusPause = await send(pauseRequest);
+  assert.equal(bareStatusPause.ok, true);
+  assert.equal(bareStatusPause.submitted, true);
+  row._statusInnerText = null;
 
   // Switch-off alone without paused status text must not succeed.
   row.innerText = "计划ID plan_123 春季止损计划 日预算 500 投放中";
