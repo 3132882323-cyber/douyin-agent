@@ -63,7 +63,7 @@
         <div id="context-warnings" class="context-warnings" hidden></div>
       </section>
 
-      <details id="oceanengine-oauth-card" class="fold-card oauth-card" open>
+      <details id="oceanengine-oauth-card" class="fold-card oauth-card">
         <summary>官方 API 授权 <span id="oceanengine-oauth-state">尚未连接</span></summary>
         <section class="oauth-panel">
           <div class="oauth-intro">
@@ -149,6 +149,15 @@
         <button data-role="直播投放">直播投放</button>
         <button data-role="内容">内容</button>
       </nav>
+
+      <section id="next-best-action" class="next-best-action" aria-live="polite">
+        <div>
+          <span>现在只做这一件事</span>
+          <strong id="next-best-action-title">等待经营数据</strong>
+          <p id="next-best-action-detail">完成一次同步后，这里会自动显示当前岗位最优先的动作。</p>
+        </div>
+        <button id="next-best-action-button" type="button">去处理</button>
+      </section>
 
       <section class="manager-card" aria-label="今日处置队列">
         <div class="section-heading manager-heading">

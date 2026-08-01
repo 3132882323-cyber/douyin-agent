@@ -1062,6 +1062,8 @@ def _action_params_for_plan(
     copy_text = (
         f"{plan} | 预算 {current_label} → {target_label}"
         if operation_type == "adjust_budget"
+        else f"{plan} | 投放状态 {current_label} → 暂停"
+        if operation_type == "pause_plan"
         else f"{plan} | 优化前 3 秒表达与卖点"
     )
     compact_evidence = {

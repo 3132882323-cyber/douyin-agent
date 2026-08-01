@@ -107,6 +107,14 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .role-nav { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.96); box-shadow: 0 4px 14px rgba(16,24,40,.05); }
 .role-nav button { padding: 8px 2px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }
 .role-nav button.active { background: #2563eb; color: white; font-weight: 700; }
+.next-best-action { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 15px; border: 1px solid #84adff; border-radius: 13px; background: linear-gradient(135deg, #eef4ff, #fff); }
+.next-best-action > div { min-width: 0; }
+.next-best-action span { display: block; color: #175cd3; font-size: 9px; font-weight: 800; letter-spacing: .06em; }
+.next-best-action strong { display: block; margin-top: 4px; color: #101828; font-size: 12px; }
+.next-best-action p { margin: 4px 0 0; color: #475467; font-size: 9px; line-height: 1.45; }
+.next-best-action button { flex: none; min-height: 32px; padding: 0 12px; border: 1px solid #2563eb; border-radius: 8px; background: #2563eb; color: white; cursor: pointer; font-size: 9px; font-weight: 700; }
+.next-best-action.empty { border-color: var(--line); background: #fff; }
+.next-best-action.empty button { border-color: #d0d5dd; background: #f9fafb; color: #667085; }
 .focus-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #b2ccff; border-radius: 12px; background: #f5f8ff; }
 .focus-toolbar strong { display: block; color: #1849a9; font-size: 11px; }
 .focus-toolbar small { display: block; margin-top: 3px; color: #475467; font-size: 9px; line-height: 1.4; }
@@ -620,6 +628,8 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 }
 
 @media (max-width: 520px) {
+  .next-best-action { align-items: stretch; flex-direction: column; }
+  .next-best-action button { width: 100%; }
   .store-switcher { grid-template-columns: 1fr; }
   .context-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .context-decision { align-items: stretch; flex-direction: column; }

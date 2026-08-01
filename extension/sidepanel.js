@@ -910,6 +910,26 @@ function renderQueueStats(items = []) {
   }));
 }
 
+function renderNextBestAction(items = []) {
+  const panel = document.getElementById("next-best-action");
+  const title = document.getElementById("next-best-action-title");
+  const detail = document.getElementById("next-best-action-detail");
+  const button = document.getElementById("next-best-action-button");
+  const next = items.find((item) => item.status === "doing") || items[0];
+  panel.classList.toggle("empty", !next);
+  if (!next) {
+    title.textContent = "当前岗位没有待处理事项";
+    detail.textContent = "可以检查增长机会，或同步最新数据生成下一轮建议。";
+    button.textContent = "查看增长机会";
+    button.dataset.target = "growth-section";
+    return;
+  }
+  title.textContent = next.title || "处理当前最高优先级任务";
+  detail.textContent = next.action || next.acceptance || next.evidence || "打开处置队列查看依据和验收标准。";
+  button.textContent = next.status === "doing" ? "继续处理" : "开始处理";
+  button.dataset.target = "manager-tasks";
+}
+
 function renderOperations(ops, shelf, live, creative, coverage = []) {
   currentOps = ops;
   currentOperationsContext = { ops, shelf, live, creative, coverage };
@@ -923,6 +943,7 @@ function renderOperations(ops, shelf, live, creative, coverage = []) {
   expand.hidden = allTasks.length <= 3;
   expand.textContent = managerQueueExpanded ? "收起队列" : `查看全部 ${allTasks.length} 项`;
   renderQueueStats(allTasks);
+  renderNextBestAction(allTasks);
   renderTasks("manager-tasks", visibleTasks, { queue: true, showModuleLink: true });
   document.getElementById("growth-count").textContent = `${allGrowth.length} 项`;
   renderTasks("growth-tasks", allGrowth.slice(0, 3), { showModuleLink: true });
@@ -1869,6 +1890,10 @@ document.getElementById("manager-expand").addEventListener("click", () => {
   if (!currentOperationsContext) return;
   const { ops, shelf, live, creative, coverage } = currentOperationsContext;
   renderOperations(ops, shelf, live, creative, coverage);
+});
+document.getElementById("next-best-action-button").addEventListener("click", (event) => {
+  const target = document.getElementById(event.currentTarget.dataset.target || "manager-tasks");
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 document.getElementById("preflight-reread").addEventListener("click", async (event) => {
   const button = event.currentTarget;

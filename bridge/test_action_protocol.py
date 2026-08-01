@@ -136,6 +136,15 @@ class ActionProtocolTests(unittest.TestCase):
         )
         self.assertIn("CURRENT_STATUS_UNVERIFIED", {item["code"] for item in blocked["blocked_reasons"]})
 
+        invalid_target = self._draft(
+            operation_type="pause_plan",
+            operation_label="暂停单计划",
+            field="投放状态",
+            current_value="投放中",
+            target_value="启用",
+        )
+        self.assertIn("TARGET_STATUS_INVALID", {item["code"] for item in invalid_target["blocked_reasons"]})
+
 
 if __name__ == "__main__":
     unittest.main()
