@@ -10,6 +10,7 @@ $startupDir = [Environment]::GetFolderPath("Startup")
 $shortcutPath = Join-Path $startupDir "DianAgent.lnk"
 $legacyShortcutPath = Join-Path $startupDir "抖店千川数据桥-Bridge.lnk"
 $watchdogScript = Join-Path $bridgeDir "watchdog.ps1"
+$watchdogLauncher = Join-Path $bridgeDir "watchdog.vbs"
 $watchdogTaskName = "DianAgentKeepAlive"
 $manifestPath = Join-Path (Split-Path -Parent $bridgeDir) "extension\manifest.json"
 $expectedVersion = (Get-Content -Raw -Encoding UTF8 $manifestPath | ConvertFrom-Json).version
@@ -45,8 +46,8 @@ if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. Check the netw
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe")
-$shortcut.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watchdogScript + '"'
+$shortcut.TargetPath = (Join-Path $env:WINDIR "System32\wscript.exe")
+$shortcut.Arguments = '"' + $watchdogLauncher + '"'
 $shortcut.WorkingDirectory = $bridgeDir
 $shortcut.Description = "Dian Agent - start automatically after Windows sign-in"
 $shortcut.Save()
@@ -57,8 +58,8 @@ if (Test-Path -LiteralPath $legacyShortcutPath) {
 # The Startup shortcut handles normal sign-in. The scheduled watchdog also
 # repairs an Agent that exits later because of sleep, updates or a crash.
 $taskAction = New-ScheduledTaskAction `
-  -Execute (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe") `
-  -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $watchdogScript + '"')
+  -Execute (Join-Path $env:WINDIR "System32\wscript.exe") `
+  -Argument ('"' + $watchdogLauncher + '"')
 $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
   -RepetitionInterval (New-TimeSpan -Minutes 5) `
   -RepetitionDuration (New-TimeSpan -Days 3650)
