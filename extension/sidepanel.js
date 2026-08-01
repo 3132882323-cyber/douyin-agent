@@ -701,8 +701,25 @@ function renderCreativeAnalysis(creative = {}) {
     有消耗: summary.spending_videos || 0,
     未测试: summary.untested_videos || 0,
     高风险: summary.risky_videos || 0,
-    高潜: summary.high_potential_videos || 0,
+    钩子问题: summary.hook_bottleneck_videos || 0,
+    转化问题: summary.conversion_bottleneck_videos || 0,
   });
+  document.getElementById("creative-analysis-method").textContent = creative.analysis_method || "展示 → 点击 → 成交 → ROI";
+  const matrix = document.getElementById("creative-test-matrix");
+  const tests = creative.test_matrix || [];
+  if (!tests.length) {
+    empty(matrix, "当前没有可生成的内容测试矩阵；请同步包含展示、点击、成交和 ROI 的素材数据。");
+  } else {
+    matrix.className = "creative-test-matrix";
+    matrix.replaceChildren(...tests.map((item) => {
+      const card = document.createElement("article"); card.className = "creative-test-card";
+      const title = document.createElement("strong"); title.textContent = `${item.label} · ${item.count} 条`;
+      const hypothesis = document.createElement("p"); hypothesis.textContent = item.hypothesis || "等待生成测试假设";
+      const success = document.createElement("small"); success.textContent = `验收：${item.success_metric || "形成可比较数据"}`;
+      card.append(title, hypothesis, success);
+      return card;
+    }));
+  }
   renderTasks("creative-actions", recommendations);
   const container = document.getElementById("creative-videos");
   const videos = creative.videos || [];
@@ -715,6 +732,22 @@ function renderCreativeAnalysis(creative = {}) {
     action_params: item.action_params,
     reason: `${item.status} · 消耗 ${item.evidence?.spend == null ? "--" : item.evidence.spend} · ROI ${item.evidence?.roi == null ? "--" : item.evidence.roi}`,
   }, "plan")));
+}
+
+function renderValueLedger(ledger = {}) {
+  const summary = ledger.summary || {};
+  const evaluated = Number(summary.evaluated_actions || 0);
+  document.getElementById("value-ledger-status").textContent = evaluated
+    ? `${summary.effective_actions || 0}/${evaluated} 项有效`
+    : `${summary.waiting_review || 0} 项待复查`;
+  renderMetricStrip("value-ledger-metrics", {
+    已验收动作: summary.verified_actions || 0,
+    已完成复盘: evaluated,
+    有效率: summary.effective_rate == null ? "--" : `${summary.effective_rate}%`,
+    受控预算幅度: `¥${summary.protected_budget_capacity || 0}`,
+    暂停计划: summary.paused_plans || 0,
+  });
+  document.getElementById("value-ledger-note").textContent = ledger.note || "价值账本只记录已回读、可复核的数据。";
 }
 
 function taskModuleTarget(item = {}) {
@@ -1579,7 +1612,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, stopLossR, strategySimulationR, preflightR, shadowR, executionEffectivenessR, integrationsR, oceanengineR, oceanengineSyncR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, stopLossR, strategySimulationR, preflightR, shadowR, executionEffectivenessR, valueLedgerR, integrationsR, oceanengineR, oceanengineSyncR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1597,6 +1630,7 @@ async function loadDashboard() {
     bridgeFetch("/actions/preflight"),
     bridgeFetch("/actions/shadow"),
     bridgeFetch("/actions/effectiveness"),
+    bridgeFetch("/value-ledger"),
     bridgeFetch("/integrations"),
     bridgeFetch("/oauth/oceanengine/status"),
     bridgeFetch("/oauth/oceanengine/sync-status"),
@@ -1619,6 +1653,7 @@ async function loadDashboard() {
   const preflight = val(preflightR, { state: "idle", session: null, checks: [] });
   const shadow = val(shadowR, { items: [], summary: {} });
   const executionEffectiveness = val(executionEffectivenessR, { items: [], summary: {} });
+  const valueLedger = val(valueLedgerR, { summary: {} });
   const integrations = val(integrationsR, { feishu: { configured: false }, dingtalk: { configured: false }, auto_send_reports: false });
   const oceanengine = val(oceanengineR, { app_id: "1871942906223351", connected: false, secret_saved: false, accounts: [] });
   const oceanengineSync = val(oceanengineSyncR, { synced_at: null });
@@ -1658,6 +1693,7 @@ async function loadDashboard() {
   renderExecutionPreflight(preflight);
   renderShadowExecution(shadow);
   renderExecutionEffectiveness(executionEffectiveness);
+  renderValueLedger(valueLedger);
 
   // Restore focus if the focused element still exists
   if (focusId) {

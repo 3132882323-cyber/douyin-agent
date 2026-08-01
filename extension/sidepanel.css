@@ -152,6 +152,17 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .progress-card div:last-child { border-right: 0; }
 .progress-card strong { display: block; color: #1849a9; font-size: 15px; }
 .progress-card small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+.value-ledger-card { padding: 13px; border: 1px solid #abefc6; border-radius: 14px; background: linear-gradient(145deg, #f2fbf6, #fff); }
+.value-ledger-card .metric-strip { margin-bottom: 6px; }
+.content-analysis-method { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; padding: 8px 10px; border-radius: 9px; background: #f5f8ff; color: #1849a9; }
+.content-analysis-method strong { font-size: 9px; }
+.content-analysis-method span { color: #475467; font-size: 8px; text-align: right; }
+.creative-test-matrix { display: grid; gap: 7px; margin-bottom: 9px; }
+.creative-test-matrix:not(.empty-state) { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); padding: 0; border: 0; background: transparent; text-align: left; }
+.creative-test-card { padding: 9px 10px; border: 1px solid #d0d5dd; border-radius: 10px; background: white; }
+.creative-test-card strong { display: block; color: #101828; font-size: 9px; }
+.creative-test-card p { margin: 4px 0; color: #344054; font-size: 8px; line-height: 1.45; }
+.creative-test-card small { display: block; color: #667085; font-size: 8px; line-height: 1.4; }
 .trend-card { padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: white; }
 .trend-list { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .trend-list article { padding: 9px; border-radius: 10px; background: #f8fafc; }
