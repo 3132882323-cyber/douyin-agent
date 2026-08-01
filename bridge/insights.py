@@ -33,6 +33,10 @@ def load_data(*args, **kwargs):
     return _facade().load_data(*args, **kwargs)
 
 
+def load_catalog_snapshot(*args, **kwargs):
+    return _facade().load_catalog_snapshot(*args, **kwargs)
+
+
 def load_agent_settings(*args, **kwargs):
     return _facade().load_agent_settings(*args, **kwargs)
 
@@ -94,7 +98,7 @@ def _metric_matches(source: str, keywords: tuple[str, ...]) -> list[tuple[dict[s
     for item in list_snapshots():
         if item["source"] != source:
             continue
-        snapshot = load_data(source, item["page_type"])
+        snapshot = load_catalog_snapshot(item)
         metrics = (snapshot or {}).get("data", {}).get("metrics", {})
         if not isinstance(metrics, dict):
             continue
@@ -263,7 +267,7 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
     for item in list_snapshots():
         if item["source"] != source or item["page_type"] not in page_types:
             continue
-        snapshot = load_data(source, item["page_type"])
+        snapshot = load_catalog_snapshot(item)
         snapshot_data = (snapshot or {}).get("data", {})
         if not isinstance(snapshot_data, dict):
             continue
@@ -668,7 +672,13 @@ def build_plan_recommendations(settings: dict[str, Any] | None = None) -> list[d
     official_index = _official_plan_index_for_settings(selected_account)
 
     for entry in records:
-        if selected_account and str(entry.get("account_key") or "").lower() != selected_account:
+        # Only filter native qianchuan snapshots by selected account. Douyin-embedded
+        # qianchuan pages carry the shop account key, not qianchuan_account_key.
+        if (
+            selected_account
+            and entry.get("source") == "qianchuan"
+            and str(entry.get("account_key") or "").lower() != selected_account
+        ):
             continue
         record = entry["record"]
         _, plan_value = _pick(record, ("计划名称", "计划", "项目名称", "广告组", "单元名称", "抖音号"))
@@ -1108,7 +1118,7 @@ def _safe_snapshot_metrics(source: str, page_types: set[str]) -> tuple[dict[str,
     for item in list_snapshots():
         if item["source"] != source or item["page_type"] not in page_types:
             continue
-        data = (load_data(source, item["page_type"]) or {}).get("data", {})
+        data = (load_catalog_snapshot(item) or {}).get("data", {})
         for key, value in (data.get("safe_metrics") or {}).items():
             metrics[str(key)] = value
         for signal in data.get("signals") or []:

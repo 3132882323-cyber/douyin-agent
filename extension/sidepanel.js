@@ -756,10 +756,27 @@ function renderAutomationReadiness(report = {}) {
       const actions = document.createElement("div"); actions.className = "automation-card-actions";
       const button = document.createElement("button"); button.type = "button";
       const needsReread = (item.blocked_reasons || []).some((reason) => ["DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "SNAPSHOT_TRUNCATED", "CONFIDENCE_NOT_HIGH"].includes(reason.code));
-      button.textContent = needsReread ? "补采当前千川页" : item.status === "confirmable" ? "查看并确认方案" : item.status === "preflight_ready" ? "启动执行前检查" : "查看投放方案";
+      const needsDeepList = (item.blocked_reasons || []).some((reason) => reason.code === "SNAPSHOT_TRUNCATED");
+      button.textContent = needsDeepList ? "深度补采计划列表" : needsReread ? "补采当前千川页" : item.status === "confirmable" ? "查看并确认方案" : item.status === "preflight_ready" ? "启动执行前检查" : "查看投放方案";
       button.addEventListener("click", async () => {
         if (needsReread) {
-          document.getElementById("current-qianchuan-button").click();
+          if (needsDeepList) {
+            button.disabled = true;
+            button.textContent = "正在深度补采…";
+            try {
+              await chrome.runtime.sendMessage({
+                type: "start-full-scan",
+                account_key: selectedQianchuanAccount || "",
+                page_ids: ["qianchuan_campaigns"],
+              });
+            } catch (error) {
+              button.textContent = error.message || "补采失败";
+              button.disabled = false;
+              return;
+            }
+          } else {
+            document.getElementById("current-qianchuan-button").click();
+          }
           document.getElementById("scan-receipt")?.scrollIntoView({ behavior: "smooth", block: "start" })
             || document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
           return;
@@ -1357,9 +1374,14 @@ document.getElementById("preflight-authorize").addEventListener("click", async (
   const verb = button.dataset.operationType === "pause_plan"
     ? "暂停计划"
     : button.dataset.operationType === "restore_budget" ? "恢复预算" : "降低预算";
+  const formatPassphraseValue = (raw) => {
+    const number = Number(raw);
+    if (!Number.isFinite(number)) return String(raw || "");
+    return Number.isInteger(number) ? String(number) : String(number);
+  };
   const confirmationText = button.dataset.operationType === "pause_plan"
     ? `确认暂停计划${button.dataset.planName || ""}`
-    : `确认${verb}至${button.dataset.targetValue || ""}`;
+    : `确认${verb}至${formatPassphraseValue(button.dataset.targetValue)}`;
   const entered = window.prompt(`这是最后一次人工授权，不会立即修改千川。\n请输入：${confirmationText}`, "");
   if (entered === null) return;
   button.disabled = true;

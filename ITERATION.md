@@ -102,6 +102,16 @@
 - 确认弹窗：每层最多点 2 次；新弹窗重置；弹窗残留不挡行状态成功
 - 零消耗跳过仅已暂停类，不把「未投放」误跳过优化建议
 
+### ITERATION 全量复查补丁（P0～P3）
+
+- 列表页手动/自动采集：存在下一页时标记 `pagination_truncated`，避免覆盖截断闸门
+- `SNAPSHOT_TRUNCATED` 引导改为深度补采 `qianchuan_campaigns`，不再只 sync 当前页
+- `list_snapshots` 增加 `storage_account_key`；建议/指标加载走 `load_catalog_snapshot`
+- LEGACY-8：仅过滤原生 `qianchuan` 源，不误伤抖店嵌入千川页
+- 对账：官方索引已有 plan_id 时，错误 ID 不得静默按名称匹配
+- 执行与预检共用 active 千川标签页；verify 失败再延迟补采一次
+- 表格采集保留空单元格，防状态列错位；预算口令整数格式对齐；popup Bearer 403 可刷新；撤销动作同步取消 preflight 会话
+
 ---
 
 ## 原则（后续改动请遵守）

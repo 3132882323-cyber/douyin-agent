@@ -709,13 +709,15 @@ async function syncCurrentPage(sourceOnly = "") {
 }
 
 async function runAuthorizedExecution(authorizationId) {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const [tabs, stored] = await Promise.all([
     querySourceTabs("qianchuan"),
     chrome.storage.local.get(["recentQianchuanTab", "qianchuanSeed"]),
   ]);
+  // Same tab selection as sync/preflight: prefer the active qianchuan tab.
   const selection = DianAgentScanPolicy.selectQianchuanSyncTab(
     tabs,
-    null,
+    activeTab,
     Number(stored.recentQianchuanTab?.tab_id),
     Number(stored.qianchuanSeed?.tab_id),
   );
@@ -754,7 +756,13 @@ async function runAuthorizedExecution(authorizationId) {
     await bridgePost("/actions/execution/result", { action_id: consumed.grant.action_id, result });
     await new Promise((resolve) => setTimeout(resolve, 1500));
     await collectFromTab("qianchuan", selection.tab, "post-execution-readback");
-    const verification = await bridgePost("/actions/execution/verify", { action_id: consumed.grant.action_id });
+    let verification = await bridgePost("/actions/execution/verify", { action_id: consumed.grant.action_id });
+    // One delayed retry: toast/UI can land before the table status/budget refreshes.
+    if (!verification?.verification?.verified) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await collectFromTab("qianchuan", selection.tab, "post-execution-readback-retry");
+      verification = await bridgePost("/actions/execution/verify", { action_id: consumed.grant.action_id });
+    }
     await chrome.tabs.update(selection.tab.id, { active: true });
     if (Number.isInteger(selection.tab.windowId)) await chrome.windows.update(selection.tab.windowId, { focused: true });
     return { ...result, verification: verification.verification };

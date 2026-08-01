@@ -46,17 +46,25 @@ async function getBridgeToken() {
 }
 
 async function bridgePost(path, body = {}) {
-  const token = await getBridgeToken();
-  const response = await fetch(`${BRIDGE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Dian-Agent": "2",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => ({}));
+  const attempt = async (forceRefresh = false) => {
+    if (forceRefresh) await chrome.storage.local.remove("bridgeToken");
+    const token = await getBridgeToken();
+    const response = await fetch(`${BRIDGE_URL}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Dian-Agent": "2",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    return { response, payload };
+  };
+  let { response, payload } = await attempt(false);
+  if (response.status === 403 && payload.error === "missing_or_invalid_bridge_token") {
+    ({ response, payload } = await attempt(true));
+  }
   if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
   return payload;
 }

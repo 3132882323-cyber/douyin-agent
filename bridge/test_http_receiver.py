@@ -449,7 +449,7 @@ class SnapshotStoreTests(unittest.TestCase):
             http_receiver.authorize_execution_preflight(ready["session"]["session_id"], "确认")
         authorized = http_receiver.authorize_execution_preflight(
             ready["session"]["session_id"],
-            "确认降低预算至400.0",
+            "确认降低预算至400",
         )
         self.assertEqual("authorized", authorized["state"])
         self.assertRegex(authorized["session"]["authorization_id"], r"^[a-f0-9]{32}$")
@@ -580,10 +580,10 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual("ready_for_final_confirmation", ready["state"])
         authorized = http_receiver.authorize_execution_preflight(
             ready["session"]["session_id"],
-            "确认降低预算至400.0",
+            "确认降低预算至400",
         )
         http_receiver.cancel_confirmed_action(confirmed["action_id"])
-        with self.assertRaisesRegex(ValueError, "撤销|状态已变化"):
+        with self.assertRaisesRegex(ValueError, "撤销|状态已变化|已使用|已失效|已取消"):
             http_receiver.consume_execution_authorization(authorized["session"]["authorization_id"])
 
     def test_supervised_pause_plan_preflight_uses_status_gates(self) -> None:
@@ -1174,6 +1174,43 @@ class SnapshotStoreTests(unittest.TestCase):
         item = next(value for value in recommendations if value["plan"] == "直播大屏 · 测试店铺")
         self.assertEqual(item["action_type"], "scale_cautiously")
         self.assertEqual(item["evidence"]["roi_target"], 3.0)
+
+        # Selected qianchuan account must not drop douyin-embedded qianchuan rows.
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_other999"})
+        still = http_receiver.build_plan_recommendations()
+        self.assertTrue(any(value["plan"] == "直播大屏 · 测试店铺" for value in still))
+
+    def test_root_only_campaigns_load_when_account_selected(self) -> None:
+        """LEGACY-9: list_snapshots merges root pages; recommendations must still load them."""
+        root = http_receiver.state.DATA_DIR / "qianchuan"
+        root.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "source": "qianchuan",
+            "page_type": "campaigns",
+            "timestamp": time.time(),
+            "saved_at": "test",
+            "data": {
+                "schema_version": 2,
+                "page_type": "campaigns",
+                "captured_at": int(time.time() * 1000),
+                "account": {"key": "acct_rootonly1", "label": "根目录账号", "confidence": "high"},
+                "quality": {"score": 92, "row_count": 1},
+                "tables": [{
+                    "headers": ["计划ID", "计划名称", "投放状态", "日预算", "消耗", "支付 ROI", "成交订单"],
+                    "rows": [["plan_root1", "根目录计划", "投放中", "500", "300", "0.2", "0"]],
+                }],
+            },
+        }
+        (root / "campaigns.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        http_receiver.save_agent_settings({"qianchuan_account_key": "acct_rootonly1", "min_spend_for_action": 100})
+        catalog = http_receiver.list_snapshots()
+        self.assertTrue(any(item["page_type"] == "campaigns" and item.get("storage_account_key") == "" for item in catalog))
+        recs = http_receiver.build_plan_recommendations()
+        self.assertTrue(any(
+            (item.get("action_params") or {}).get("target_id") == "plan_root1"
+            or ((item.get("action_params") or {}).get("target_ref") or {}).get("id") == "plan_root1"
+            for item in recs
+        ))
 
     def test_auto_scan_status_is_saved_for_reports(self) -> None:
         saved = http_receiver.save_scan_status({"status": "partial", "account_mode": "auto", "index": 16, "total": 16, "success": 14, "failed": 2, "results": [{"id": "orders", "ok": True}]})

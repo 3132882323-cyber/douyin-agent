@@ -28,6 +28,18 @@ logger = logging.getLogger("dian-agent-http")
 _state_lock = state._state_lock
 
 
+def _format_passphrase_value(value: Any) -> str:
+    """Normalize budget numbers so UI `400` matches Bridge `400.0`."""
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value or "")
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}"
+
+
 def _data_dir() -> Path:
     return state.DATA_DIR
 
@@ -135,6 +147,16 @@ def cancel_confirmed_action(action_id: str) -> dict[str, Any]:
             _action_audit_path(),
             {"schema_version": 1, "updated_at": _now_label(), "execution_enabled": False, "actions": actions},
         )
+        # Drop any consumed/authorized preflight session for this action so a
+        # mid-flight cancel cannot leave authorization_consumed stuck until TTL.
+        session = load_execution_preflight().get("session")
+        if isinstance(session, dict) and session.get("action_id") == action_id:
+            _save_execution_preflight({
+                **session,
+                "state": "cancelled",
+                "execution_enabled": False,
+                "write_enabled": False,
+            })
     return cancelled
 
 
@@ -493,9 +515,9 @@ def authorize_execution_preflight(session_id: str, confirmation_text: str) -> di
     if operation_type == "pause_plan":
         expected_text = f"确认暂停计划{action.get('plan_name') or ''}"
     elif operation_type == "restore_budget":
-        expected_text = f"确认恢复预算至{action.get('target_value')}"
+        expected_text = f"确认恢复预算至{_format_passphrase_value(action.get('target_value'))}"
     else:
-        expected_text = f"确认降低预算至{action.get('target_value')}"
+        expected_text = f"确认降低预算至{_format_passphrase_value(action.get('target_value'))}"
     if str(confirmation_text or "").strip() != expected_text:
         raise ValueError(f"确认口令不一致，请完整输入：{expected_text}")
 

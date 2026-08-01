@@ -76,6 +76,55 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual("plan_id", by_id["match_key"])
         self.assertEqual(500, by_id["official_budget"])
 
+    def test_wrong_plan_id_does_not_fall_back_to_name(self):
+        index = official_plan_index(
+            {
+                "data": {
+                    "channel": "official_api",
+                    "tables": [
+                        {
+                            "headers": ["计划ID", "计划名称", "预算", "消耗"],
+                            "rows": [["plan_b", "同名计划", "800", "200"]],
+                        }
+                    ],
+                }
+            }
+        )
+        report = reconcile_plan_against_official(
+            plan_name="同名计划",
+            plan_id="plan_wrong",
+            browser_budget=800,
+            browser_spend=200,
+            official_index=index,
+        )
+        self.assertFalse(report["matched"])
+        self.assertIn("official_plan_not_found", report["reasons"])
+        self.assertIsNone(report["match_key"])
+
+    def test_name_match_allowed_when_official_has_no_ids(self):
+        index = official_plan_index(
+            {
+                "data": {
+                    "channel": "official_api",
+                    "tables": [
+                        {
+                            "headers": ["计划名称", "预算", "消耗"],
+                            "rows": [["仅名称计划", "500", "100"]],
+                        }
+                    ],
+                }
+            }
+        )
+        report = reconcile_plan_against_official(
+            plan_name="仅名称计划",
+            plan_id="browser_only_id",
+            browser_budget=500,
+            browser_spend=100,
+            official_index=index,
+        )
+        self.assertTrue(report["matched"])
+        self.assertEqual("plan_name", report["match_key"])
+
 
 if __name__ == "__main__":
     unittest.main()

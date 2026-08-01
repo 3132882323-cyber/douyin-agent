@@ -217,6 +217,7 @@ from storage import (
     build_store_catalog,
     list_qianchuan_accounts,
     list_snapshots,
+    load_catalog_snapshot,
     load_data,
     load_history,
     save_data,
@@ -776,7 +777,7 @@ def save_suggestion_snapshot(task_id: str, context: dict[str, Any] | None = None
         # Capture current metrics as baseline
         metrics: dict[str, Any] = {}
         for item in list_snapshots():
-            snapshot = load_data(item["source"], item["page_type"])
+            snapshot = load_catalog_snapshot(item)
             data = (snapshot or {}).get("data", {})
             for key, value in (data.get("safe_metrics") or {}).items():
                 metrics[f"{item['source']}/{item['page_type']}/{key}"] = value
@@ -802,7 +803,7 @@ def _evaluate_on_completion(task_id: str) -> dict[str, Any] | None:
     # Get current metrics
     current_metrics: dict[str, Any] = {}
     for item in list_snapshots():
-        snapshot = load_data(item["source"], item["page_type"])
+        snapshot = load_catalog_snapshot(item)
         data = (snapshot or {}).get("data", {})
         for key, value in (data.get("safe_metrics") or {}).items():
             current_metrics[f"{item['source']}/{item['page_type']}/{key}"] = value

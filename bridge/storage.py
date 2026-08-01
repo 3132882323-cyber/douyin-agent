@@ -356,6 +356,18 @@ def load_data(source: str, page_type: str | None = None, account_key: str | None
         return None
 
 
+def load_catalog_snapshot(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Load a snapshot using list_snapshots storage hints (root vs account partition)."""
+
+    source = str(item.get("source") or "")
+    page_type = str(item.get("page_type") or "")
+    if not source or not page_type:
+        return None
+    if "storage_account_key" in item:
+        return load_data(source, page_type, account_key=item.get("storage_account_key"))
+    return load_data(source, page_type)
+
+
 def list_snapshots() -> list[dict[str, Any]]:
     from http_receiver import load_agent_settings  # late import to avoid cycle
 
@@ -396,23 +408,26 @@ def list_snapshots() -> list[dict[str, Any]]:
                     continue
             quality = data.get("quality", {}) if isinstance(data, dict) else {}
             age = max(0, int(time.time() - float(snapshot.get("timestamp", 0))))
-            items.append(
-                {
-                    "source": source,
-                    "page_type": snapshot.get("page_type", path.stem),
-                    "account_key": str((data.get("account") or {}).get("key") or account_key or ""),
-                    "saved_at": snapshot.get("saved_at"),
-                    "age_seconds": age,
-                    "fresh": age < state.STALE_SECONDS,
-                    "title": data.get("title", "") if isinstance(data, dict) else "",
-                    "url": data.get("url", "") if isinstance(data, dict) else "",
-                    "quality_score": int(quality.get("score", 0) or 0),
-                    "metric_count": int(quality.get("metric_count", 0) or 0),
-                    "row_count": int(quality.get("row_count", 0) or 0),
-                    "pagination_truncated": bool(quality.get("pagination_truncated")),
-                    "warnings": quality.get("warnings", []),
-                }
-            )
+            entry = {
+                "source": source,
+                "page_type": snapshot.get("page_type", path.stem),
+                "account_key": str((data.get("account") or {}).get("key") or account_key or ""),
+                "saved_at": snapshot.get("saved_at"),
+                "age_seconds": age,
+                "fresh": age < state.STALE_SECONDS,
+                "title": data.get("title", "") if isinstance(data, dict) else "",
+                "url": data.get("url", "") if isinstance(data, dict) else "",
+                "quality_score": int(quality.get("score", 0) or 0),
+                "metric_count": int(quality.get("metric_count", 0) or 0),
+                "row_count": int(quality.get("row_count", 0) or 0),
+                "pagination_truncated": bool(quality.get("pagination_truncated")),
+                "warnings": quality.get("warnings", []),
+            }
+            # Preserve where the file was loaded from so downstream loaders do not
+            # miss root-only pages when a qianchuan account is selected.
+            if account_key is not None:
+                entry["storage_account_key"] = account_key
+            items.append(entry)
     return sorted(items, key=lambda item: item.get("age_seconds", 10**9))
 
 

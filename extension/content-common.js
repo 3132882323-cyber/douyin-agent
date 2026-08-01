@@ -98,12 +98,13 @@
         inspectedRows += 1;
         if (rows.length >= MAX_ROWS || inspectedRows > 240) break;
         if (!visible(row)) continue;
+        // Keep empty cells so column indexes stay aligned with headers
+        // (status columns that are switch-only used to shift budget/ROI).
         const cells = Array.from(row.querySelectorAll("th, td, [role='columnheader'], [role='cell'], [role='gridcell']"))
           .slice(0, MAX_CELLS)
-          .map((cell) => compact(cell.innerText))
-          .filter(Boolean);
+          .map((cell) => compact(cell.innerText) || "");
         const hasHeaderCells = row.querySelectorAll("th, [role='columnheader']").length > 0;
-        if (cells.length) rows.push({ cells, hasHeaderCells });
+        if (cells.some(Boolean)) rows.push({ cells, hasHeaderCells });
       }
       if (!rows.length) continue;
 
@@ -291,7 +292,14 @@
     if (loginRequired) warnings.push("页面可能未登录");
     if (pageType === "unknown") warnings.push("暂未识别该页面类型");
     if (!tables.length && !Object.keys(metrics).length) warnings.push("未发现结构化指标或表格");
-    if (harvested.truncated) {
+    // Manual/auto list captures must not clear SNAPSHOT_TRUNCATED: if a next page
+    // exists, mark truncated even when we did not deep-scan.
+    const listPageTypes = new Set(["campaigns", "qianchuan_campaigns", "report", "qianchuan_report", "video_library"]);
+    let paginationTruncated = Boolean(harvested.truncated);
+    if (!scanHarvest && listPageTypes.has(String(pageType || "")) && nextPageButton()) {
+      paginationTruncated = true;
+      warnings.push("列表存在下一页，当前仅采集可见页；请用深度巡检补采完整列表");
+    } else if (harvested.truncated) {
       warnings.push(`分页超过 ${maxDeepScanPages} 页，本轮仅采集前 ${maxDeepScanPages} 页`);
     }
 
@@ -317,7 +325,7 @@
         pages_scanned: harvested.pages,
         max_pages: maxDeepScanPages,
         virtual_scroll_passes: harvested.virtualPasses,
-        pagination_truncated: harvested.truncated,
+        pagination_truncated: paginationTruncated,
       },
       metrics,
       safe_metrics: safeMetrics,

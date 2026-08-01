@@ -158,7 +158,12 @@ def reconcile_plan_against_official(
     if plan_id and plan_id in index["by_id"]:
         official = index["by_id"][plan_id]
         result["match_key"] = "plan_id"
+    elif plan_id and index["by_id"]:
+        # Official index has IDs but not this one — do not silently match by name.
+        result["reasons"].append("official_plan_not_found")
+        return result
     else:
+        # No browser plan_id, or official snapshot has no IDs at all.
         candidate = index["by_name"].get(_normalize_plan_name(plan_name))
         if candidate and candidate.get("ambiguous"):
             result["reasons"].append("ambiguous_plan_name")
