@@ -1,0 +1,109 @@
+{
+  "channel": "stable",
+  "expires_at": "2031-08-02T00:00:00+08:00",
+  "min_agent_version": "4.0.0",
+  "pack_version": "2026.08.02.1",
+  "published_at": "2026-08-02T00:00:00+08:00",
+  "rules": [
+    {
+      "conditions": {
+        "all": [
+          {
+            "field": "spend",
+            "operator": ">=",
+            "value_from": "min_spend"
+          },
+          {
+            "field": "roi",
+            "formula": "roi_target * 0.8",
+            "operator": "<"
+          },
+          {
+            "field": "data_age_minutes",
+            "operator": "<=",
+            "value": 30
+          }
+        ]
+      },
+      "enabled": true,
+      "priority": 10,
+      "result": {
+        "acceptance": {
+          "metric": "roi",
+          "observation_minutes": 30,
+          "target": "停止继续下滑或回升"
+        },
+        "action": {
+          "change_percent": -15,
+          "label": "降低预算 15% 并观察",
+          "observation_minutes": 30,
+          "type": "reduce_budget"
+        },
+        "level": "high",
+        "message": "消耗已达到判断门槛，且 ROI 低于店铺目标的 80%。",
+        "title": "千川计划持续低于目标"
+      },
+      "rule_id": "qianchuan.roi_loss",
+      "version": 1
+    },
+    {
+      "conditions": {
+        "all": [
+          {
+            "field": "inventory.available",
+            "operator": "<=",
+            "setting": "inventory_warning_line",
+            "default": 20
+          },
+          {
+            "field": "sales.last_24h",
+            "operator": ">",
+            "value": 0
+          }
+        ]
+      },
+      "enabled": true,
+      "priority": 20,
+      "result": {
+        "acceptance": {
+          "metric": "inventory.available",
+          "target": "补货或降低推广强度"
+        },
+        "action": {
+          "label": "核对可售库存和补货时间",
+          "type": "check_inventory"
+        },
+        "level": "high",
+        "message": "商品仍在出单，但可售库存已经达到预警线。",
+        "title": "热销商品库存不足"
+      },
+      "rule_id": "shop.inventory.low",
+      "version": 1
+    },
+    {
+      "conditions": {
+        "field": "data_age_minutes",
+        "operator": ">",
+        "setting": "max_data_age_minutes",
+        "default": 30
+      },
+      "enabled": true,
+      "priority": 1,
+      "result": {
+        "action": {
+          "label": "重新同步当前页面",
+          "type": "manual_review"
+        },
+        "dedupe_key": "data-freshness",
+        "level": "critical",
+        "message": "当前快照已超过允许的数据时效，暂停生成资金动作建议。",
+        "title": "经营数据已过期"
+      },
+      "rule_id": "system.data_stale",
+      "version": 1
+    }
+  ],
+  "schema_version": 1,
+  "sha256": "b5d95273f0684645cd5ab78eb0ccc38f224f65bb8ff60889904b7bb4360a4d9c",
+  "trusted_builtin": true
+}

@@ -48,6 +48,7 @@ function openUrl(url) {
 
 document.getElementById("check-bridge").addEventListener("click", checkBridge);
 document.getElementById("open-workbench").addEventListener("click", () => openUrl(WORKBENCH_URL));
+document.getElementById("open-readiness").addEventListener("click", () => openUrl(WORKBENCH_URL));
 document.getElementById("finish-setup").addEventListener("click", () => openUrl(WORKBENCH_URL));
 document.getElementById("open-doudian").addEventListener(
   "click",

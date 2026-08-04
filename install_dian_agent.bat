@@ -1,38 +1,38 @@
 @echo off
-chcp 65001 >nul
 setlocal
 set "PROJECT_DIR=%~dp0"
 
 echo.
 echo ============================================
-echo   店策 Agent v3.5.0 - 轻量安装
+echo   Dian Agent v4.0.0 Setup
 echo ============================================
-echo   1. 启动并设置本地 Agent
-echo   2. 打开浏览器扩展管理页
-echo   3. 打开需要选择的扩展文件夹
+echo   Local-first Douyin commerce operations
+echo   AI connection is optional
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%bridge\setup_windows.ps1"
+if exist "%PROJECT_DIR%app\DianAgent.exe" if exist "%PROJECT_DIR%tools\install_release.ps1" goto release_setup
+if exist "%PROJECT_DIR%dist\agent\DianAgent.exe" if exist "%PROJECT_DIR%tools\install_release.ps1" goto release_setup
+goto source_setup
+
+:release_setup
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%tools\install_release.ps1" -SourceRoot "%PROJECT_DIR%"
+goto setup_done
+
+:source_setup
+  echo Release executable was not found. Using source development setup.
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%bridge\setup_windows.ps1"
+
+:setup_done
+
 if errorlevel 1 (
   echo.
-  echo [未完成] 本地 Agent 安装失败。
-  echo 如果提示缺少 Python，请先安装 Python 3.10 或更高版本后重试。
+  echo [FAILED] Dian Agent setup did not complete.
+  echo See the message above or the local logs for details.
   pause
   exit /b 1
 )
 
-set "BROWSER="
-if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "BROWSER=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
-if not defined BROWSER if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" set "BROWSER=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
-if not defined BROWSER if exist "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe" set "BROWSER=%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"
-
-if defined BROWSER start "" "%BROWSER%" "chrome://extensions/"
-start "" explorer.exe "%PROJECT_DIR%extension"
-
 echo.
-echo [最后一步]
-echo 在扩展管理页打开“开发者模式”，点击“加载已解压的扩展程序”，
-echo 选择刚刚打开的 extension 文件夹。
-echo.
-echo 安装后默认启用轻量哨兵：零自动扫描，点击时才取数。
+echo [DONE] Dian Agent is installed and its local data will be preserved during upgrades.
+echo Open chrome://extensions and load the installed extension folder if prompted.
 pause

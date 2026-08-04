@@ -6,7 +6,7 @@
   const MAX_ROWS = 100;
   const MAX_CELLS = 24;
   const MAX_TEXT = 6000;
-  const SENSITIVE_HEADER = /收货|收件|联系人|客户姓名|真实姓名|姓名|详细地址|收货地址|配送地址|联系地址|手机|电话|联系方式|订单号|订单编号|交易号|支付单号|买家账号|买家昵称|用户账号|用户ID|用户编号|身份证|证件号|邮箱/i;
+  const SENSITIVE_HEADER = /收货|收件|联系人|客户姓名|真实姓名|姓名|详细地址|收货地址|配送地址|联系地址|手机|电话|联系方式|订单号|订单编号|交易号|支付单号|买家账号|买家昵称|用户账号|用户ID|用户编号|店铺ID|商家ID|门店ID|shop\s*id|store\s*id|merchant\s*id|身份证|证件号|邮箱/i;
   const SAFE_METRIC_LABELS = [
     "用户支付金额", "订单量", "曝光人数", "点击人数", "成交人数", "点击成交率",
     "成交订单数", "成交件数", "观看次数", "退款金额", "直播场次", "成交金额",
@@ -296,7 +296,7 @@
       source,
       page_type: pageType || "unknown",
       url: `${location.origin}${location.pathname}`,
-      title: clean(document.title, true).slice(0, 120),
+      title: privacyMode ? `${source}/${pageType || "unknown"}` : clean(document.title, false).slice(0, 120),
       captured_at: Date.now(),
       reason,
       privacy: {

@@ -10,6 +10,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 BRIDGE_DIR = str(Path(__file__).resolve().parent)
 if BRIDGE_DIR not in sys.path:
@@ -355,6 +356,57 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertIn(rollback_preflight["state"], {"awaiting_reread", "ready_for_final_confirmation"})
         self.assertTrue(rollback_preflight["session"]["quota"]["recovery_exemption"])
 
+    def test_cancelled_action_invalidates_existing_execution_authorization(self) -> None:
+        http_receiver.save_agent_settings({"execution_mode": "supervised"})
+        captured_at = int(time.time() * 1000)
+        snapshot = {
+            "schema_version": 2,
+            "page_type": "campaigns",
+            "captured_at": captured_at,
+            "account": {"key": "acct_cancel001", "label": "撤销授权账号"},
+            "quality": {"score": 90, "row_count": 1},
+            "tables": [{
+                "headers": ["计划ID", "计划名称", "日预算", "消耗", "支付 ROI", "成交订单"],
+                "rows": [["plan_cancel001", "撤销授权计划", "500", "300", "0.60", "2"]],
+            }],
+        }
+        http_receiver.save_data("qianchuan", snapshot)
+        draft = http_receiver.build_action_draft(
+            operation_type="adjust_budget",
+            operation_label="降低预算 20%",
+            target_kind="qianchuan_plan",
+            target_id="plan_cancel001",
+            target_name="撤销授权计划",
+            account_key="acct_cancel001",
+            account_label="撤销授权账号",
+            field="预算",
+            current_value=500.0,
+            target_value=400.0,
+            source="qianchuan",
+            page_type="campaigns",
+            captured_at_ms=captured_at,
+            quality_score=90,
+            confidence="high",
+            evidence={"spend": 300.0, "roi": 0.60, "orders": 2.0},
+        )
+        confirmed = http_receiver.confirm_action_draft(draft)
+        awaiting = http_receiver.start_execution_preflight(confirmed["action_id"])
+        snapshot["captured_at"] = awaiting["session"]["started_at_ms"] + 1000
+        http_receiver.save_data("qianchuan", snapshot)
+        ready = http_receiver.build_execution_preflight_report()
+        authorized = http_receiver.authorize_execution_preflight(
+            ready["session"]["session_id"],
+            "确认降低预算至400.0",
+        )
+        authorization_id = authorized["session"]["authorization_id"]
+        cancelled = http_receiver.cancel_confirmed_action(confirmed["action_id"])
+        self.assertEqual("cancelled", cancelled["state"])
+        with self.assertRaisesRegex(ValueError, "已撤销、已停止或不再允许执行"):
+            http_receiver.consume_execution_authorization(authorization_id)
+        invalidated = http_receiver.load_execution_preflight()["session"]
+        self.assertEqual("invalidated", invalidated["state"])
+        self.assertFalse(invalidated["authorization_consumed"])
+
     def test_supervised_preflight_rejects_budget_increase(self) -> None:
         http_receiver.save_agent_settings({"execution_mode": "supervised"})
         now_ms = int(time.time() * 1000)
@@ -548,13 +600,14 @@ class SnapshotStoreTests(unittest.TestCase):
         original = http_receiver.build_execution_effectiveness_report
         http_receiver.build_execution_effectiveness_report = lambda: {
             "items": [
-                {"status": "effective", "before": {"spend": 300}, "change": {"from": 500, "to": 400}},
-                {"status": "review", "before": {"spend": 200}, "change": {"from": 400, "to": 320}},
-                {"status": "waiting", "before": {"spend": 100}, "change": {"from": 300, "to": 240}},
+                {"status": "effective", "account_key": "acct_a", "before": {"spend": 300}, "change": {"from": 500, "to": 400}},
+                {"status": "review", "account_key": "acct_a", "before": {"spend": 200}, "change": {"from": 400, "to": 320}},
+                {"status": "waiting", "account_key": "acct_a", "before": {"spend": 100}, "change": {"from": 300, "to": 240}},
             ]
         }
         try:
-            ledger = http_receiver.build_value_ledger()
+            with patch.object(http_receiver, "build_store_catalog", return_value={"selected_store_key": "store_a", "stores": [{"key": "store_a", "account_keys": ["acct_a"]}]}):
+                ledger = http_receiver.build_value_ledger()
         finally:
             http_receiver.build_execution_effectiveness_report = original
         self.assertEqual(ledger["summary"]["effective_rate"], 50.0)
@@ -635,7 +688,7 @@ class SnapshotStoreTests(unittest.TestCase):
         accounts = http_receiver.list_qianchuan_accounts()
         self.assertEqual(
             [(item["key"], item["label"]) for item in accounts],
-            [("acct_real0001", "真实旗舰店"), ("acct_duplicate", "真实旗舰店")],
+            [("acct_real0001", "千川账户 EA0001"), ("acct_duplicate", "千川账户 CCDCAE")],
         )
 
     def test_same_qianchuan_account_label_reuses_canonical_key_across_pages(self) -> None:
@@ -666,12 +719,10 @@ class SnapshotStoreTests(unittest.TestCase):
             },
         )
         self.assertEqual(first["data"]["account"]["key"], "acct_route001")
-        self.assertEqual(second["data"]["account"]["key"], "acct_route001")
-        self.assertTrue((http_receiver.DATA_DIR / "qianchuan_accounts" / "acct_route001" / "campaigns.json").exists())
+        self.assertEqual(second["data"]["account"]["key"], "acct_route002")
+        self.assertTrue((http_receiver.DATA_DIR / "qianchuan_accounts" / "acct_route002" / "campaigns.json").exists())
         accounts = http_receiver.list_qianchuan_accounts()
-        self.assertEqual(len(accounts), 1)
-        self.assertEqual(accounts[0]["identity_source"], "platform_id")
-        self.assertIn("acct_route002", accounts[0]["aliases"])
+        self.assertEqual(len(accounts), 2)
 
     def test_same_name_platform_accounts_remain_separate(self) -> None:
         for key in ("acct_stable001", "acct_stable002"):
@@ -775,6 +826,8 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertIn("## 内容", content)
 
     def test_operation_task_status_is_persisted(self) -> None:
+        http_receiver._remember_store_identity({"key": "store_test", "confidence": "high"})
+        http_receiver.save_agent_settings({"store_key": "store_test"})
         http_receiver.save_data("doudian", {"page_type": "shelf", "quality": {"score": 70}, "safe_metrics": {"曝光人数": "20", "点击人数": "2", "成交人数": "0"}, "signals": ["商品主图存在不良暗示，请优化"]})
         before = http_receiver.build_ops_manager()
         task = before["must_do"][0]
@@ -786,6 +839,68 @@ class SnapshotStoreTests(unittest.TestCase):
         completed = http_receiver.build_ops_manager()
         self.assertEqual(completed["progress"]["done"], 1)
         self.assertFalse(any(item["id"] == task["id"] for item in completed["today_top_actions"]))
+
+    def test_task_state_is_scoped_by_store_and_day_with_audit_history(self) -> None:
+        task_id = "a" * 16
+        http_receiver._remember_store_identity({"key": "store-a", "confidence": "high"})
+        http_receiver._remember_store_identity({"key": "store-b", "confidence": "high"})
+        started = http_receiver.update_task_state(
+            task_id,
+            "doing",
+            operator="运营负责人",
+            assignee="小王",
+            title="修复商品主图",
+            owner="货架运营",
+            store_key="store-a",
+            business_date="2026-08-04",
+        )
+        self.assertEqual(started["status"], "doing")
+        self.assertEqual(started["assignee"], "小王")
+        self.assertEqual(http_receiver.load_task_states("store-b", "2026-08-04"), {})
+
+        with self.assertRaisesRegex(ValueError, "必须填写原因"):
+            http_receiver.update_task_state(
+                task_id, "blocked", store_key="store-a", business_date="2026-08-04"
+            )
+        blocked = http_receiver.update_task_state(
+            task_id,
+            "blocked",
+            operator="运营负责人",
+            note="等待设计重新出图",
+            store_key="store-a",
+            business_date="2026-08-04",
+        )
+        self.assertEqual(blocked["blocked_reason"], "等待设计重新出图")
+        self.assertEqual(blocked["history"][-1]["from"], "doing")
+        self.assertEqual(blocked["history"][-1]["to"], "blocked")
+
+    def test_onboarding_resumes_from_real_store_snapshot_and_task_evidence(self) -> None:
+        first_task = {
+            "id": "b" * 16,
+            "status": "todo",
+            "title": "先修复商品主图",
+            "action": "替换不合规主图",
+            "evidence": "页面存在合规提示",
+            "acceptance": "违规提示消失",
+        }
+        with patch.object(http_receiver, "build_store_catalog", return_value={"selected_store_key": "store-a", "stores": [{"key": "store-a"}]}), \
+             patch.object(http_receiver, "list_snapshots", return_value=[
+                 {"source": "doudian", "page_type": "overview", "fresh": True, "captured_at": 1785808801, "quality_score": 80},
+                 {"source": "doudian", "page_type": "orders", "fresh": True, "captured_at": 1785808801, "quality_score": 80},
+                 {"source": "doudian", "page_type": "products", "fresh": True, "captured_at": 1785808801, "quality_score": 80},
+                 {"source": "doudian", "page_type": "shelf", "fresh": True, "captured_at": 1785808801, "quality_score": 80},
+             ]), \
+             patch.object(http_receiver, "build_scan_receipt", return_value={"summary": {"success": 2}}), \
+             patch.object(http_receiver, "build_ops_manager", return_value={"all_tasks": [first_task]}):
+            initial_state = {"schema_version": 2, "scopes": {"store-a": {"started_at": "2026-08-04 10:00:00", "store_confirmed_at": "2026-08-04 10:00:00"}}}
+            http_receiver._atomic_json_write(http_receiver._onboarding_state_path(), initial_state)
+            status = http_receiver.build_onboarding_status(state=initial_state)
+            self.assertEqual(status["current_step"]["id"], "evidence")
+            self.assertTrue(status["resume_supported"])
+            self.assertEqual(status["first_task"]["evidence"], "页面存在合规提示")
+
+            completed = http_receiver.update_onboarding_state("first_task_viewed")
+            self.assertEqual(completed["status"], "completed")
 
     def test_embedded_qianchuan_scan_drives_plan_recommendations(self) -> None:
         http_receiver.save_data("doudian", {"page_type": "qianchuan_live", "quality": {"score": 90, "row_count": 1}, "tables": [{"headers": ["抖音号", "投放状态", "投放设置", "整体消耗(元)", "整体支付ROI", "整体成交订单数"], "rows": [["直播大屏\n测试店铺\n设置直播规划", "投放中", "ROI目标\n3.00", "500", "3.50", "6"]]}]})
@@ -841,12 +956,29 @@ class SnapshotStoreTests(unittest.TestCase):
         receipt = http_receiver.build_scan_receipt()
         self.assertEqual(receipt["readiness"], "attention")
         self.assertFalse(receipt["analysis_ready"])
-        self.assertEqual(receipt["account_label"], "主投放账号")
+        self.assertEqual(receipt["account_label"], "千川账户 FE1234")
         self.assertEqual(receipt["summary"]["coverage_rate"], 100)
         self.assertEqual(receipt["summary"]["needs_review"], 1)
         self.assertEqual(receipt["failed_page_ids"], ["qianchuan_video_library"])
         self.assertEqual(receipt["sources"]["qianchuan"]["failed"], 1)
         self.assertTrue(any("单独重试" in warning for warning in receipt["warnings"]))
+
+    def test_quick_scan_is_first_value_ready_without_claiming_full_analysis_ready(self) -> None:
+        http_receiver.save_scan_status({
+            "status": "completed",
+            "scope": "quick",
+            "total": 2,
+            "results": [
+                {"id": "overview", "label": "经营概览", "source": "doudian", "ok": True, "quality": {"score": 90, "row_count": 2}},
+                {"id": "qianchuan_overview", "label": "千川首页", "source": "qianchuan", "ok": True, "quality": {"score": 90, "row_count": 2}},
+            ],
+        })
+
+        receipt = http_receiver.build_scan_receipt()
+
+        self.assertEqual(receipt["readiness"], "quick_ready")
+        self.assertTrue(receipt["first_value_ready"])
+        self.assertFalse(receipt["analysis_ready"])
 
     def test_history_snapshots_build_seven_day_trends(self) -> None:
         now_ms = int(time.time() * 1000)

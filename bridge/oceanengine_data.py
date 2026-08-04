@@ -179,10 +179,8 @@ class OceanEngineDataClient:
 
         for account in accounts:
             shop_id = str(account.get("account_id") or "")
-            shop_name = str(account.get("account_name") or "未命名千川账号")
             account_public = {
                 "key": _safe_account_key(shop_id),
-                "label": shop_name,
                 "confidence": "high",
                 "identity_source": "official_api",
             }
@@ -354,7 +352,11 @@ class OceanEngineDataClient:
                 "reason": "official-api-manual-sync",
                 "channel": "official_api",
                 "privacy": privacy,
-                "account": account_public,
+                "identity_claims": [
+                    {"kind": "douyin_shop_id", "raw_id": shop_id, "evidence_source": "official_api", "confidence": "high"},
+                    {"kind": "qianchuan_account_id", "raw_id": shop_id, "evidence_source": "official_api", "confidence": "high"},
+                ],
+                "identity_status": "resolved_by_bridge",
                 "date_range": f"{start_date.isoformat()} 至 {end_date.isoformat()}",
             }
 
@@ -454,7 +456,7 @@ class OceanEngineDataClient:
             statuses.append(
                 {
                     "account_key": canonical_account_key,
-                    "account_name": shop_name,
+                    "account_name": f"匿名店铺 {canonical_account_key[-6:].upper()}",
                     "advertiser_count": len(advertiser_ids),
                     "pages_saved": 4,
                     "endpoints": endpoint_status,

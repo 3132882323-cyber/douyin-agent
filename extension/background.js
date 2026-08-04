@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v3.0.1) */
+/** 店策 Agent - MV3 service worker (v4.0.0) */
 
 importScripts("scan-policy.js");
 
@@ -288,7 +288,7 @@ async function activatePageTab(tabId, texts) {
   return result;
 }
 
-async function scanOnePage(tabId, page, reason, expectedAccount = {}) {
+async function scanOnePage(tabId, page, reason, expectedAccount = {}, expectedStoreKey = "") {
   let lastError;
   const candidateUrls = [page.url, ...(page.fallbackUrls || [])];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -312,6 +312,17 @@ async function scanOnePage(tabId, page, reason, expectedAccount = {}) {
       );
       if (!response?.ok) throw new Error(response?.error || "采集失败");
       const capturedAccount = response.bridge?.account || response.account || null;
+      const capturedStore = response.bridge?.store || response.store || null;
+      if (!capturedStore?.key) {
+        const identityError = new Error("当前页面没有可靠店铺身份，已停止跨页面合并；请先打开抖店经营概览重新识别。");
+        identityError.code = "STORE_IDENTITY_UNRESOLVED";
+        throw identityError;
+      }
+      if (expectedStoreKey && capturedStore.key !== expectedStoreKey) {
+        const storeError = new Error("当前页面所属店铺与已选店铺不一致，已停止巡检且不会混合数据。");
+        storeError.code = "STORE_MISMATCH";
+        throw storeError;
+      }
       if (page.source === "qianchuan" && expectedAccount?.key) {
         const accountMatch = matchAccount(capturedAccount, expectedAccount);
         if (!accountMatch.ok) {
@@ -337,6 +348,7 @@ async function scanOnePage(tabId, page, reason, expectedAccount = {}) {
         account_label: capturedAccount?.label || "",
         account_confidence: capturedAccount?.confidence || "",
         account_identity_source: capturedAccount?.identity_source || "",
+        store_key: capturedStore.key,
       };
     } catch (error) {
       lastError = error;
@@ -434,20 +446,28 @@ async function createScanTab(source = "", expectedAccount = {}) {
   return { tab: await chrome.tabs.create({ url: "about:blank", active: false }), account: null, routes: {} };
 }
 
-async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
+async function runFullScan(reason = "manual", pageIds = null, accountKey = "", storeKey = "", scanScope = "") {
   fullScanCancelled = false;
   const startedAt = Date.now();
   const results = [];
+  if (!storeKey) {
+    const response = await fetch(`${BRIDGE_URL}/stores`, { cache: "no-store" });
+    const catalog = response.ok ? await response.json() : {};
+    storeKey = String(catalog.selected_store_key || "");
+    accountKey = String(accountKey || catalog.selected_account_key || "");
+  }
+  if (!storeKey) throw new Error("尚未选择已识别店铺，巡检不会写入未归属数据。");
   const targeted = Array.isArray(pageIds) && pageIds.length > 0;
+  const quickScope = scanScope === "quick" || (!scanScope && targeted);
   const previousScan = (await chrome.storage.local.get("fullScan")).fullScan || {};
-  const scanPages = targeted ? FULL_SCAN_PAGES.filter((page) => pageIds.includes(page.id)) : FULL_SCAN_PAGES;
-  const accountMode = accountKey ? "fixed" : "auto";
+  const scanPages = (targeted ? FULL_SCAN_PAGES.filter((page) => pageIds.includes(page.id)) : FULL_SCAN_PAGES)
+    .filter((page) => accountKey || page.source === "doudian");
+  const accountMode = accountKey ? "fixed" : "doudian_only";
   let lockedAccount = { key: String(accountKey || ""), label: "", identity_source: accountKey ? "selected" : "" };
   let scanTab;
   let scanSource = "";
   let qianchuanRoutes = {};
-  if (accountMode === "auto") await selectAnalysisAccount("");
-  await setFullScanState({ status: "running", reason, account_mode: accountMode, account_key: lockedAccount.key, account_label: "", started_at: startedAt, finished_at: null, current: "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
+  await setFullScanState({ status: "running", scope: quickScope ? "quick" : "full", targeted_page_ids: targeted ? scanPages.map((page) => page.id) : [], reason, store_key: storeKey, account_mode: accountMode, account_key: lockedAccount.key, account_label: "", started_at: startedAt, finished_at: null, current: quickScope ? "准备首诊断" : "准备巡检", index: 0, total: scanPages.length, success: 0, failed: 0, low_quality: 0, error: "", results: [] });
   try {
     for (let index = 0; index < scanPages.length; index += 1) {
       if (fullScanCancelled) break;
@@ -472,11 +492,11 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
       await setFullScanState({ current: page.label, index: index + 1 });
       const discoveredUrl = page.source === "qianchuan" ? qianchuanRoutes[page.id] : "";
       const scanPage = discoveredUrl ? { ...page, url: discoveredUrl, fallbackUrls: [page.url, ...(page.fallbackUrls || [])] } : page;
-      let result = await scanOnePage(scanTab.id, scanPage, reason, lockedAccount);
+      let result = await scanOnePage(scanTab.id, scanPage, reason, lockedAccount, storeKey);
       if (!result.ok && isMissingTabError(result.error)) {
         const recovered = await createScanTab(page.source, lockedAccount);
         scanTab = recovered.tab;
-        result = await scanOnePage(scanTab.id, scanPage, `${reason}-tab-recovered`, lockedAccount);
+        result = await scanOnePage(scanTab.id, scanPage, `${reason}-tab-recovered`, lockedAccount, storeKey);
       }
       if (page.source === "qianchuan" && result.ok && result.account_key) {
         const detectedAccount = {
@@ -508,14 +528,15 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
       await sleep(350);
     }
     let finalResults = results;
-    if (targeted && !fullScanCancelled) {
+    if (quickScope && targeted && !fullScanCancelled) {
       const merged = new Map((previousScan.results || []).map((item) => [item.id, item]));
       results.forEach((item) => merged.set(item.id, item));
       finalResults = FULL_SCAN_PAGES.map((page) => merged.get(page.id)).filter(Boolean);
     }
     const incomplete = finalResults.length < FULL_SCAN_PAGES.length;
-    const status = fullScanCancelled ? "cancelled" : finalResults.some((item) => !item.ok) || incomplete ? "partial" : "completed";
-    await setFullScanState({ status, current: "", finished_at: Date.now(), error: "", results: finalResults, index: targeted ? finalResults.length : scanPages.length, total: targeted ? FULL_SCAN_PAGES.length : scanPages.length, success: finalResults.filter((item) => item.ok).length, failed: finalResults.filter((item) => !item.ok).length, low_quality: finalResults.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
+    const attemptedFailed = results.some((item) => !item.ok);
+    const status = fullScanCancelled ? "cancelled" : attemptedFailed || (!targeted && incomplete) ? "partial" : "completed";
+    await setFullScanState({ status, scope: quickScope ? "quick" : "full", coverage_complete: results.length === scanPages.length && !attemptedFailed, current: "", finished_at: Date.now(), error: "", results: finalResults, index: results.length, total: scanPages.length, success: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, low_quality: results.filter((item) => item.ok && Number(item.quality?.score || 0) < 50).length });
     await chrome.storage.local.set({ lastSyncAttempt: Date.now() });
     if (!fullScanCancelled) {
       await fetch(`${BRIDGE_URL}/reports/generate`, {
@@ -533,9 +554,9 @@ async function runFullScan(reason = "manual", pageIds = null, accountKey = "") {
   }
 }
 
-function startFullScan(reason = "manual", pageIds = null, accountKey = "") {
+function startFullScan(reason = "manual", pageIds = null, accountKey = "", storeKey = "", scanScope = "") {
   if (!fullScanPromise) {
-    fullScanPromise = runFullScan(reason, pageIds, accountKey).finally(() => { fullScanPromise = null; });
+    fullScanPromise = runFullScan(reason, pageIds, accountKey, storeKey, scanScope).finally(() => { fullScanPromise = null; });
   }
   return fullScanPromise;
 }
@@ -844,7 +865,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (fullScanPromise) {
         sendResponse({ ok: true, started: false, message: "巡检正在进行" });
       } else {
-        startFullScan("manual", Array.isArray(message.page_ids) ? message.page_ids : null, String(message.account_key || "")).catch((error) => setFullScanState({ status: "error", current: "", finished_at: Date.now(), error: error.message || String(error) }));
+        startFullScan("manual", Array.isArray(message.page_ids) ? message.page_ids : null, String(message.account_key || ""), String(message.store_key || ""), String(message.scan_scope || "")).catch((error) => setFullScanState({ status: "error", current: "", finished_at: Date.now(), error: error.message || String(error) }));
         sendResponse({ ok: true, started: true });
       }
       return;

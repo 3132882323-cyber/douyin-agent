@@ -26,7 +26,11 @@ let currentPreflightSession = null;
 let qianchuanSyncPromise = null;
 let oceanengineStatusPoller = null;
 let currentOperationContext = null;
+let currentOnboarding = null;
+let currentConnectionGuide = null;
+let qianchuanFeatureDeferred = false;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const DOUDIAN_SCAN_PAGE_IDS = ["overview", "orders", "refunds", "products", "inventory", "reviews", "shelf", "live", "short_video", "image_text", "recommend_card"];
 
 const ROLE_WORKBENCH = {
   "货架商品": {
@@ -101,7 +105,7 @@ function workbenchTasks() {
 }
 
 function templateCheckKey(taskId) {
-  return `${localDateKey()}:${workbenchScene}:${currentRole}:${taskId}`;
+  return `${selectedStoreKey || "unscoped"}:${localDateKey()}:${workbenchScene}:${currentRole}:${taskId}`;
 }
 
 function renderWorkbench() {
@@ -257,6 +261,7 @@ function appendCopyAction(card, params) {
 }
 
 let selectedQianchuanAccount = "";
+let selectedStoreKey = "";
 let accountSelectionRequired = false;
 
 async function pollFullScan() {
@@ -265,7 +270,10 @@ async function pollFullScan() {
 }
 
 async function bridgeFetch(path, options = {}) {
-  const response = await fetch(`${BRIDGE_URL}${path}`, { cache: "no-store", ...options });
+  const headers = { ...(options.headers || {}) };
+  if (options.method && options.method !== "GET") headers["X-Dian-Agent"] ||= "2";
+  if (options.body) headers["Content-Type"] ||= "application/json";
+  const response = await fetch(`${BRIDGE_URL}${path}`, { cache: "no-store", ...options, headers });
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(value.error || `本地 Agent 返回 HTTP ${response.status}`);
   return value;
@@ -432,17 +440,17 @@ function renderFullScan(scan = {}) {
   }
   const state = document.getElementById("scan-state");
   const labels = { idle: "未运行", running: "巡检中", completed: "已完成", partial: "部分完成", cancelled: "已停止", interrupted: "已中断", error: "失败" };
-  state.textContent = labels[scan.status] || "未运行";
+  state.textContent = scan.scope === "quick" && scan.status === "completed" ? "首诊断完成" : labels[scan.status] || "未运行";
   state.className = `scan-tag ${running || scan.status === "completed" ? "ok" : ["partial", "interrupted"].includes(scan.status) ? "warn" : scan.status === "error" ? "error" : "idle"}`;
   const total = Number(scan.total || 18);
   const index = Number(scan.index || 0);
   document.getElementById("scan-progress-bar").style.width = `${Math.min(100, total ? index / total * 100 : 0)}%`;
-  document.getElementById("scan-detail").textContent = running ? `正在采集：${scan.current || "准备中"}（${index}/${total}）` : scan.finished_at ? `上次完成：成功 ${scan.success || 0}，失败 ${scan.failed || 0}` : "按清单自动打开页面并采集，不需要 API";
+  document.getElementById("scan-detail").textContent = running ? `正在${scan.scope === "quick" ? "首诊断" : "采集"}：${scan.current || "准备中"}（${index}/${total}）` : scan.finished_at ? `${scan.scope === "quick" ? "首诊断" : "上次巡检"}：成功 ${scan.success || 0}，失败 ${scan.failed || 0}` : "按清单自动打开页面并采集，不需要 API";
   const rows = (scan.results || []).reduce((sum, item) => sum + Number(item.quality?.row_count || 0), 0);
   const virtualPasses = (scan.results || []).reduce((sum, item) => sum + Number(item.quality?.virtual_scroll_passes || 0), 0);
   document.getElementById("scan-summary").textContent = scan.error ? `失败原因：${scan.error}` : `成功 ${scan.success || 0} 页，失败 ${scan.failed || 0} 页，低质量 ${scan.low_quality || 0} 页；读取 ${rows} 行，滚动采集 ${virtualPasses} 次`;
-  document.getElementById("full-scan-button").disabled = running || accountSelectionRequired;
-  document.getElementById("full-scan-button").textContent = running ? "正在自动获取…" : accountSelectionRequired ? "请先选择千川账号" : "自动获取全店数据";
+  document.getElementById("full-scan-button").disabled = running || !selectedStoreKey;
+  document.getElementById("full-scan-button").textContent = running ? "正在自动获取…" : !selectedStoreKey ? "请先选择店铺" : "自动获取全店数据";
   document.getElementById("cancel-scan-button").hidden = !running;
   document.getElementById("retry-scan-button").hidden = running || !(scan.failed > 0);
   renderScanReceipt(scanReceiptFromStatus(scan));
@@ -763,11 +771,12 @@ function renderValueLedger(ledger = {}) {
     ? `${summary.effective_actions || 0}/${evaluated} 项有效`
     : `${summary.waiting_review || 0} 项待复查`;
   renderMetricStrip("value-ledger-metrics", {
+    已完成任务: summary.completed_tasks || 0,
+    等待复盘: summary.tasks_waiting_review || 0,
     已验收动作: summary.verified_actions || 0,
     已完成复盘: evaluated,
     有效率: summary.effective_rate == null ? "--" : `${summary.effective_rate}%`,
     受控预算幅度: `¥${summary.protected_budget_capacity || 0}`,
-    暂停计划: summary.paused_plans || 0,
   });
   document.getElementById("value-ledger-note").textContent = ledger.note || "价值账本只记录已回读、可复核的数据。";
 }
@@ -835,6 +844,8 @@ function taskCard(item, options = {}) {
   const queuePrefix = options.queueIndex ? `第 ${options.queueIndex} 项 · ` : "";
   meta.textContent = `${queuePrefix}${item.level === "high" ? "立即处理" : item.level === "opportunity" ? "增长机会" : "今日处理"} · ${owner || "运营"}`;
   const title = document.createElement("strong"); title.textContent = item.title || "运营任务";
+  const assignee = document.createElement("div"); assignee.className = "task-assignee";
+  assignee.textContent = `负责人：${item.assignee || item.owner || "待分配"}${item.last_operator ? ` · 最近操作：${item.last_operator}` : ""}`;
   const action = document.createElement("p");
   const actionLabel = document.createElement("b"); actionLabel.textContent = "下一步：";
   action.append(actionLabel, document.createTextNode(item.action || item.suggestion || "请先回到后台核对数据。"));
@@ -852,26 +863,49 @@ function taskCard(item, options = {}) {
   const evidence = document.createElement("small"); evidence.textContent = `数据依据：${item.evidence || "当前页面数据"}`;
   const acceptance = document.createElement("small"); acceptance.textContent = `完成后检查：${item.acceptance || "确认后台数据已经更新"}`;
   detail.append(detailSummary, evidence, acceptance);
-  card.append(meta, title, action, chips, detail);
+  card.append(meta, title, assignee, action, chips, detail);
   appendCopyAction(card, item.action_params);
   if (item.id) {
     const actions = document.createElement("div"); actions.className = "task-actions";
     const statusLabel = document.createElement("span");
-    const labels = { todo: "待处理", doing: "进行中", observing: "待观察", done: "已完成" };
+    const labels = { todo: "待处理", doing: "进行中", observing: "等待复盘", blocked: "已阻止", done: "已完成" };
     statusLabel.textContent = labels[item.status] || "待处理";
-    const transitions = item.status === "todo" ? [["开始处理", "doing"]]
-      : item.status === "doing" ? [["转待观察", "observing"], ["完成", "done"]]
-      : item.status === "observing" ? [["完成", "done"]] : [["重新打开", "todo"]];
+    const transitions = item.status === "todo" ? [["开始处理", "doing"], ["转交", "transfer"], ["阻止", "blocked"]]
+      : item.status === "doing" ? [["等待复盘", "observing"], ["完成", "done"], ["转交", "transfer"], ["阻止", "blocked"]]
+      : item.status === "observing" ? [["完成", "done"], ["继续处理", "doing"], ["转交", "transfer"], ["阻止", "blocked"]]
+      : item.status === "blocked" ? [["解除阻止", "todo"], ["转交", "transfer"]]
+      : [["重新打开", "todo"]];
     actions.append(statusLabel);
     transitions.forEach(([label, status]) => {
       const button = document.createElement("button"); button.textContent = label; button.setAttribute("aria-label", `${label}：${item.title || '任务'}`);
       button.addEventListener("click", async () => {
         button.disabled = true;
+        let nextStatus = status;
+        let nextAssignee = "";
+        let note = "";
+        if (status === "transfer") {
+          nextAssignee = window.prompt("转交给谁？请输入负责人姓名或岗位", item.assignee || item.owner || "")?.trim() || "";
+          if (!nextAssignee) { button.disabled = false; return; }
+          nextStatus = item.status || "todo";
+        }
+        if (status === "blocked") {
+          note = window.prompt("为什么阻止这项任务？请填写恢复处理前必须解决的问题", item.blocked_reason || "")?.trim() || "";
+          if (!note) { button.disabled = false; return; }
+        }
         // When starting a task, save a suggestion snapshot for effectiveness tracking
-        if (status === "doing" && item.status === "todo") {
+        if (nextStatus === "doing" && item.status === "todo") {
           bridgeFetch("/tasks/track", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ task_id: item.id, context: { title: item.title, owner: item.owner } }) }).catch(() => undefined);
         }
-        await bridgeFetch("/tasks/update", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ task_id: item.id, status }) });
+        await bridgeFetch("/tasks/update", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({
+          task_id: item.id,
+          status: nextStatus,
+          operator: currentRole,
+          assignee: nextAssignee,
+          note,
+          title: item.title,
+          owner: item.owner,
+          store_key: selectedStoreKey,
+        }) });
         await loadDashboard();
       });
       actions.append(button);
@@ -953,7 +987,7 @@ function renderQueueStats(items = []) {
     ["紧急", items.filter((item) => item.level === "high").length, "urgent"],
     ["待开始", items.filter((item) => !item.status || item.status === "todo").length, "todo"],
     ["进行中", items.filter((item) => item.status === "doing").length, "doing"],
-    ["待观察", items.filter((item) => item.status === "observing").length, "observing"],
+    ["待复盘/阻止", items.filter((item) => ["observing", "blocked"].includes(item.status)).length, "blocked"],
   ];
   container.replaceChildren(...stats.map(([label, value, tone]) => {
     const item = document.createElement("div");
@@ -995,13 +1029,22 @@ function renderPriorityReminder() {
   const tasks = currentOps ? roleTasks(currentOps, false) : [];
   const urgent = tasks.find((item) => item.level === "high");
   const blockers = context.blockers || [];
-  if (context.state === "blocked" || context.state === "review" || blockers.length) {
+  if (context.state === "blocked" || blockers.length) {
     panel.hidden = false;
     panel.className = "priority-reminder";
     title.textContent = context.state === "blocked" ? "经营数据未准备好，暂时不要直接做投放决策" : "重要数据需要复核";
     detail.textContent = context.next_action || blockers[0] || "请先完成一次全店巡检并核对当前店铺。";
     button.textContent = context.selected_store?.key ? "立即补齐数据" : "选择并绑定店铺";
     button.dataset.mode = "data";
+    return;
+  }
+  if (context.state === "review") {
+    panel.hidden = false;
+    panel.className = "priority-reminder review";
+    title.textContent = "经营数据可用，部分建议需要人工复核";
+    detail.textContent = context.next_action || "纯抖店巡店和第一条诊断可以继续；资金与投放动作仍不会自动执行。";
+    button.textContent = "查看数据体检";
+    button.dataset.mode = "review";
     return;
   }
   if (urgent) {
@@ -1246,11 +1289,11 @@ function startOceanEngineStatusPolling() {
 function renderQianchuanAccounts(payload = {}) {
   const select = document.getElementById("qianchuan-account-select");
   const accounts = payload.stores || payload.accounts || [];
-  const analysisAccountKey = String(payload.selected_account_key || "");
+  const analysisStoreKey = String(payload.selected_store_key || "");
   // The Agent setting is the only source of truth. Never silently fall back to
   // another store because a stale browser preference can mix operational context.
-  const activeKey = accounts.some((account) => account.key === analysisAccountKey)
-    ? analysisAccountKey
+  const activeKey = accounts.some((account) => account.key === analysisStoreKey)
+    ? analysisStoreKey
     : "";
   const analysisAccount = accounts.find((account) => account.key === activeKey);
   select.replaceChildren();
@@ -1258,24 +1301,18 @@ function renderQianchuanAccounts(payload = {}) {
   current.value = "";
   current.textContent = accounts.length ? "请选择当前店铺" : "尚未识别店铺";
   select.append(current);
-  const labelCounts = accounts.reduce((counts, account) => {
-    const label = String(account.label || "未命名账号");
-    counts.set(label, (counts.get(label) || 0) + 1);
-    return counts;
-  }, new Map());
   accounts.forEach((account) => {
     const option = document.createElement("option");
     option.value = account.key;
-    const duplicate = (labelCounts.get(String(account.label || "未命名账号")) || 0) > 1;
-    const suffix = String(account.key || "").slice(-4).toUpperCase();
-    const accountLabel = duplicate ? `${account.label} · ${suffix}` : account.label;
+    const accountLabel = account.label || `匿名店铺 ${String(account.key || "").slice(-4).toUpperCase()}`;
     const stateLabel = account.state_label || (account.channel === "official_api" ? "官方 API" : "网页");
     option.textContent = `${accountLabel} · ${stateLabel}`;
     select.append(option);
   });
-  selectedQianchuanAccount = activeKey;
+  selectedStoreKey = activeKey;
+  selectedQianchuanAccount = String(payload.selected_account_key || "");
   select.value = activeKey;
-  chrome.storage.local.set({ scanAccountPreference: activeKey });
+  chrome.storage.local.set({ scanStorePreference: activeKey, scanAccountPreference: selectedQianchuanAccount });
   accountSelectionRequired = !activeKey;
   const scanButton = document.getElementById("full-scan-button");
   scanButton.disabled = !activeKey;
@@ -1283,37 +1320,99 @@ function renderQianchuanAccounts(payload = {}) {
   document.getElementById("active-store-name").textContent = analysisAccount?.label || "尚未识别店铺";
   document.getElementById("store-mode-summary").textContent = analysisAccount
     ? `${payload.store_count || accounts.length} 个店铺 · 当前${analysisAccount.state_label || "数据已隔离"} · 建议与日志仅使用本店数据`
-    : "授权官方 API 或绑定一个已登录千川页面后开始。";
+    : "请先打开抖店经营概览完成匿名店铺识别；千川不是首次使用的必选项。";
   document.getElementById("qianchuan-account-hint").textContent = analysisAccount
-    ? `当前巡检固定为“${analysisAccount.label}”；不会读取或混合其他店铺数据。`
-    : "尚未选择店铺，本次不会启动千川巡检。";
+    ? selectedQianchuanAccount
+      ? `当前巡检固定为“${analysisAccount.label}”，并使用已确认关联的匿名千川账户。`
+      : `当前巡检固定为“${analysisAccount.label}”；先使用抖店数据，千川可稍后关联。`
+    : "尚未选择店铺，本次不会启动跨页面巡检。";
+  const linkReview = document.getElementById("store-link-review");
+  const unlinked = payload.unlinked_accounts || [];
+  linkReview.hidden = !(activeKey && unlinked.length);
+  const unlinkedSelect = document.getElementById("unlinked-account-select");
+  unlinkedSelect.replaceChildren(...unlinked.map((account) => {
+    const option = document.createElement("option");
+    option.value = account.key;
+    option.textContent = account.label || `匿名千川账户 ${String(account.key || "").slice(-4).toUpperCase()}`;
+    return option;
+  }));
 }
 
 function renderOperationContext(payload = {}) {
   currentOperationContext = payload;
-  const container = document.getElementById("operation-context");
-  const state = ["ready", "review", "blocked"].includes(payload.state) ? payload.state : "checking";
-  container.className = `operation-context ${state}`;
-  document.getElementById("context-state").textContent = payload.state_label || "正在核对";
-  document.getElementById("context-store").textContent = payload.selected_store?.label || "尚未选择";
-  document.getElementById("context-source").textContent = payload.source_label || "尚未绑定";
-  document.getElementById("context-freshness").textContent = payload.freshness?.label || "暂无更新时间";
-  const coverage = payload.coverage || {};
-  document.getElementById("context-coverage").textContent = coverage.official_ready
-    ? "官方数据可用"
-    : coverage.label || "尚未体检";
-  document.getElementById("context-next-action").textContent = payload.next_action || "先补齐数据，再处理今日任务。";
-  const warnings = [...(payload.blockers || []), ...(payload.warnings || [])].slice(0, 4);
-  const warningBox = document.getElementById("context-warnings");
-  warningBox.hidden = warnings.length === 0;
-  warningBox.replaceChildren(...warnings.map((message) => {
-    const item = document.createElement("span");
-    item.textContent = message;
+  renderPriorityReminder();
+}
+
+function renderOnboarding(payload = {}) {
+  currentOnboarding = payload;
+}
+
+function renderConnectionGuide(payload = {}, catalog = {}) {
+  currentConnectionGuide = payload;
+  const guide = document.getElementById("connection-guide");
+  const guideView = globalThis.DianConnectionGuidePolicy.guideView(payload, { qianchuanDeferred: qianchuanFeatureDeferred });
+  const collapsed = guideView.collapsed;
+  guide.className = `connection-guide ${collapsed ? "collapsed" : "expanded"}`;
+  document.getElementById("connection-status-strip").hidden = !collapsed;
+  document.getElementById("connection-guide-expanded").hidden = collapsed;
+  document.getElementById("connection-level").textContent = `${payload.level || "L0"} · ${payload.level_label || "尚未连接店铺"}`;
+  document.getElementById("connection-level-compact").textContent = `${payload.level || "L0"} · ${payload.level_label || "尚未连接"}`;
+  const updatedAt = Number(payload.store?.updated_at || 0);
+  document.getElementById("connection-update-time").textContent = updatedAt
+    ? `数据更新于 ${new Date(updatedAt * 1000).toLocaleString()}` : "暂无更新时间";
+  const levels = payload.levels || [];
+  document.getElementById("connection-levels").replaceChildren(...levels.map((level) => {
+    const item = document.createElement("div");
+    item.className = level.reached ? "reached" : "pending";
+    item.setAttribute("aria-label", `${level.id} ${level.label}，${level.reached ? "已达到" : "未达到"}`);
+    const marker = document.createElement("strong"); marker.textContent = level.reached ? "✓" : "○";
+    const copy = document.createElement("span"); copy.textContent = `${level.id} ${level.label}`;
+    item.append(marker, copy);
     return item;
   }));
-  const action = document.getElementById("context-action");
-  action.textContent = state === "ready" ? "查看数据体检" : payload.selected_store?.key ? "补齐经营数据" : "选择并绑定店铺";
-  renderPriorityReminder();
+  const next = payload.next_upgrade || {};
+  document.getElementById("connection-next-title").textContent = next.label || "正在检查连接状态";
+  document.getElementById("connection-next-detail").textContent = next.failure || payload.note || "按提示完成当前步骤。";
+  document.getElementById("connection-eta").textContent = `预计：${next.eta || "约 1 分钟"}`;
+  document.getElementById("connection-value").textContent = next.value || "完成后继续下一步";
+  const action = document.getElementById("connection-guide-action");
+  action.dataset.action = guideView.actionId;
+  action.textContent = next.label || "正在检查";
+  action.disabled = !next.id;
+  const failure = document.getElementById("connection-failure-help");
+  failure.hidden = !next.failure;
+  failure.textContent = next.failure || "";
+  const storeControls = document.getElementById("connection-store-controls");
+  storeControls.hidden = !["confirm_store", "select_store"].includes(next.id);
+  document.getElementById("current-qianchuan-button").hidden = next.id !== "sync_qianchuan";
+  document.getElementById("connection-skip-qianchuan").hidden = next.id !== "sync_qianchuan";
+  if (guideView.deferred) {
+    document.getElementById("connection-skip-qianchuan").textContent = "已暂不使用，可随时再连接";
+  }
+  document.getElementById("connection-tutorial-steps").replaceChildren(...(payload.tutorial || []).map((step) => {
+    const item = document.createElement("li");
+    item.className = step.complete ? "complete" : "pending";
+    item.textContent = `${step.complete ? "已完成" : step.optional ? "可选" : "待完成"} · ${step.label}：${step.detail || ""}`;
+    return item;
+  }));
+  if (!catalog.store_count && next.id === "identify_store") storeControls.hidden = true;
+}
+
+function renderTodayFocus(ops = {}) {
+  const focus = ops.today_focus || {};
+  const topThree = focus.top_three || [];
+  document.getElementById("today-three-summary").textContent = topThree.length
+    ? topThree.map((item, index) => `${index + 1}. ${item.title || "经营任务"}`).join(" · ")
+    : "当前没有待处理任务";
+  document.getElementById("today-max-risk").textContent = focus.max_risk?.title || "当前没有高风险事项";
+  const yesterday = focus.yesterday_result;
+  document.getElementById("yesterday-action-result").textContent = yesterday
+    ? `${yesterday.status_label || "已复盘"} · ${yesterday.plan_name || "受控动作"}`
+    : "昨日暂无已完成复盘动作";
+  const unsynced = focus.unsynced_data || [];
+  document.getElementById("unsynced-data-summary").textContent = unsynced.length
+    ? `${unsynced.length} 项：${unsynced.slice(0, 2).map((item) => item.label).join("、")}`
+    : "关键经营数据已同步";
 }
 
 function renderHealthMonitor(health = {}) {
@@ -1381,19 +1480,55 @@ function renderEffectiveness(report = {}) {
 function renderAutomationReadiness(report = {}) {
   const summary = report.summary || {};
   const items = report.items || [];
+  const automationSurface = globalThis.DianConnectionGuidePolicy.automationSurface({
+    selectedAccountKey: selectedQianchuanAccount,
+    itemCount: items.length,
+    deferred: qianchuanFeatureDeferred,
+  });
+  const qianchuanConnected = ["candidates", "no_plans"].includes(automationSurface);
+  const offState = document.getElementById("automation-off-state");
+  const workflow = document.getElementById("automation-workflow");
+  offState.hidden = qianchuanConnected;
+  workflow.hidden = !qianchuanConnected;
+  if (!qianchuanConnected) {
+    const heading = offState.querySelector("strong");
+    const detail = offState.querySelector("p");
+    const skip = document.getElementById("automation-skip");
+    if (automationSurface === "deferred") {
+      heading.textContent = "已暂不使用投放功能";
+      detail.textContent = "抖店巡店与经营诊断会继续正常使用；需要投放时，再同步当前千川页即可开启。";
+      skip.textContent = "已跳过";
+      skip.disabled = true;
+    } else {
+      heading.textContent = "投放自动化尚未开启";
+      detail.textContent = "连接千川后，我们会找到可以止损、观察或放量的计划。纯抖店巡店不受影响。";
+      skip.textContent = "暂不使用投放功能";
+      skip.disabled = false;
+    }
+  }
+  document.getElementById("shadow-actions")?.closest(".module-section")?.toggleAttribute("hidden", !qianchuanConnected);
+  document.getElementById("plans")?.closest(".module-section")?.toggleAttribute("hidden", !qianchuanConnected);
+  if (!qianchuanConnected) {
+    document.getElementById("automation-status").textContent = "尚未开启 · 不影响抖店巡店";
+    setModuleActionCount("automation-candidates", 0);
+    applyModuleVisibility();
+    document.getElementById("shadow-actions")?.closest(".module-section")?.toggleAttribute("hidden", true);
+    document.getElementById("plans")?.closest(".module-section")?.toggleAttribute("hidden", true);
+    return;
+  }
   const totalActionable = Number(summary.preflight_ready || 0) + Number(summary.confirmable || 0) + Number(summary.blocked || 0);
   setModuleActionCount("automation-candidates", items.length);
   applyModuleVisibility();
   document.getElementById("automation-status").textContent = summary.preflight_ready
-    ? `${summary.preflight_ready} 项可进入执行前检查`
+    ? `${summary.preflight_ready} 项等你确认`
     : summary.confirmable
-      ? `${summary.confirmable} 项等待授权`
-      : items.length ? "条件待补齐" : "等待千川数据";
+      ? `${summary.confirmable} 项可以继续`
+      : items.length ? "需要补数据" : "已连接，等待计划数据";
   renderMetricStrip("automation-summary", {
-    可进入检查: summary.preflight_ready || 0,
-    等待授权: summary.confirmable || 0,
-    暂时阻止: summary.blocked || 0,
-    仅人工处理: summary.manual_only || 0,
+    等你确认: summary.preflight_ready || 0,
+    可以继续: summary.confirmable || 0,
+    需要补数据: summary.blocked || 0,
+    请手动处理: summary.manual_only || 0,
   });
 
   const criteria = document.getElementById("automation-criteria-list");
@@ -1404,7 +1539,7 @@ function renderAutomationReadiness(report = {}) {
   }));
 
   const container = document.getElementById("automation-candidates");
-  if (!items.length) return empty(container, "同步千川计划后，这里会显示哪些动作可授权、哪些被阻止以及下一步怎么补齐。");
+  if (!items.length) return empty(container, "千川账户已经连接，但当前页还没有发现可分析的计划。请打开一个计划页并同步当前千川页。");
   container.className = "stack";
   container.replaceChildren(...items.slice(0, 10).map((item) => {
     const card = document.createElement("article");
@@ -1471,16 +1606,19 @@ function renderExecutionPreflight(report = {}) {
   const panel = document.getElementById("execution-preflight");
   const state = report.state || "idle";
   currentPreflightSession = report.session || null;
-  const stages = [...document.querySelectorAll("[data-automation-stage]")];
+  const stages = [...document.querySelectorAll("[data-automation-step]")];
   stages.forEach((stage) => stage.classList.remove("done", "current"));
-  const stageMap = Object.fromEntries(stages.map((stage) => [stage.dataset.automationStage, stage]));
-  stageMap.diagnosis?.classList.add("done");
-  if (state === "idle") {
-    stageMap.qualification?.classList.add("current");
+  const stageMap = Object.fromEntries(stages.map((stage) => [stage.dataset.automationStep, stage]));
+  const activeStep = globalThis.DianConnectionGuidePolicy.automationStep(state);
+  if (activeStep === "proposal") {
+    stageMap.proposal?.classList.add("current");
+  } else if (activeStep === "authorization") {
+    stageMap.proposal?.classList.add("done");
+    stageMap.authorization?.classList.add("current");
   } else {
-    stageMap.qualification?.classList.add("done");
+    stageMap.proposal?.classList.add("done");
     stageMap.authorization?.classList.add("done");
-    stageMap.preflight?.classList.add("current");
+    stageMap.result?.classList.add("current");
   }
   panel.hidden = state === "idle";
   panel.className = `execution-preflight${state === "ready_for_final_confirmation" ? " ready" : state === "blocked" || state === "expired" ? " blocked" : state === "stopped" ? " stopped" : ""}`;
@@ -1668,6 +1806,216 @@ async function refreshExecutionPreflight() {
   renderExecutionPreflight(report);
 }
 
+function formatVersion(value, prefix = "v") {
+  const text = String(value || "").trim();
+  return text ? `${prefix}${text.replace(/^v/i, "")}` : "暂无";
+}
+
+function browserFamily() {
+  const agent = navigator.userAgent || "";
+  if (/Edg\//.test(agent)) return "edge";
+  if (/QQBrowser\//.test(agent)) return "qq";
+  if (/360(?:SE|EE)|QIHU/i.test(agent)) return "360";
+  return /Chrome\//.test(agent) ? "chrome" : "unknown";
+}
+
+async function reportExtensionInstallSource() {
+  const manifest = chrome.runtime.getManifest();
+  const browser = browserFamily();
+  const storeSources = {
+    chrome: "chrome_web_store",
+    edge: "edge_addons",
+    "360": "360_extension_store",
+  };
+  const source = manifest.update_url ? (storeSources[browser] || "chrome_web_store") : "unpacked";
+  return bridgeFetch("/distribution/extension-source", {
+    method: "POST",
+    body: JSON.stringify({
+      source,
+      browser,
+      version: manifest.version,
+      extension_id: chrome.runtime.id || "",
+    }),
+  });
+}
+
+function renderReleaseCheck(checks, id, stateId, noteId, readyText, blockedText) {
+  const check = checks.find((item) => item?.id === id) || {};
+  const state = document.getElementById(stateId);
+  state.className = `status-dot ${check.ready ? "ready" : "blocked"}`;
+  document.getElementById(noteId).textContent = check.ready ? readyText : blockedText;
+}
+
+function renderSystemStatus(system = {}) {
+  const database = system.database || {};
+  const knowledge = system.knowledge || {};
+  const update = system.update || {};
+  const scan = system.scan || {};
+  const telemetry = system.telemetry || {};
+  const localQueue = telemetry.local_queue || {};
+  const distribution = system.distribution || {};
+  const extensionDistribution = distribution.extension || {};
+  const release = system.release_readiness || {};
+  const runtime = system.runtime || {};
+  const checks = Array.isArray(release.checks) ? release.checks : [];
+  const manifestVersion = chrome.runtime.getManifest()?.version || "";
+  const versionCompatible = !system.required_extension_version || manifestVersion === system.required_extension_version;
+  document.getElementById("agent-version").textContent = formatVersion(system.agent_version);
+  document.getElementById("agent-version-note").textContent = runtime.state === "healthy"
+    ? (runtime.last_recovery_at ? "自动启动正常 · 最近已自愈" : "自动启动与保活正常")
+    : runtime.autostart_enabled
+      ? (runtime.last_error ? `保活需要处理：${runtime.last_error}` : "自动启动已配置，等待健康记录")
+      : "仅监听本机 · 尚未确认自动启动";
+  document.getElementById("extension-version").textContent = formatVersion(manifestVersion);
+  document.getElementById("knowledge-version").textContent = formatVersion(knowledge.version);
+  document.getElementById("database-version").textContent = database.schema_version ? `Schema ${database.schema_version}` : "等待初始化";
+  document.getElementById("database-status").textContent = database.status_label || "店铺数据仅保存在本机";
+  document.getElementById("knowledge-expiry").textContent = knowledge.expires_at ? `有效期至 ${knowledge.expires_at.slice(0, 10)}` : "内置离线规则";
+  document.getElementById("last-scan-at").textContent = scan.last_success_at || "暂无成功巡检";
+  document.getElementById("stale-page-count").textContent = `${Number(scan.stale_page_count || 0)} 页`;
+  document.getElementById("telemetry-opt-in").checked = Boolean(telemetry.enabled);
+  const channel = document.getElementById("update-channel");
+  if (system.channel) channel.value = system.channel;
+  const readiness = document.getElementById("system-readiness");
+  const productOperational = system.product_operational ?? system.ready !== false;
+  const publicDistributionReady = system.public_distribution_ready === true;
+  const healthy = productOperational && database.status !== "error" && knowledge.status !== "error" && versionCompatible;
+  readiness.textContent = healthy ? "可离线判断" : "需要处理";
+  readiness.className = healthy ? "ready" : versionCompatible ? "error" : "warn";
+  document.getElementById("system-update-state").textContent = system.ai_required ? "需要 AI 服务" : "本地运行 · AI 可选";
+  const releaseState = document.getElementById("release-readiness-state");
+  if (publicDistributionReady) {
+    releaseState.textContent = "可公开发行";
+    releaseState.className = "ready";
+  } else if (productOperational) {
+    releaseState.textContent = "本地可用 · 发行受阻";
+    releaseState.className = "blocked";
+  } else {
+    releaseState.textContent = "本地能力未就绪";
+    releaseState.className = "blocked";
+  }
+  const blockers = Array.isArray(release.blockers) ? release.blockers : [];
+  document.getElementById("release-readiness-summary").textContent = publicDistributionReady
+    ? "本地能力与公开发行证据均已通过，可进入正式发布流程。"
+    : productOperational
+      ? `本地 Agent 可正常使用；公开推广仍有 ${blockers.length || 3} 项硬性条件未完成。`
+      : "请先恢复本地数据库、知识包和版本一致性，再处理公开发行条件。";
+  renderReleaseCheck(checks, "production_ed25519_trust", "release-ed25519-state", "release-ed25519-note", "生产信任锚已嵌入", "缺少生产 Ed25519 公钥");
+  renderReleaseCheck(checks, "windows_authenticode", "release-authenticode-state", "release-authenticode-note", "完整发布链签名已确认", "Agent、更新器或安装升级入口签名未完整");
+  renderReleaseCheck(checks, "browser_store_publication", "release-store-state", "release-store-note", "当前扩展商店来源与版本已确认", "商店发布、官方扩展 ID、来源或版本未全部核验");
+  const sourceLabels = {
+    unpacked: "开发者模式加载",
+    release_bundle: "离线发布包",
+    chrome_web_store: "Chrome 商店",
+    edge_addons: "Edge 商店",
+    "360_extension_store": "360 扩展商店",
+  };
+  document.getElementById("extension-install-source").textContent = sourceLabels[extensionDistribution.source] || "尚未上报";
+  const queuedCount = Number(localQueue.queued_count || 0);
+  document.getElementById("feedback-queue-state").textContent = telemetry.enabled ? `已同意 · 本地 ${queuedCount} 条` : `默认关闭 · 本地 ${queuedCount} 条`;
+  document.getElementById("feedback-queue-note").textContent = localQueue.status === "error"
+    ? `本地匿名反馈队列异常：${localQueue.error || "无法读取"}`
+    : telemetry.enabled
+      ? `仅保存已允许的粗粒度字段，本地排队 ${queuedCount} 条；当前不会自动上传。`
+      : `未同意时不会入队；现有 ${queuedCount} 条仅保存在本机，可随时清空。`;
+  const industry = knowledge.industry || "general";
+  document.getElementById("industry-pack-state").textContent = `${industry} · ${formatVersion(knowledge.version)} · ${knowledge.source === "active" ? "已导入" : "内置"}`;
+  const importButton = document.getElementById("import-industry-pack");
+  importButton.disabled = !knowledge.local_import_supported || !knowledge.local_import_trust_configured;
+  importButton.title = knowledge.local_import_trust_configured
+    ? "导入经过 Ed25519 验签的行业知识包"
+    : "尚未配置行业知识包验签公钥，已按安全策略禁用导入";
+  const message = document.getElementById("update-message");
+  message.className = `update-message ${update.error ? "error" : update.available ? "warn" : ""}`.trim();
+  const updateText = update.error || update.message || "经营判断在本机完成；不连接 AI 也可正常诊断。";
+  const offlineUpgradeText = system.offline_upgrade_production_available
+    ? " 程序和扩展暂不支持在线升级，请使用已签名的生产离线升级包。"
+    : " 离线签名机制已就绪，但生产信任锚尚未配置，生产离线升级暂不可用；development_test 包仅限开发测试。";
+  message.textContent = !versionCompatible
+    ? `版本不一致：本地 Agent ${formatVersion(system.agent_version)}，扩展 ${formatVersion(manifestVersion)}。请使用同一个升级包更新。`
+    : `${updateText}${system.program_update_mode === "offline_bundle" && !update.available ? offlineUpgradeText : ""}`;
+  document.getElementById("apply-knowledge-update").disabled = !update.knowledge_available;
+  document.getElementById("rollback-knowledge").disabled = !knowledge.rollback_available;
+}
+
+async function loadSystemStatus() {
+  try {
+    const system = await bridgeFetch("/system/status");
+    renderSystemStatus(system);
+    return system;
+  } catch (error) {
+    renderSystemStatus({ ready: false, update: { error: error.message || "版本状态读取失败" } });
+    return null;
+  }
+}
+
+async function runUpdateAction(path, pendingText) {
+  const message = document.getElementById("update-message");
+  message.className = "update-message";
+  message.textContent = pendingText;
+  const channel = document.getElementById("update-channel").value;
+  try {
+    const result = await bridgeFetch(path, { method: "POST", body: JSON.stringify({ channel, component: "knowledge" }) });
+    message.textContent = result.message || "操作已完成";
+  } catch (error) {
+    message.className = "update-message error";
+    message.textContent = error.message || "操作失败，已保留当前可用版本";
+  }
+  await loadSystemStatus();
+}
+
+function renderOperatorMemory(memory = {}) {
+  const status = document.getElementById("operator-memory-status");
+  const note = document.getElementById("operator-memory-note");
+  const list = document.getElementById("operator-memory-list");
+  if (!status || !note || !list) return;
+  const entries = Array.isArray(memory.entries) ? memory.entries : [];
+  const scope = memory.scope || {};
+  if (!scope.store_key) {
+    status.textContent = "请先选择店铺";
+    note.textContent = memory.note || "选择当前店铺并完成绑定后，经营记忆才会生效。";
+    return empty(list, "尚未选择当前店铺，系统不会把不同店铺的经验混在一起。");
+  }
+  status.textContent = `${entries.length} 条可复用经验`;
+  note.textContent = memory.note || "记忆只对当前店铺和千川账号生效。";
+  if (!entries.length) return empty(list, "还没有经营记忆。可以先保存一条库存红线、投放策略或动作复盘。 ");
+  list.className = "operator-memory-list";
+  const labels = { fact: "事实", strategy: "策略", preference: "偏好", outcome: "结果" };
+  const confidenceLabels = { low: "低置信", medium: "待验证", high: "高置信" };
+  list.replaceChildren(...entries.slice(0, 12).map((item) => {
+    const card = document.createElement("article");
+    card.className = `operator-memory-item ${item.confidence || "medium"}`;
+    const head = document.createElement("div"); head.className = "operator-memory-item-head";
+    const title = document.createElement("strong"); title.textContent = item.title || "未命名记忆";
+    const tag = document.createElement("span"); tag.textContent = `${labels[item.type] || "经验"} · ${confidenceLabels[item.confidence] || "待验证"}`;
+    head.append(title, tag);
+    const value = document.createElement("p"); value.textContent = item.value || "";
+    const meta = document.createElement("small"); meta.textContent = item.updated_at ? `更新于 ${item.updated_at}` : "本地记忆";
+    const archive = document.createElement("button"); archive.type = "button"; archive.className = "secondary"; archive.textContent = "归档";
+    archive.addEventListener("click", async () => {
+      archive.disabled = true;
+      try {
+        await bridgeFetch("/memory/archive", { method: "POST", body: JSON.stringify({ id: item.id }) });
+        await loadOperatorMemory();
+      } catch (error) {
+        archive.disabled = false;
+        meta.textContent = error.message || "归档失败";
+      }
+    });
+    card.append(head, value, meta, archive);
+    return card;
+  }));
+}
+
+async function loadOperatorMemory() {
+  try {
+    const memory = await bridgeFetch("/memory");
+    renderOperatorMemory(memory);
+  } catch (error) {
+    renderOperatorMemory({ note: error.message || "经营记忆暂时无法读取" });
+  }
+}
+
 async function loadDashboard() {
   // Show loading skeleton
   showLoadingSkeleton();
@@ -1676,7 +2024,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, healthR, effectivenessR, readinessR, stopLossR, strategySimulationR, preflightR, shadowR, executionEffectivenessR, valueLedgerR, integrationsR, oceanengineR, oceanengineSyncR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, onboardingR, healthR, effectivenessR, readinessR, stopLossR, strategySimulationR, preflightR, shadowR, executionEffectivenessR, valueLedgerR, integrationsR, oceanengineR, oceanengineSyncR, connectionGuideR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -1686,6 +2034,7 @@ async function loadDashboard() {
     bridgeFetch("/trends?days=7"),
     bridgeFetch("/qianchuan-accounts"),
     bridgeFetch("/operation-context"),
+    bridgeFetch("/onboarding/status"),
     bridgeFetch("/health-monitor"),
     bridgeFetch("/effectiveness"),
     bridgeFetch("/actions/readiness"),
@@ -1698,6 +2047,7 @@ async function loadDashboard() {
     bridgeFetch("/integrations"),
     bridgeFetch("/oauth/oceanengine/status"),
     bridgeFetch("/oauth/oceanengine/sync-status"),
+    bridgeFetch("/connection-guide"),
   ]);
 
   const val = (r, fallback) => r.status === "fulfilled" ? r.value : fallback;
@@ -1709,6 +2059,7 @@ async function loadDashboard() {
   const trends = val(trendsR, {});
   const accounts = val(accountsR, { accounts: [], selected_account_key: "" });
   const operationContext = val(contextR, { state: "blocked", state_label: "经营上下文读取失败", blockers: ["请刷新后重试"] });
+  const onboarding = val(onboardingR, { status: "in_progress", progress: { completed: 1, total: 5 }, steps: [], current_step: { label: "环境检查", action: "none" } });
   const health = val(healthR, {});
   const effectiveness = val(effectivenessR, {});
   const readiness = val(readinessR, { items: [], summary: {}, criteria: [] });
@@ -1721,6 +2072,11 @@ async function loadDashboard() {
   const integrations = val(integrationsR, { feishu: { configured: false }, dingtalk: { configured: false }, auto_send_reports: false });
   const oceanengine = val(oceanengineR, { app_id: "1871942906223351", connected: false, secret_saved: false, accounts: [] });
   const oceanengineSync = val(oceanengineSyncR, { synced_at: null });
+  const connectionGuide = val(connectionGuideR, {
+    level: "L0", level_label: "连接状态读取失败", collapsed: false, levels: [],
+    next_upgrade: { id: "identify_store", label: "重新识别抖店", eta: "约 1 分钟", value: "恢复后继续经营诊断", failure: "连接向导暂时无法读取。现在请刷新后重新识别。" },
+    tutorial: [], operation_context: operationContext, onboarding,
+  });
 
   // Hide loading skeleton
   hideLoadingSkeleton();
@@ -1736,10 +2092,12 @@ async function loadDashboard() {
   renderConnection(true, "本地 Agent 已连接", `已读取 ${insights.coverage?.length || 0} 类页面快照`);
   document.getElementById("headline").textContent = insights.headline || "经营数据已同步";
   document.getElementById("summary").textContent = insights.summary || "请查看下方建议。";
-  renderOperationContext(operationContext);
+  renderOperationContext(connectionGuide.operation_context || operationContext);
+  renderOnboarding(connectionGuide.onboarding || onboarding);
   renderPlans(actionCenter.plan_recommendations || []);
   renderInventory(actionCenter.inventory_alerts || []);
   renderOperations(ops, actionCenter.shelf_analysis || {}, actionCenter.live_analysis || {}, actionCenter.creative_analysis || {}, insights.coverage || []);
+  renderTodayFocus(ops);
   renderAlerts(insights.alerts || []);
   renderCoverage(insights.coverage || []);
   renderSettings(settings);
@@ -1747,6 +2105,7 @@ async function loadDashboard() {
   renderOceanEngineOAuth(oceanengine);
   renderOceanEngineSync(oceanengineSync);
   renderQianchuanAccounts(accounts);
+  renderConnectionGuide(connectionGuide, accounts);
   renderFullScan(extensionResponse?.dashboard?.fullScan || {});
   renderTrends(trends);
   renderHealthMonitor(health);
@@ -1758,6 +2117,8 @@ async function loadDashboard() {
   renderShadowExecution(shadow);
   renderExecutionEffectiveness(executionEffectiveness);
   renderValueLedger(valueLedger);
+  await loadSystemStatus();
+  await loadOperatorMemory();
 
   // Restore focus if the focused element still exists
   if (focusId) {
@@ -1847,15 +2208,6 @@ async function syncRecentQianchuanPage() {
     const hint = document.getElementById("qianchuan-account-hint");
     setQianchuanSyncUi("syncing", "正在读取最近页面");
     try {
-      selectedQianchuanAccount = "";
-      accountSelectionRequired = false;
-      document.getElementById("qianchuan-account-select").value = "";
-      await chrome.storage.local.set({ scanAccountPreference: "" });
-      await bridgeFetch("/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" },
-        body: JSON.stringify({ qianchuan_account_key: "" }),
-      });
       const response = await chrome.runtime.sendMessage({ type: "sync-current-qianchuan" });
       if (!response?.ok) throw new Error(response?.error || "同步失败");
       const result = response.result || {};
@@ -1870,6 +2222,8 @@ async function syncRecentQianchuanPage() {
         tab_id: result.tab?.id || null,
       };
       await chrome.storage.local.set({ lastQianchuanManualSync: record });
+      qianchuanFeatureDeferred = false;
+      await chrome.storage.local.set({ qianchuanFeatureDeferred: false });
       await loadDashboard();
       hint.textContent = `已同步最近访问的${pageLabel}${accountLabel ? ` · ${accountLabel}` : ""}。后续巡检会优先复用这个千川标签页。`;
       setQianchuanSyncUi("success", `${accountLabel || pageLabel} · ${shortSyncTime(timestamp)}`);
@@ -1888,14 +2242,16 @@ async function syncRecentQianchuanPage() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanAccountPreference", "lastQianchuanManualSync"]);
+  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanStorePreference", "scanAccountPreference", "lastQianchuanManualSync", "qianchuanFeatureDeferred"]);
   if (stored.preferredRole) currentRole = ROLE_MIGRATION[stored.preferredRole] || stored.preferredRole;
   if (!ROLE_WORKBENCH[currentRole]) currentRole = "货架商品";
   if (SCENE_WORKBENCH[stored.workbenchScene]) workbenchScene = stored.workbenchScene;
   selectedQianchuanAccount = String(stored.scanAccountPreference || "");
+  selectedStoreKey = String(stored.scanStorePreference || "");
+  qianchuanFeatureDeferred = Boolean(stored.qianchuanFeatureDeferred);
   if (stored.templateChecks && typeof stored.templateChecks === "object") {
-    const today = `${localDateKey()}:`;
-    templateChecks = Object.fromEntries(Object.entries(stored.templateChecks).filter(([key]) => key.startsWith(today)));
+    const todayScope = `${selectedStoreKey || "unscoped"}:${localDateKey()}:`;
+    templateChecks = Object.fromEntries(Object.entries(stored.templateChecks).filter(([key]) => key.startsWith(todayScope)));
     await chrome.storage.local.set({ templateChecks });
   }
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item.dataset.role === currentRole));
@@ -1903,10 +2259,87 @@ document.addEventListener("DOMContentLoaded", async () => {
   restoreQianchuanSyncUi(stored.lastQianchuanManualSync || {});
   renderWorkbench();
   applyModuleVisibility();
+  await reportExtensionInstallSource().catch(() => undefined);
   refreshAll(false);
 });
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
 document.getElementById("sync-diagnose").addEventListener("click", () => refreshAll(true));
+document.getElementById("operator-memory-refresh").addEventListener("click", () => loadOperatorMemory());
+document.getElementById("check-updates").addEventListener("click", () => runUpdateAction("/updates/check", "正在检查 Agent、扩展与知识包版本…"));
+document.getElementById("apply-knowledge-update").addEventListener("click", () => runUpdateAction("/updates/apply", "正在验证并切换新的知识包…"));
+document.getElementById("rollback-knowledge").addEventListener("click", () => runUpdateAction("/updates/rollback", "正在恢复上一个已验证的知识包…"));
+document.getElementById("import-industry-pack").addEventListener("click", () => document.getElementById("industry-pack-file").click());
+document.getElementById("industry-pack-file").addEventListener("change", async (event) => {
+  const file = event.currentTarget.files?.[0];
+  if (!file) return;
+  const message = document.getElementById("update-message");
+  message.className = "update-message";
+  message.textContent = "正在验签并导入行业知识包…";
+  try {
+    const pack = JSON.parse(await file.text());
+    const result = await bridgeFetch("/rules/import-local", { method: "POST", body: JSON.stringify({ pack }) });
+    message.textContent = result.message || "行业知识包已导入并启用";
+  } catch (error) {
+    message.className = "update-message error";
+    message.textContent = error.message || "行业知识包导入失败，当前版本未改变";
+  } finally {
+    event.currentTarget.value = "";
+    await loadSystemStatus();
+  }
+});
+document.getElementById("clear-feedback-queue").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const result = await bridgeFetch("/telemetry/queue/clear", { method: "POST", body: JSON.stringify({ confirm: true }) });
+    document.getElementById("feedback-queue-note").textContent = `已清空 ${Number(result.removed || 0)} 条本地匿名反馈；店铺数据未受影响。`;
+    await loadSystemStatus();
+  } catch (error) {
+    document.getElementById("feedback-queue-note").textContent = error.message || "本地匿名反馈队列清空失败";
+  } finally {
+    button.disabled = false;
+  }
+});
+document.getElementById("update-channel").addEventListener("change", async (event) => {
+  await bridgeFetch("/updates/channel", { method: "POST", body: JSON.stringify({ channel: event.currentTarget.value }) });
+  await loadSystemStatus();
+});
+document.getElementById("telemetry-opt-in").addEventListener("change", async (event) => {
+  const enabled = event.currentTarget.checked;
+  try {
+    await bridgeFetch("/telemetry/settings", { method: "POST", body: JSON.stringify({ enabled }) });
+    await loadSystemStatus();
+  } catch (error) {
+    event.currentTarget.checked = !enabled;
+    const message = document.getElementById("update-message");
+    message.className = "update-message error";
+    message.textContent = error.message || "匿名改进计划设置失败";
+  }
+});
+document.getElementById("operator-memory-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await bridgeFetch("/memory/upsert", {
+      method: "POST",
+      body: JSON.stringify({
+        title: document.getElementById("operator-memory-title").value.trim(),
+        type: document.getElementById("operator-memory-type").value,
+        value: document.getElementById("operator-memory-value").value.trim(),
+        source: "user",
+        confidence: "medium",
+      }),
+    });
+    form.reset();
+    await loadOperatorMemory();
+  } catch (error) {
+    document.getElementById("operator-memory-note").textContent = error.message || "保存记忆失败";
+  } finally {
+    button.disabled = false;
+  }
+});
 document.getElementById("refresh-oceanengine-status").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   const result = document.getElementById("oceanengine-oauth-result");
@@ -1974,22 +2407,101 @@ document.getElementById("sync-oceanengine-data").addEventListener("click", async
     button.textContent = "同步官方数据";
   }
 });
-document.getElementById("context-action").addEventListener("click", () => {
-  if (!currentOperationContext?.selected_store?.key) {
+document.getElementById("connection-guide-action").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const action = button.dataset.action || currentConnectionGuide?.next_upgrade?.id || "none";
+  if (action === "identify_store") {
+    await chrome.tabs.create({ url: "https://fxg.jinritemai.com/ffa/mshop/homepage/index", active: true });
+    document.getElementById("connection-failure-help").textContent = "抖店经营概览已打开。页面加载完成后回到这里点击重新识别；我们不会读取账号密码。";
+    button.dataset.action = "retry_identify_store";
+    button.textContent = "重新识别当前抖店";
+    return;
+  }
+  if (action === "retry_identify_store") {
+    button.disabled = true;
+    button.textContent = "正在重新识别…";
+    try {
+      await chrome.runtime.sendMessage({ type: "manual-sync" });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await loadDashboard();
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
+  if (action === "confirm_store" || action === "select_store") {
     const select = document.getElementById("qianchuan-account-select");
+    const candidates = [...select.options].filter((option) => option.value);
+    const candidate = selectedStoreKey || (candidates.length === 1 ? candidates[0].value : "");
+    if (candidate) {
+      button.disabled = true;
+      try {
+        await bridgeFetch("/stores/select", { method: "POST", body: JSON.stringify({ store_key: candidate }) });
+        await loadDashboard();
+      } finally {
+        button.disabled = false;
+      }
+      return;
+    }
+    document.getElementById("connection-store-controls").hidden = false;
     select.focus();
     select.scrollIntoView({ behavior: "smooth", block: "center" });
     return;
   }
-  const receipt = document.getElementById("scan-receipt-card");
-  receipt.open = true;
-  document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (action === "quick_scan") {
+    if (!selectedStoreKey) {
+      document.getElementById("qianchuan-account-select").focus();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "正在同步关键页面…";
+    try {
+      await chrome.runtime.sendMessage({
+        type: "start-full-scan",
+        scan_scope: "quick",
+        store_key: selectedStoreKey,
+        account_key: selectedQianchuanAccount,
+        page_ids: selectedQianchuanAccount
+          ? ["overview", "orders", "products", "shelf", "qianchuan_overview", "qianchuan_campaigns"]
+          : ["overview", "orders", "products", "shelf"],
+      });
+      document.querySelector(".scan-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      await loadDashboard();
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
+  if (action === "sync_qianchuan") {
+    await syncRecentQianchuanPage().catch(() => undefined);
+    return;
+  }
+  if (action === "view_ad_candidates") {
+    document.getElementById("automation-candidates")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  if (action === "view_controlled_execution") {
+    document.getElementById("execution-preflight")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  await bridgeFetch("/onboarding/update", {
+    method: "POST",
+    body: JSON.stringify({ event: "first_task_viewed" }),
+  }).catch(() => undefined);
+  document.getElementById("manager-tasks")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  await loadDashboard();
 });
 document.getElementById("priority-reminder-action").addEventListener("click", (event) => {
   const mode = event.currentTarget.dataset.mode;
   if (mode === "checking") return;
   if (mode === "data") {
-    document.getElementById("context-action").click();
+    document.getElementById("connection-guide-action").click();
+    return;
+  }
+  if (mode === "review") {
+    const receipt = document.getElementById("scan-receipt-card");
+    if (receipt) receipt.open = true;
+    receipt?.scrollIntoView({ behavior: "smooth", block: "start" });
     return;
   }
   document.getElementById("manager-tasks")?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2077,20 +2589,45 @@ document.getElementById("preflight-authorize").addEventListener("click", async (
   }
 });
 document.getElementById("full-scan-button").addEventListener("click", async () => {
-  if (!selectedQianchuanAccount) {
+  if (!selectedStoreKey) {
     const select = document.getElementById("qianchuan-account-select");
     select.focus();
     document.getElementById("scan-detail").textContent = "请先选择当前店铺，避免把多个千川账号的数据混在一起。";
     return;
   }
-  await chrome.runtime.sendMessage({ type: "start-full-scan", account_key: selectedQianchuanAccount });
+  await chrome.runtime.sendMessage({
+    type: "start-full-scan",
+    scan_scope: "full",
+    store_key: selectedStoreKey,
+    account_key: selectedQianchuanAccount,
+    page_ids: selectedQianchuanAccount ? null : DOUDIAN_SCAN_PAGE_IDS,
+  });
   await loadDashboard();
 });
 document.getElementById("qianchuan-account-select").addEventListener("change", async (event) => {
-  selectedQianchuanAccount = event.currentTarget.value;
+  selectedStoreKey = event.currentTarget.value;
   accountSelectionRequired = false;
-  await chrome.storage.local.set({ scanAccountPreference: selectedQianchuanAccount });
-  await bridgeFetch("/settings", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ qianchuan_account_key: selectedQianchuanAccount }) });
+  await chrome.storage.local.set({ scanStorePreference: selectedStoreKey });
+  await bridgeFetch("/stores/select", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ store_key: selectedStoreKey }) });
+  await loadDashboard();
+});
+document.getElementById("connection-switch-store").addEventListener("click", () => {
+  document.getElementById("connection-guide").className = "connection-guide expanded";
+  document.getElementById("connection-status-strip").hidden = true;
+  document.getElementById("connection-guide-expanded").hidden = false;
+  document.getElementById("connection-store-controls").hidden = false;
+  document.getElementById("qianchuan-account-select").focus();
+});
+document.getElementById("connection-skip-qianchuan").addEventListener("click", async () => {
+  qianchuanFeatureDeferred = true;
+  await chrome.storage.local.set({ qianchuanFeatureDeferred: true });
+  document.getElementById("connection-skip-qianchuan").textContent = "已暂不使用，可随时再连接";
+  renderConnectionGuide(currentConnectionGuide || {});
+});
+document.getElementById("link-account-button").addEventListener("click", async () => {
+  const accountKey = document.getElementById("unlinked-account-select").value;
+  if (!selectedStoreKey || !accountKey) return;
+  await bridgeFetch("/stores/link", { method: "POST", headers: { "Content-Type": "application/json", "X-Dian-Agent": "2" }, body: JSON.stringify({ store_key: selectedStoreKey, account_key: accountKey }) });
   await loadDashboard();
 });
 document.getElementById("current-qianchuan-button").addEventListener("click", () => {
@@ -2098,6 +2635,18 @@ document.getElementById("current-qianchuan-button").addEventListener("click", ()
 });
 document.getElementById("qianchuan-sync-dock-button").addEventListener("click", () => {
   syncRecentQianchuanPage().catch(() => undefined);
+});
+document.getElementById("automation-sync-qianchuan").addEventListener("click", () => {
+  syncRecentQianchuanPage().catch(() => undefined);
+});
+document.getElementById("automation-skip").addEventListener("click", async (event) => {
+  qianchuanFeatureDeferred = true;
+  await chrome.storage.local.set({ qianchuanFeatureDeferred: true });
+  event.currentTarget.textContent = "已暂不使用，可随时再连接";
+  event.currentTarget.disabled = true;
+  const offState = document.getElementById("automation-off-state");
+  offState.querySelector("strong").textContent = "已暂不使用投放功能";
+  offState.querySelector("p").textContent = "抖店巡店与经营诊断会继续正常使用；需要投放时，再同步当前千川页即可开启。";
 });
 document.getElementById("cancel-scan-button").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "cancel-full-scan" });
