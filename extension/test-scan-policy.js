@@ -22,9 +22,13 @@ assert.strictEqual(
   policy.matchAccount(
     { key: "acct_platform_a", label: "同名旗舰店", identity_source: "platform_id" },
     { key: "acct_label", label: "同名旗舰店", identity_source: "account_label" },
-  ).ok,
-  true,
+  ).code,
+  "ACCOUNT_MISMATCH",
 );
+
+const storeMismatch = new Error("当前页面所属店铺与已选店铺不一致，已停止巡检且不会混合数据。");
+assert.strictEqual(policy.errorCode(storeMismatch), "STORE_MISMATCH");
+assert.strictEqual(policy.isNonRetryable(storeMismatch), true);
 
 const unresolved = new Error("未识别当前千川账号。巡检已停止刷新，请确认账号后重试。");
 assert.strictEqual(policy.isNonRetryable(unresolved), true);

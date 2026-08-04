@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import logging
 import os
 import re
@@ -17,21 +18,50 @@ import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from action_protocol import assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
+from local_store import LocalStore, LocalStoreError, SCHEMA_VERSION as DATABASE_SCHEMA_VERSION
+from offline_upgrade import PRODUCTION_OFFLINE_PUBLIC_KEYS
 from oceanengine_data import OceanEngineDataClient, load_sync_status
 from oceanengine_oauth import OceanEngineOAuth
+from operator_memory import archive_operator_memory, list_operator_memory, upsert_operator_memory
+from promotion_readiness import (
+    LocalAnonymousFeedbackQueue,
+    build_distribution_status,
+    build_release_readiness,
+    save_extension_install_state,
+)
+from rule_engine import RuleEngine, RulePackError
+from update_center import RollbackError, UpdateCenter, UpdateError
+from version import AGENT_VERSION
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(message)s")
 logger = logging.getLogger("dian-agent-http")
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("DIAN_AGENT_DATA_DIR", BASE_DIR / "data"))
+_default_data_dir = (
+    Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "DianAgent" / "data"
+    if getattr(sys, "frozen", False)
+    else BASE_DIR / "data"
+)
+DATA_DIR = Path(os.environ.get("DIAN_AGENT_DATA_DIR", _default_data_dir))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+if getattr(sys, "frozen", False) or os.environ.get("DIAN_AGENT_LOG_DIR"):
+    _log_dir = Path(os.environ.get("DIAN_AGENT_LOG_DIR", DATA_DIR.parent / "logs"))
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _file_handler = RotatingFileHandler(
+        _log_dir / "dian-agent.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(_file_handler)
 
 PORT = int(os.environ.get("BRIDGE_PORT", "8765"))
 MAX_BODY_BYTES = int(os.environ.get("BRIDGE_MAX_BODY", str(2 * 1024 * 1024)))
@@ -79,6 +109,7 @@ DEFAULT_AGENT_SETTINGS = {
     "custom_report_template": DEFAULT_CUSTOM_REPORT_TEMPLATE,
     "history_retention_days": 30,
     "qianchuan_account_key": "",
+    "store_key": "",
     "max_daily_execution_count": 3,
     "max_daily_budget_reduction": 300.0,
     "execution_cooldown_minutes": 30,
@@ -171,6 +202,256 @@ def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
             os.unlink(temp_name)
 
 
+def _local_store() -> LocalStore:
+    """Resolve from DATA_DIR at call time so tests and portable installs stay isolated."""
+    return LocalStore(DATA_DIR.parent)
+
+
+def _initialize_local_store() -> dict[str, Any]:
+    """Initialize SQLite and idempotently mirror existing legacy snapshots."""
+    store = _local_store()
+    try:
+        store.initialize()
+        legacy_dirs = [DATA_DIR / source for source in sorted(ALLOWED_SOURCES)]
+        legacy_dirs.append(DATA_DIR / "qianchuan_accounts")
+        existing = [path for path in legacy_dirs if path.exists()]
+        imported = store.import_json_snapshots(existing) if existing else []
+        return {
+            "status": "ready",
+            "status_label": "本地数据库正常",
+            "schema_version": store.get_schema_version(),
+            "mirrored_snapshots": len(imported),
+            "path": str(store.paths.database),
+        }
+    except (LocalStoreError, OSError) as error:
+        logger.exception("本地数据库初始化失败")
+        return {
+            "status": "error",
+            "status_label": "数据库需要修复",
+            "schema_version": 0,
+            "error": str(error),
+        }
+
+
+def _database_status() -> dict[str, Any]:
+    store = _local_store()
+    try:
+        store.initialize()
+        backups = list(store.paths.backup.glob("shop-*.db")) if store.paths.backup.exists() else []
+        return {
+            "status": "ready",
+            "status_label": "本地数据库正常",
+            "schema_version": store.get_schema_version(),
+            "current_schema_version": DATABASE_SCHEMA_VERSION,
+            "backup_count": len(backups),
+            "path": str(store.paths.database),
+            "storage": "local_only",
+        }
+    except (LocalStoreError, OSError) as error:
+        return {
+            "status": "error",
+            "status_label": "数据库需要修复",
+            "schema_version": 0,
+            "current_schema_version": DATABASE_SCHEMA_VERSION,
+            "error": str(error),
+            "storage": "local_only",
+        }
+
+
+def _update_settings_path() -> Path:
+    return DATA_DIR.parent / "config" / "update_settings.json"
+
+
+def _load_update_settings() -> dict[str, Any]:
+    defaults = {
+        "channel": "stable",
+        "telemetry_enabled": False,
+        "last_check_at": None,
+        "last_check": None,
+    }
+    path = _update_settings_path()
+    if not path.exists():
+        return defaults
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaults
+    if not isinstance(value, dict):
+        return defaults
+    channel = str(value.get("channel") or "stable")
+    defaults["channel"] = channel if channel in {"stable", "beta", "internal"} else "stable"
+    defaults["telemetry_enabled"] = value.get("telemetry_enabled") is True
+    defaults["last_check_at"] = value.get("last_check_at")
+    defaults["last_check"] = value.get("last_check") if isinstance(value.get("last_check"), dict) else None
+    return defaults
+
+
+def _save_update_settings(changes: dict[str, Any]) -> dict[str, Any]:
+    current = _load_update_settings()
+    if "channel" in changes:
+        channel = str(changes["channel"] or "")
+        if channel not in {"stable", "beta", "internal"}:
+            raise ValueError("更新通道只能是 stable、beta 或 internal")
+        current["channel"] = channel
+    if "telemetry_enabled" in changes:
+        current["telemetry_enabled"] = changes["telemetry_enabled"] is True
+    if "last_check_at" in changes:
+        current["last_check_at"] = changes["last_check_at"]
+    if "last_check" in changes:
+        current["last_check"] = changes["last_check"] if isinstance(changes["last_check"], dict) else None
+    _atomic_json_write(_update_settings_path(), current)
+    return current
+
+
+def _update_center() -> UpdateCenter:
+    settings = _load_update_settings()
+    return UpdateCenter(
+        DATA_DIR.parent,
+        current_agent_version=AGENT_VERSION,
+        channel=str(settings["channel"]),
+        public_key=os.environ.get("DIAN_AGENT_UPDATE_PUBLIC_KEY"),
+        manifest_url=os.environ.get("DIAN_AGENT_UPDATE_MANIFEST_URL"),
+    )
+
+
+def _knowledge_status() -> dict[str, Any]:
+    center = _update_center()
+    try:
+        pack = center.load_effective_pack()
+        metadata = pack.get("metadata") if isinstance(pack.get("metadata"), dict) else {}
+        rollback_candidates = center.rollback_candidates()
+        return {
+            "status": "ready",
+            "version": str(pack.get("pack_version") or "builtin"),
+            "channel": str(pack.get("channel") or "stable"),
+            "industry": str(pack.get("industry") or metadata.get("industry") or "general")[:40],
+            "expires_at": pack.get("expires_at"),
+            "rule_count": len(pack.get("rules") or []),
+            "rollback_available": any(item.get("usable") for item in rollback_candidates),
+            "rollback_candidates": rollback_candidates,
+            "source": "active" if center.store.read_active() else "builtin",
+            "local_import_supported": True,
+            "local_import_requires_ed25519": True,
+            "local_import_trust_configured": bool(center.public_key),
+        }
+    except (UpdateError, ValueError, OSError) as error:
+        return {
+            "status": "error",
+            "version": "",
+            "rule_count": 0,
+            "rollback_available": bool(center.store.backups()),
+            "error": str(error),
+        }
+
+
+def _runtime_startup_state_path() -> Path:
+    return DATA_DIR / "runtime" / "startup-state.json"
+
+
+def build_agent_runtime_status() -> dict[str, Any]:
+    """Return a UI-safe view of automatic startup and recovery state."""
+
+    defaults: dict[str, Any] = {
+        "state": "unknown",
+        "state_label": "尚未记录自动启动状态",
+        "autostart_enabled": False,
+        "keepalive_enabled": False,
+        "hidden_launcher": False,
+        "last_checked_at": None,
+        "last_healthy_at": None,
+        "last_recovery_at": None,
+        "last_error": None,
+        "source": "not_reported",
+    }
+    path = _runtime_startup_state_path()
+    if not path.exists():
+        return defaults
+    try:
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {**defaults, "state": "error", "state_label": "自动启动状态文件损坏", "last_error": "startup_state_unreadable"}
+    if not isinstance(value, dict):
+        return defaults
+    allowed = {
+        "state", "state_label", "autostart_enabled", "keepalive_enabled",
+        "hidden_launcher", "last_checked_at", "last_healthy_at",
+        "last_recovery_at", "last_error", "source", "task_name",
+    }
+    safe = {key: value.get(key) for key in allowed if key in value}
+    safe["autostart_enabled"] = value.get("autostart_enabled") is True
+    safe["keepalive_enabled"] = value.get("keepalive_enabled") is True
+    safe["hidden_launcher"] = value.get("hidden_launcher") is True
+    safe["last_error"] = str(value.get("last_error") or "")[:300] or None
+    return {**defaults, **safe}
+
+
+def build_system_status() -> dict[str, Any]:
+    settings = _load_update_settings()
+    database = _database_status()
+    knowledge = _knowledge_status()
+    scan = load_scan_status()
+    catalog = list_snapshots()
+    finished_at = _timestamp_seconds(scan.get("finished_at"))
+    last_check = settings.get("last_check") or {}
+    distribution = build_distribution_status(DATA_DIR.parent)
+    anonymous_feedback = LocalAnonymousFeedbackQueue(DATA_DIR.parent).status(
+        consent_enabled=settings["telemetry_enabled"]
+    )
+    release_readiness = build_release_readiness(
+        DATA_DIR.parent,
+        production_ed25519_trust=bool(PRODUCTION_OFFLINE_PUBLIC_KEYS),
+    )
+    product_operational = database.get("status") == "ready" and knowledge.get("status") == "ready"
+    public_distribution_ready = release_readiness["ready_for_public_release"] is True
+    return {
+        "ready": product_operational,
+        "product_operational": product_operational,
+        "public_distribution_ready": public_distribution_ready,
+        "agent_version": AGENT_VERSION,
+        "required_extension_version": AGENT_VERSION,
+        "bridge_protocol_version": 2,
+        "ai_required": False,
+        "mode": "local_first",
+        "program_update_mode": "offline_bundle",
+        "online_program_updates_configured": False,
+        "offline_upgrade_signature_ready": True,
+        "offline_upgrade_production_trust_configured": bool(PRODUCTION_OFFLINE_PUBLIC_KEYS),
+        "offline_upgrade_production_available": bool(PRODUCTION_OFFLINE_PUBLIC_KEYS),
+        "channel": settings["channel"],
+        "database": database,
+        "knowledge": knowledge,
+        "distribution": distribution,
+        "release_readiness": release_readiness,
+        "runtime": build_agent_runtime_status(),
+        "scan": {
+            "last_success_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(finished_at)) if finished_at and scan.get("status") in {"completed", "partial"} else None,
+            "stale_page_count": sum(1 for item in catalog if not item.get("fresh")),
+            "snapshot_count": len(catalog),
+        },
+        "update": {
+            "available": bool(last_check.get("available")),
+            "knowledge_available": bool(last_check.get("available")),
+            "candidate_version": last_check.get("candidate_version"),
+            "last_check_at": settings.get("last_check_at"),
+            "error": last_check.get("error"),
+            "message": (
+                f"上次更新检查失败：{last_check.get('error')}"
+                if last_check.get("error")
+                else
+                f"发现知识包 {last_check.get('candidate_version')}，校验通过后可更新。"
+                if last_check.get("available")
+                else "当前知识包可离线使用；可手动检查更新。"
+            ),
+        },
+        "telemetry": {
+            "enabled": settings["telemetry_enabled"],
+            "mode": "explicit_opt_in",
+            "raw_shop_data_uploaded": False,
+            "local_queue": anonymous_feedback,
+        },
+    }
+
+
 def _snapshot_path(source: str, page_type: str) -> Path:
     return DATA_DIR / source / f"{page_type}.json"
 
@@ -181,6 +462,93 @@ def _account_snapshot_path(account_key: str, page_type: str) -> Path:
 
 def _account_catalog_path() -> Path:
     return DATA_DIR / "qianchuan_accounts.json"
+
+
+def _store_catalog_path() -> Path:
+    return DATA_DIR / "store_identities.json"
+
+
+def _store_snapshot_path(store_key: str, source: str, page_type: str) -> Path:
+    return DATA_DIR / "stores" / store_key / source / f"{page_type}.json"
+
+
+def _identity_secret_path() -> Path:
+    config_root = DATA_DIR.parent / "config" if getattr(sys, "frozen", False) else DATA_DIR / "config"
+    return config_root / "identity-secret-v1.bin"
+
+
+def _identity_secret() -> bytes:
+    path = _identity_secret_path()
+    try:
+        secret = path.read_bytes()
+        if len(secret) == 32:
+            return secret
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secret = os.urandom(32)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_bytes(secret)
+    os.replace(temporary, path)
+    return secret
+
+
+def _local_identity_key(kind: str, raw_id: str) -> str:
+    namespaces = {
+        "douyin_shop_id": ("store_v1", "douyin_shop"),
+        "qianchuan_shop_id": ("store_v1", "douyin_shop"),
+        "qianchuan_advertiser_id": ("adacct_v1", "qianchuan_advertiser"),
+        "qianchuan_account_id": ("adacct_v1", "qianchuan_account"),
+    }
+    prefix, namespace = namespaces[kind]
+    normalized = str(raw_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{4,80}", normalized):
+        raise ValueError("invalid identity claim")
+    digest = hmac.new(_identity_secret(), f"{namespace}\0{normalized}".encode("utf-8"), hashlib.sha256).hexdigest()[:26]
+    return f"{prefix}_{digest}"
+
+
+def _private_alias(kind: str, key: str) -> str:
+    suffix = re.sub(r"[^a-f0-9]", "", str(key).lower())[-6:].upper() or "LOCAL"
+    return f"{'店铺' if kind == 'store' else '千川账户'} {suffix}"
+
+
+def _resolve_identity_claims(data: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    claims = data.pop("identity_claims", [])
+    identity_status = str(data.pop("identity_status", "") or "")
+    if identity_status == "conflict":
+        return None, None, "conflict"
+    if not isinstance(claims, list):
+        claims = []
+    resolved: dict[str, list[dict[str, str]]] = {"store": [], "account": []}
+    for claim in claims[:8]:
+        if not isinstance(claim, dict):
+            continue
+        kind = str(claim.get("kind") or "")
+        if kind not in {"douyin_shop_id", "qianchuan_shop_id", "qianchuan_advertiser_id", "qianchuan_account_id"}:
+            continue
+        try:
+            key = _local_identity_key(kind, str(claim.get("raw_id") or ""))
+        except (KeyError, ValueError):
+            continue
+        target = "store" if kind in {"douyin_shop_id", "qianchuan_shop_id"} else "account"
+        resolved[target].append({
+            "key": key,
+            "confidence": str(claim.get("confidence") or "medium")[:16],
+            "identity_source": f"hmac_{kind}",
+            "evidence_source": str(claim.get("evidence_source") or "unknown")[:32],
+        })
+    store_values = {item["key"]: item for item in resolved["store"]}
+    account_values = {item["key"]: item for item in resolved["account"]}
+    if len(store_values) > 1 or len(account_values) > 1:
+        return None, None, "conflict"
+    store = next(iter(store_values.values()), None)
+    account = next(iter(account_values.values()), None)
+    if store:
+        store["label"] = _private_alias("store", store["key"])
+    if account:
+        account["label"] = _private_alias("account", account["key"])
+    return store, account, "resolved" if store or account else "unresolved"
 
 
 def _normalized_account_label(value: Any) -> str:
@@ -209,12 +577,16 @@ def list_qianchuan_accounts() -> list[dict[str, Any]]:
             return []
         cleaned: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
+        needs_privacy_migration = False
         for account in accounts:
             if not isinstance(account, dict):
                 continue
             key = str(account.get("key") or "").lower()
-            label = _normalized_account_label(account.get("label"))
-            if not SAFE_KEY.fullmatch(key) or not _is_valid_qianchuan_account_label(label):
+            legacy_label = _normalized_account_label(account.get("label"))
+            needs_privacy_migration = needs_privacy_migration or bool(legacy_label and legacy_label != _private_alias("account", key))
+            if legacy_label and not _is_valid_qianchuan_account_label(legacy_label):
+                continue
+            if not SAFE_KEY.fullmatch(key):
                 continue
             if key in seen_keys:
                 continue
@@ -223,60 +595,173 @@ def list_qianchuan_accounts() -> list[dict[str, Any]]:
                 for alias in account.get("aliases", [])
                 if SAFE_KEY.fullmatch(str(alias).lower()) and str(alias).lower() != key
             ][:20]
-            cleaned.append({**account, "key": key, "label": label, "aliases": list(dict.fromkeys(aliases))})
+            store_key = str(account.get("store_key") or "").lower()
+            cleaned.append({
+                "key": key,
+                "label": _private_alias("account", key),
+                "confidence": str(account.get("confidence") or "medium")[:16],
+                "identity_source": str(account.get("identity_source") or "legacy")[:40],
+                "evidence_source": str(account.get("evidence_source") or "")[:32],
+                "store_key": store_key if SAFE_KEY.fullmatch(store_key) else "",
+                "aliases": list(dict.fromkeys(aliases)),
+                "last_seen": str(account.get("last_seen") or "")[:32],
+            })
             seen_keys.add(key)
+        if needs_privacy_migration:
+            _atomic_json_write(path, {"schema_version": 2, "accounts": [{key: value for key, value in item.items() if key != "label"} for item in cleaned]})
         return cleaned
     except (OSError, json.JSONDecodeError):
         return []
 
 
+def list_store_identities() -> list[dict[str, Any]]:
+    path = _store_catalog_path()
+    if not path.exists():
+        return []
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        stores = value.get("stores", []) if isinstance(value, dict) else []
+        cleaned = []
+        for item in stores if isinstance(stores, list) else []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").lower()
+            if not SAFE_KEY.fullmatch(key):
+                continue
+            account_keys = [
+                str(value).lower() for value in item.get("account_keys", [])
+                if SAFE_KEY.fullmatch(str(value).lower())
+            ][:20]
+            cleaned.append({
+                "key": key,
+                "label": _private_alias("store", key),
+                "confidence": str(item.get("confidence") or "medium")[:16],
+                "identity_source": str(item.get("identity_source") or "legacy")[:40],
+                "evidence_source": str(item.get("evidence_source") or "")[:32],
+                "account_keys": list(dict.fromkeys(account_keys)),
+                "last_seen": str(item.get("last_seen") or "")[:32],
+            })
+        return cleaned
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _remember_store_identity(store: dict[str, Any], account_key: str = "") -> None:
+    key = str(store.get("key") or "").lower()
+    if not SAFE_KEY.fullmatch(key):
+        return
+    with _state_lock:
+        stores = {str(item.get("key")): item for item in list_store_identities()}
+        previous = stores.get(key, {})
+        account_keys = [
+            str(value).lower() for value in [*(previous.get("account_keys") or []), account_key]
+            if SAFE_KEY.fullmatch(str(value).lower())
+        ][:20]
+        stores[key] = {
+            "key": key,
+            "confidence": str(store.get("confidence") or previous.get("confidence") or "medium")[:16],
+            "identity_source": str(store.get("identity_source") or previous.get("identity_source") or "legacy")[:40],
+            "evidence_source": str(store.get("evidence_source") or previous.get("evidence_source") or "")[:32],
+            "account_keys": list(dict.fromkeys(account_keys)),
+            "last_seen": _now_label(),
+        }
+        _atomic_json_write(_store_catalog_path(), {"schema_version": 1, "stores": sorted(stores.values(), key=lambda item: item.get("last_seen", ""), reverse=True)})
+
+
+def link_store_account(store_key: str, account_key: str) -> dict[str, Any]:
+    store_key = str(store_key or "").lower()
+    account_key = str(account_key or "").lower()
+    stores = {str(item.get("key") or ""): item for item in list_store_identities()}
+    accounts = {str(item.get("key") or ""): item for item in list_qianchuan_accounts()}
+    if store_key not in stores or account_key not in accounts:
+        raise ValueError("店铺或千川账户不存在，请分别同步当前页面后再人工关联。")
+    existing_store = str(accounts[account_key].get("store_key") or "")
+    if existing_store and existing_store != store_key:
+        raise ValueError("该千川账户已关联其他店铺，系统不会自动改绑。")
+    account = {**accounts[account_key], "store_key": store_key, "evidence_source": "manual_confirmation"}
+    _remember_qianchuan_account(account)
+    _remember_store_identity(stores[store_key], account_key)
+    return select_store_context(store_key, account_key)
+
+
+def select_store_context(store_key: str, account_key: str = "") -> dict[str, Any]:
+    store_key = str(store_key or "").lower()
+    account_key = str(account_key or "").lower()
+    if not store_key:
+        save_agent_settings({"store_key": "", "qianchuan_account_key": ""})
+        return build_store_catalog()
+    stores = {str(item.get("key") or ""): item for item in list_store_identities()}
+    if store_key not in stores:
+        raise ValueError("请选择已识别的匿名店铺。")
+    linked = list(stores[store_key].get("account_keys") or [])
+    if account_key and account_key not in linked:
+        raise ValueError("该千川账户尚未与当前店铺确认关联。")
+    if not account_key and len(linked) == 1:
+        account_key = linked[0]
+    elif not account_key and len(linked) > 1:
+        account_key = ""
+    save_agent_settings({"store_key": store_key, "qianchuan_account_key": account_key})
+    _confirm_onboarding_store(store_key)
+    return build_store_catalog()
+
+
 def build_store_catalog() -> dict[str, Any]:
     """Build a multi-store view without mixing one store's metrics into another."""
-    selected_key = str(load_agent_settings().get("qianchuan_account_key") or "")
+    settings = load_agent_settings()
+    selected_key = str(settings.get("store_key") or "").lower()
+    selected_account_key = str(settings.get("qianchuan_account_key") or "").lower()
     sync_status = load_sync_status(DATA_DIR)
     official_by_key = {
         str(account.get("account_key") or ""): account
         for account in sync_status.get("accounts", [])
         if isinstance(account, dict)
     }
+    accounts = list_qianchuan_accounts()
+    accounts_by_key = {str(account.get("key") or ""): account for account in accounts}
     stores: list[dict[str, Any]] = []
-    for account in list_qianchuan_accounts():
-        key = str(account.get("key") or "")
-        account_dir = DATA_DIR / "qianchuan_accounts" / key
-        snapshot_paths = list(account_dir.glob("*.json")) if account_dir.exists() else []
-        newest_timestamp = max(
-            (path.stat().st_mtime for path in snapshot_paths),
-            default=0.0,
-        )
-        official = official_by_key.get(key)
-        channel = "official_api" if official else "browser"
-        advertiser_count = (
-            int(official.get("advertiser_count") or 0) if official else None
-        )
-        if official and advertiser_count == 0:
-            state = "not_linked"
-            state_label = "未关联广告账户"
-        elif official:
-            state = "ready"
-            state_label = "官方 API 可用"
+    for store in list_store_identities():
+        key = str(store.get("key") or "")
+        doudian_dir = DATA_DIR / "stores" / key / "doudian"
+        doudian_paths = list(doudian_dir.glob("*.json")) if doudian_dir.exists() else []
+        linked_keys = list(dict.fromkeys([
+            *(store.get("account_keys") or []),
+            *(account_key for account_key, account in accounts_by_key.items() if account.get("store_key") == key),
+        ]))
+        linked_accounts = [accounts_by_key[value] for value in linked_keys if value in accounts_by_key]
+        qianchuan_paths: list[Path] = []
+        for linked in linked_accounts:
+            account_dir = DATA_DIR / "qianchuan_accounts" / str(linked.get("key") or "")
+            if account_dir.exists():
+                qianchuan_paths.extend(account_dir.glob("*.json"))
+        snapshot_paths = [*doudian_paths, *qianchuan_paths]
+        newest_timestamp = max((path.stat().st_mtime for path in snapshot_paths), default=0.0)
+        official_accounts = [official_by_key.get(str(linked.get("key") or "")) for linked in linked_accounts]
+        official_accounts = [item for item in official_accounts if item]
+        channel = "official_api" if official_accounts else "browser_multi" if doudian_paths and qianchuan_paths else "qianchuan_browser" if qianchuan_paths else "doudian_browser"
+        advertiser_count = sum(int(item.get("advertiser_count") or 0) for item in official_accounts) if official_accounts else len(linked_accounts)
+        if official_accounts and advertiser_count == 0 and not doudian_paths:
+            state, state_label = "not_linked", "未关联广告账户"
+        elif official_accounts:
+            state, state_label = "ready", "官方 API 可用"
+        elif doudian_paths and not qianchuan_paths:
+            state, state_label = "doudian_ready", "抖店网页数据"
         elif snapshot_paths:
-            state = "browser_only"
-            state_label = "网页数据"
+            state, state_label = "browser_only", "网页数据"
         else:
-            state = "empty"
-            state_label = "暂无数据"
-        stores.append(
-            {
-                **account,
-                "channel": channel,
-                "advertiser_count": advertiser_count,
-                "page_count": len(snapshot_paths),
-                "updated_at": int(newest_timestamp) if newest_timestamp else None,
-                "state": state,
-                "state_label": state_label,
-                "selected": key == selected_key,
-            }
-        )
+            state, state_label = "empty", "暂无数据"
+        stores.append({
+            **store,
+            "channel": channel,
+            "advertiser_count": advertiser_count,
+            "page_count": len(snapshot_paths),
+            "doudian_page_count": len(doudian_paths),
+            "qianchuan_page_count": len(qianchuan_paths),
+            "account_keys": [str(item.get("key") or "") for item in linked_accounts],
+            "updated_at": int(newest_timestamp) if newest_timestamp else None,
+            "state": state,
+            "state_label": state_label,
+            "selected": key == selected_key,
+        })
     stores.sort(
         key=lambda item: (
             0 if item.get("selected") else 1,
@@ -284,6 +769,9 @@ def build_store_catalog() -> dict[str, Any]:
             -(int(item.get("updated_at") or 0)),
         )
     )
+    selected_store = next((item for item in stores if item.get("key") == selected_key), None)
+    valid_selected_account = selected_account_key if selected_store and selected_account_key in selected_store.get("account_keys", []) else ""
+    unlinked_accounts = [account for account in accounts if not account.get("store_key")]
     return {
         "mode": "multi_store",
         "stores": stores,
@@ -293,17 +781,17 @@ def build_store_catalog() -> dict[str, Any]:
             item.get("channel") == "official_api" for item in stores
         ),
         "selected_store_key": selected_key,
-        "selected_account_key": selected_key,
+        "selected_account_key": valid_selected_account,
+        "unlinked_accounts": unlinked_accounts,
+        "link_required": bool(selected_store and unlinked_accounts),
         "data_isolation": "per_store",
+        "privacy": "hmac_local_identity_no_plaintext_labels",
     }
 
 
 def _remember_qianchuan_account(account: dict[str, Any]) -> None:
     key = str(account.get("key") or "").lower()
     if not SAFE_KEY.fullmatch(key):
-        return
-    label = _normalized_account_label(account.get("label") or "千川账号")
-    if not _is_valid_qianchuan_account_label(label):
         return
     with _state_lock:
         accounts = {str(item.get("key")): item for item in list_qianchuan_accounts() if isinstance(item, dict)}
@@ -315,9 +803,11 @@ def _remember_qianchuan_account(account: dict[str, Any]) -> None:
         ][:20]
         accounts[key] = {
             "key": key,
-            "label": label,
             "confidence": str(account.get("confidence") or "medium")[:16],
-            "identity_source": str(account.get("identity_source") or "legacy")[:32],
+            "identity_source": str(account.get("identity_source") or "legacy")[:40],
+            "evidence_source": str(account.get("evidence_source") or "")[:32],
+            "store_key": str(account.get("store_key") or previous.get("store_key") or "").lower()
+            if SAFE_KEY.fullmatch(str(account.get("store_key") or previous.get("store_key") or "").lower()) else "",
             "aliases": list(dict.fromkeys(aliases)),
             "last_seen": _now_label(),
         }
@@ -328,34 +818,13 @@ def _canonical_qianchuan_account_key(account: dict[str, Any]) -> str:
     key = str(account.get("key") or "").lower()
     if not SAFE_KEY.fullmatch(key):
         return ""
-    label = _normalized_account_label(account.get("label"))
-    if not _is_valid_qianchuan_account_label(label):
-        return key
     known_accounts = list_qianchuan_accounts()
     for known in known_accounts:
         aliases = {str(alias).lower() for alias in known.get("aliases", [])}
         if key in aliases and SAFE_KEY.fullmatch(str(known.get("key") or "")):
             return str(known["key"]).lower()
-    label_key = re.sub(r"\s+", "", label).casefold()
-    matches: list[dict[str, Any]] = []
-    for known in known_accounts:
-        known_label_key = re.sub(r"\s+", "", _normalized_account_label(known.get("label"))).casefold()
-        if known_label_key == label_key and SAFE_KEY.fullmatch(str(known.get("key") or "")):
-            matches.append(known)
-    identity_source = str(account.get("identity_source") or "legacy")
-    if identity_source == "platform_id":
-        label_only_matches = [
-            known for known in matches
-            if str(known.get("identity_source") or "legacy") in {"account_label", "legacy"}
-        ]
-        if len(label_only_matches) == 1:
-            return str(label_only_matches[0]["key"]).lower()
-        return key
-    platform_matches = [known for known in matches if known.get("identity_source") == "platform_id"]
-    if len(platform_matches) == 1:
-        return str(platform_matches[0]["key"]).lower()
-    if not platform_matches and len(matches) == 1:
-        return str(matches[0]["key"]).lower()
+    # Visible labels are deliberately excluded from canonicalization. Two
+    # accounts are the same only when their local keys or explicit aliases match.
     return key
 
 
@@ -365,6 +834,8 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("data must be an object")
 
+    data = dict(data)
+    resolved_store, resolved_account, identity_resolution = _resolve_identity_claims(data)
     page_type = _safe_page_type(data.get("page_type"))
     captured_at_ms = int(data.get("captured_at") or data.get("timestamp") or int(time.time() * 1000))
     normalized = {
@@ -373,7 +844,52 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
         "source": source,
         "page_type": page_type,
         "captured_at": captured_at_ms,
+        "identity_resolution": identity_resolution,
     }
+    if resolved_store:
+        normalized["store"] = resolved_store
+    elif isinstance(normalized.get("store"), dict):
+        legacy_store_key = str(normalized["store"].get("key") or "").lower()
+        normalized["store"] = {
+            "key": legacy_store_key,
+            "label": _private_alias("store", legacy_store_key),
+            "confidence": str(normalized["store"].get("confidence") or "legacy")[:16],
+            "identity_source": str(normalized["store"].get("identity_source") or "legacy_prehashed")[:40],
+        } if SAFE_KEY.fullmatch(legacy_store_key) else None
+    if resolved_account:
+        normalized["account"] = resolved_account
+    elif isinstance(normalized.get("account"), dict):
+        legacy_account_key = str(normalized["account"].get("key") or "").lower()
+        normalized["account"] = {
+            "key": legacy_account_key,
+            "label": _private_alias("account", legacy_account_key),
+            "confidence": str(normalized["account"].get("confidence") or "legacy")[:16],
+            "identity_source": str(normalized["account"].get("identity_source") or "legacy_prehashed")[:40],
+            "store_key": str(normalized["account"].get("store_key") or "").lower(),
+            "aliases": normalized["account"].get("aliases", []),
+        } if SAFE_KEY.fullmatch(legacy_account_key) else None
+    if normalized.get("store") is None:
+        normalized.pop("store", None)
+    if normalized.get("account") is None:
+        normalized.pop("account", None)
+    if isinstance(normalized.get("account"), dict):
+        known_account = next((item for item in list_qianchuan_accounts() if item.get("key") == normalized["account"].get("key")), None)
+        known_store_key = str((known_account or {}).get("store_key") or "")
+        claimed_store_key = str((normalized.get("store") or {}).get("key") or "") if isinstance(normalized.get("store"), dict) else ""
+        if known_store_key and claimed_store_key and known_store_key != claimed_store_key:
+            normalized.pop("store", None)
+            normalized["account"].pop("store_key", None)
+            normalized["identity_resolution"] = "conflict"
+        elif known_store_key and not claimed_store_key:
+            linked_store = next((item for item in list_store_identities() if item.get("key") == known_store_key), None)
+            if linked_store:
+                normalized["store"] = linked_store
+                normalized["account"]["store_key"] = known_store_key
+    if isinstance(normalized.get("store"), dict) and isinstance(normalized.get("account"), dict):
+        if normalized["store"].get("confidence") == "high" and normalized["account"].get("confidence") == "high":
+            normalized["account"]["store_key"] = normalized["store"]["key"]
+        else:
+            normalized["account"].pop("store_key", None)
     if source == "qianchuan" and isinstance(normalized.get("account"), dict):
         account = {**normalized["account"]}
         detected_key = str(account.get("key") or "").lower()
@@ -390,13 +906,27 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
         "timestamp": time.time(),
         "saved_at": _now_label(),
     }
-    _atomic_json_write(_snapshot_path(source, page_type), payload)
-    if source == "qianchuan" and isinstance(normalized.get("account"), dict):
-        account = normalized["account"]
+    primary_snapshot_path = _snapshot_path(source, page_type)
+    _atomic_json_write(primary_snapshot_path, payload)
+    store = normalized.get("store") if isinstance(normalized.get("store"), dict) else None
+    account = normalized.get("account") if isinstance(normalized.get("account"), dict) else None
+    if store and SAFE_KEY.fullmatch(str(store.get("key") or "")):
+        _atomic_json_write(_store_snapshot_path(str(store["key"]), source, page_type), payload)
+    try:
+        # JSON remains the compatibility source during the staged migration;
+        # SQLite receives the same snapshot for durable history and upgrades.
+        persistence_path = _store_snapshot_path(str(store["key"]), source, page_type) if store else _account_snapshot_path(str(account["key"]), page_type) if account else primary_snapshot_path
+        _local_store().persist_snapshot(payload, persistence_path, snapshot_type=page_type)
+    except (LocalStoreError, OSError):
+        logger.exception("本地数据库镜像失败，已保留兼容 JSON: %s/%s", source, page_type)
+    if source == "qianchuan" and account:
         account_key = str(account.get("key") or "").lower()
         if SAFE_KEY.fullmatch(account_key):
             _atomic_json_write(_account_snapshot_path(account_key, page_type), payload)
             _remember_qianchuan_account(account)
+    if store:
+        linked_account_key = str(account.get("key") or "") if account and account.get("store_key") == store.get("key") else ""
+        _remember_store_identity(store, linked_account_key)
     # Backward-compatible latest snapshot for existing MCP clients.
     _atomic_json_write(DATA_DIR / f"{source}.json", payload)
     _save_history_point(payload)
@@ -411,12 +941,14 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def load_data(source: str, page_type: str | None = None, account_key: str | None = None) -> dict[str, Any] | None:
+def load_data(source: str, page_type: str | None = None, account_key: str | None = None, store_key: str | None = None) -> dict[str, Any] | None:
     if source not in ALLOWED_SOURCES:
         return None
+    settings = load_agent_settings()
+    selected_store = str(store_key if store_key is not None else settings.get("store_key") or "").lower()
     selected_account = account_key
     if source == "qianchuan" and selected_account is None:
-        selected_account = str(load_agent_settings().get("qianchuan_account_key") or "")
+        selected_account = str(settings.get("qianchuan_account_key") or "")
     if source == "qianchuan" and selected_account:
         safe_account = str(selected_account).lower()
         if not SAFE_KEY.fullmatch(safe_account):
@@ -427,6 +959,15 @@ def load_data(source: str, page_type: str | None = None, account_key: str | None
             account_dir = DATA_DIR / "qianchuan_accounts" / safe_account
             candidates = sorted(account_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True) if account_dir.exists() else []
             path = candidates[0] if candidates else account_dir / "missing.json"
+    elif source == "doudian" and selected_store:
+        if not SAFE_KEY.fullmatch(selected_store):
+            return None
+        if page_type:
+            path = _store_snapshot_path(selected_store, source, _safe_page_type(page_type))
+        else:
+            store_dir = DATA_DIR / "stores" / selected_store / source
+            candidates = sorted(store_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True) if store_dir.exists() else []
+            path = candidates[0] if candidates else store_dir / "missing.json"
     else:
         path = _snapshot_path(source, _safe_page_type(page_type)) if page_type else DATA_DIR / f"{source}.json"
     if not path.exists():
@@ -442,12 +983,23 @@ def load_data(source: str, page_type: str | None = None, account_key: str | None
 
 def list_snapshots() -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+    settings = load_agent_settings()
+    selected_store = str(settings.get("store_key") or "").lower()
+    selected_account = str(settings.get("qianchuan_account_key") or "").lower()
     for source in sorted(ALLOWED_SOURCES):
-        source_dir = DATA_DIR / source
+        source_dir = (
+            DATA_DIR / "stores" / selected_store / "doudian"
+            if source == "doudian" and selected_store
+            else DATA_DIR / "qianchuan_accounts" / selected_account
+            if source == "qianchuan" and selected_account
+            else DATA_DIR / source
+            if not selected_store
+            else DATA_DIR / "missing"
+        )
         if not source_dir.exists():
             continue
         for path in sorted(source_dir.glob("*.json")):
-            snapshot = load_data(source, path.stem, account_key="")
+            snapshot = load_data(source, path.stem, account_key=selected_account if source == "qianchuan" else "", store_key=selected_store)
             if not snapshot:
                 continue
             data = snapshot.get("data", {})
@@ -458,6 +1010,7 @@ def list_snapshots() -> list[dict[str, Any]]:
                     "source": source,
                     "page_type": snapshot.get("page_type", path.stem),
                     "saved_at": snapshot.get("saved_at"),
+                    "captured_at": _timestamp_seconds(snapshot.get("timestamp")),
                     "age_seconds": age,
                     "fresh": age < STALE_SECONDS,
                     "title": data.get("title", "") if isinstance(data, dict) else "",
@@ -484,8 +1037,8 @@ def _parse_number(value: Any) -> float | None:
     return number
 
 
-def _history_dir(source: str, page_type: str) -> Path:
-    return DATA_DIR / "history" / source / page_type
+def _history_dir(source: str, page_type: str, store_key: str = "") -> Path:
+    return DATA_DIR / "history" / (store_key or "legacy_unscoped") / source / page_type
 
 
 def _save_history_point(snapshot: dict[str, Any]) -> None:
@@ -502,8 +1055,10 @@ def _save_history_point(snapshot: dict[str, Any]) -> None:
         "safe_metrics": data.get("safe_metrics", {}),
         "quality": data.get("quality", {}),
         "account_key": str((data.get("account") or {}).get("key") or "") if isinstance(data.get("account"), dict) else "",
+        "store_key": str((data.get("store") or {}).get("key") or (data.get("account") or {}).get("store_key") or "")
+        if isinstance(data, dict) else "",
     }
-    directory = _history_dir(source, page_type)
+    directory = _history_dir(source, page_type, point["store_key"])
     _atomic_json_write(directory / f"{captured_at}.json", point)
     retention_days = int(load_agent_settings().get("history_retention_days", 30))
     cutoff_ms = int((time.time() - retention_days * 86400) * 1000)
@@ -524,9 +1079,12 @@ def load_history(source: str | None = None, page_type: str | None = None, days: 
     root = DATA_DIR / "history"
     if not root.exists():
         return []
-    patterns = [root / source / page_type] if source and page_type else [root / source] if source else [root]
     points: list[dict[str, Any]] = []
-    selected_account = str(load_agent_settings().get("qianchuan_account_key") or "") if source == "qianchuan" else ""
+    settings = load_agent_settings()
+    selected_account = str(settings.get("qianchuan_account_key") or "") if source == "qianchuan" else ""
+    selected_store = str(settings.get("store_key") or "")
+    scoped_root = root / selected_store if selected_store else root
+    patterns = [scoped_root / source / page_type] if selected_store and source and page_type else [scoped_root / source] if selected_store and source else [scoped_root]
     for base in patterns:
         if not base.exists():
             continue
@@ -535,7 +1093,7 @@ def load_history(source: str | None = None, page_type: str | None = None, days: 
                 if int(path.stem) < cutoff_ms:
                     continue
                 value = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(value, dict) and (not selected_account or value.get("account_key") == selected_account):
+                if isinstance(value, dict) and (not source or value.get("source") == source) and (not page_type or value.get("page_type") == page_type) and (not selected_account or value.get("account_key") == selected_account) and (not selected_store or value.get("store_key") == selected_store):
                     points.append(value)
             except (ValueError, OSError, json.JSONDecodeError):
                 continue
@@ -588,6 +1146,61 @@ def _age_label(seconds: int) -> str:
     if seconds < 86400:
         return f"{seconds // 3600} 小时前"
     return f"{seconds // 86400} 天前"
+
+
+def _evaluate_knowledge_rules(catalog: list[dict[str, Any]], settings: dict[str, Any]) -> list[dict[str, Any]]:
+    """Turn local snapshots into the stable fact vocabulary used by knowledge packs."""
+    def first_number(source: str, keywords: tuple[str, ...]) -> float | None:
+        for _item, _label, value in _metric_matches(source, keywords):
+            number = _parse_number(value)
+            if number is not None:
+                return number
+        return None
+
+    inventory_values = [
+        number
+        for _item, _label, value in _metric_matches("doudian", ("可售库存", "库存"))
+        if (number := _parse_number(value)) is not None
+    ]
+    facts = {
+        "spend": first_number("qianchuan", ("消耗", "花费", "spend", "广告消耗")),
+        "roi": first_number("qianchuan", ("支付roi", "成交roi", "roi")),
+        "data_age_minutes": max((int(item.get("age_seconds") or 0) for item in catalog), default=0) / 60,
+        "inventory": {"available": min(inventory_values) if inventory_values else None},
+        "sales": {"last_24h": first_number("doudian", ("支付订单", "成交订单", "订单数", "订单")) or 0},
+    }
+    rule_settings = {
+        **settings,
+        "min_spend": settings.get("min_spend_for_action", 100),
+        "inventory_warning_line": settings.get("low_inventory_threshold", 10),
+        "max_data_age_minutes": 30,
+    }
+    try:
+        pack = _update_center().load_effective_pack()
+        result = RuleEngine(pack).evaluate(facts, rule_settings)
+    except (UpdateError, RulePackError, ValueError, OSError):
+        logger.exception("本地经营知识包判断失败，继续使用内置兼容诊断")
+        return []
+    alerts: list[dict[str, Any]] = []
+    for item in result.get("diagnostics", []):
+        action = item.get("action") if isinstance(item.get("action"), dict) else {}
+        alerts.append({
+            "level": "high" if item.get("level") in {"critical", "high"} else "warning" if item.get("level") == "medium" else "info",
+            "confidence": "high",
+            "title": str(item.get("title") or "经营规则提醒"),
+            "detail": str(item.get("message") or "本地经营知识包命中了一条规则。"),
+            "action": str(action.get("label") or "请人工核对后处理"),
+            "acceptance": item.get("acceptance") or {},
+            "evidence": {
+                "source": "knowledge_pack",
+                "rule_id": item.get("rule_id"),
+                "rule_version": item.get("rule_version"),
+                "pack_version": result.get("pack_version"),
+                "facts": facts,
+            },
+            "execution_enabled": False,
+        })
+    return alerts
 
 
 def build_insights() -> dict[str, Any]:
@@ -710,6 +1323,10 @@ def build_insights() -> dict[str, Any]:
             }
         )
 
+    existing_titles = {str(item.get("title") or "") for item in alerts}
+    alerts.extend(item for item in _evaluate_knowledge_rules(catalog, settings) if item["title"] not in existing_titles)
+    alerts.sort(key=lambda item: {"high": 0, "warning": 1, "info": 2}.get(str(item.get("level")), 3))
+
     fresh_count = sum(1 for item in catalog if item["fresh"])
     if not catalog:
         headline = "尚未收到经营数据"
@@ -800,6 +1417,10 @@ def save_agent_settings(values: dict[str, Any]) -> dict[str, Any]:
     if account_key and not SAFE_KEY.fullmatch(account_key):
         raise ValueError("invalid qianchuan_account_key")
     next_settings["qianchuan_account_key"] = account_key
+    store_key = str(next_settings.get("store_key") or "").lower()
+    if store_key and not SAFE_KEY.fullmatch(store_key):
+        raise ValueError("invalid store_key")
+    next_settings["store_key"] = store_key
     _atomic_json_write(_settings_path(), next_settings)
     return next_settings
 
@@ -871,7 +1492,7 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 8.0) -> dict[
     request = Request(
         url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "DianAgent/2"},
+        headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": f"DianAgent/{AGENT_VERSION}"},
         method="POST",
     )
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - URL is allowlisted by _validate_webhook
@@ -1568,22 +2189,29 @@ def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
     authorization_id = str(authorization_id or "").lower()
     if not re.fullmatch(r"[a-f0-9]{32}", authorization_id):
         raise ValueError("执行授权编号无效。")
-    session_before = load_execution_preflight().get("session")
-    action_before = next(
-        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == (session_before or {}).get("action_id")),
-        None,
-    )
-    if not action_before:
-        raise ValueError("授权对应的动作不存在。")
-    quota = assess_execution_quota(action_before)
-    if not quota["allowed"]:
-        raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
     with _state_lock:
         session = load_execution_preflight().get("session")
         if not session or session.get("authorization_id") != authorization_id:
             raise ValueError("未找到对应的执行授权。")
         if session.get("state") != "authorized" or session.get("authorization_consumed"):
             raise ValueError("执行授权已使用或已失效。")
+        action = next(
+            (item for item in load_action_audit().get("actions", []) if item.get("action_id") == session.get("action_id")),
+            None,
+        )
+        if not action or action.get("state") != "confirmed":
+            invalidated = {
+                **session,
+                "state": "invalidated",
+                "invalidated_at_ms": int(time.time() * 1000),
+                "execution_enabled": False,
+                "write_enabled": False,
+            }
+            _save_execution_preflight(invalidated)
+            raise ValueError("授权对应的动作已撤销、已停止或不再允许执行。")
+        quota = assess_execution_quota(action)
+        if not quota["allowed"]:
+            raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
         now_ms = int(time.time() * 1000)
         if int(session.get("authorization_expires_at_ms") or 0) <= now_ms:
             _save_execution_preflight({**session, "state": "expired", "execution_enabled": False, "write_enabled": False})
@@ -1597,12 +2225,6 @@ def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
             "write_enabled": False,
         }
         _save_execution_preflight(consumed)
-    action = next(
-        (item for item in load_action_audit().get("actions", []) if item.get("action_id") == consumed.get("action_id")),
-        None,
-    )
-    if not action:
-        raise ValueError("授权对应的动作不存在。")
     return {
         **consumed,
         "execution_request": _execution_request_for_action(action),
@@ -1786,6 +2408,7 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
             )
         items.append({
             "action_id": action.get("action_id"),
+            "account_key": target.get("account_key"),
             "account_label": target.get("account_label"),
             "plan_name": target.get("name"),
             "executed_at_ms": executed_at_ms,
@@ -1818,9 +2441,19 @@ def build_execution_effectiveness_report(*, now_ms: int | None = None) -> dict[s
 
 def build_value_ledger() -> dict[str, Any]:
     """Summarize verified operating value without presenting estimates as settled revenue."""
-
+    catalog = build_store_catalog()
+    selected_store_key = str(catalog.get("selected_store_key") or "")
+    selected_store = next((item for item in catalog.get("stores", []) if item.get("key") == selected_store_key), None)
+    if not selected_store:
+        return {
+            "generated_at": _now_label(),
+            "summary": {"verified_actions": 0, "evaluated_actions": 0, "effective_actions": 0, "effective_rate": None, "protected_budget_capacity": 0.0, "paused_plans": 0, "reviewed_spend": 0.0, "waiting_review": 0, "completed_tasks": 0, "tasks_waiting_review": 0, "blocked_tasks": 0},
+            "recent": [], "recent_task_outcomes": [], "scope": "unresolved", "trusted_scope": False,
+            "note": "尚未识别并选择匿名店铺；未归属数据不会累计到价值账本。",
+        }
     effectiveness = build_execution_effectiveness_report()
-    items = effectiveness.get("items", [])
+    linked_accounts = set(selected_store.get("account_keys") or [])
+    items = [item for item in effectiveness.get("items", []) if item.get("account_key") in linked_accounts]
     evaluated = [item for item in items if item.get("status") in {"effective", "review"}]
     effective = [item for item in evaluated if item.get("status") == "effective"]
     protected_budget = 0.0
@@ -1839,6 +2472,13 @@ def build_value_ledger() -> dict[str, Any]:
         elif str(target or "") == "暂停":
             paused_plans += 1
     effective_rate = round(len(effective) / len(evaluated) * 100, 1) if evaluated else None
+    task_states = load_task_states()
+    task_outcomes = [
+        {"task_id": task_id, **state}
+        for task_id, state in task_states.items()
+        if isinstance(state, dict) and state.get("status") in {"observing", "blocked", "done"}
+    ]
+    task_outcomes.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     return {
         "generated_at": _now_label(),
         "summary": {
@@ -1850,8 +2490,14 @@ def build_value_ledger() -> dict[str, Any]:
             "paused_plans": paused_plans,
             "reviewed_spend": round(reviewed_spend, 2),
             "waiting_review": sum(item.get("status") in {"waiting", "needs_reread"} for item in items),
+            "completed_tasks": sum(item.get("status") == "done" for item in task_states.values() if isinstance(item, dict)),
+            "tasks_waiting_review": sum(item.get("status") == "observing" for item in task_states.values() if isinstance(item, dict)),
+            "blocked_tasks": sum(item.get("status") == "blocked" for item in task_states.values() if isinstance(item, dict)),
         },
         "recent": effective[:5],
+        "recent_task_outcomes": task_outcomes[:10],
+        "scope": _task_scope_key(),
+        "trusted_scope": True,
         "note": "受控预算幅度和复盘消耗用于衡量 Agent 参与范围，不等同于实际节省、结算收入或增量 GMV。",
     }
 
@@ -2856,8 +3502,13 @@ def build_ops_manager() -> dict[str, Any]:
     for item in tasks:
         raw_key = f"{item['owner']}|{item['title']}"
         item["id"] = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:16]
-        item["status"] = states.get(item["id"], {}).get("status", "todo")
-        item["updated_at"] = states.get(item["id"], {}).get("updated_at")
+        task_state = states.get(item["id"], {})
+        item["status"] = task_state.get("status", "todo")
+        item["updated_at"] = task_state.get("updated_at")
+        item["assignee"] = task_state.get("assignee") or item["owner"]
+        item["last_operator"] = task_state.get("operator")
+        item["blocked_reason"] = task_state.get("blocked_reason")
+        item["history"] = task_state.get("history", [])[-10:]
         item["confidence"] = "high" if item["level"] in {"high", "opportunity"} else "medium"
         item["impact"] = "风险优先" if item["level"] == "high" else "增长机会" if item["level"] == "opportunity" else "影响转化"
     unique_tasks: dict[str, dict[str, Any]] = {}
@@ -2867,7 +3518,28 @@ def build_ops_manager() -> dict[str, Any]:
     active = [item for item in tasks if item["status"] != "done"]
     must_do = [item for item in active if item["level"] != "opportunity"][:3]
     opportunities = [item for item in active if item["level"] == "opportunity"][:3]
-    progress = {status: sum(1 for item in tasks if item["status"] == status) for status in ("todo", "doing", "observing", "done")}
+    progress = {status: sum(1 for item in tasks if item["status"] == status) for status in ("todo", "doing", "observing", "blocked", "done")}
+    receipt = build_scan_receipt()
+    unsynced_data = [
+        {
+            "page_id": item.get("id"),
+            "label": item.get("label") or item.get("page_type") or item.get("id"),
+            "reason": item.get("error") or ("数据质量需要复核" if item.get("needs_review") else "读取失败"),
+        }
+        for item in receipt.get("results", [])
+        if not item.get("ok") or item.get("needs_review")
+    ][:8]
+    if shelf.get("data_status") != "ready":
+        unsynced_data.append({"page_id": "doudian_shelf", "label": "抖店商城经营", "reason": "尚无货架快照"})
+    if live.get("data_status") != "ready":
+        unsynced_data.append({"page_id": "live_dashboard", "label": "直播大屏", "reason": "尚无直播快照"})
+    yesterday = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+    yesterday_results = []
+    for result in build_execution_effectiveness_report().get("items", []):
+        executed_at = _timestamp_seconds(result.get("executed_at_ms"))
+        if executed_at and time.strftime("%Y-%m-%d", time.localtime(executed_at)) == yesterday:
+            yesterday_results.append(result)
+    max_risk = next((item for item in active if item.get("level") == "high"), active[0] if active else None)
     return {
         "generated_at": _now_label(),
         "headline": "先处理风险与转化瓶颈，再安排放量",
@@ -2876,6 +3548,12 @@ def build_ops_manager() -> dict[str, Any]:
         "today_top_actions": active[:10],
         "all_tasks": tasks,
         "progress": {**progress, "total": len(tasks), "completed_rate": round(progress["done"] / len(tasks) * 100) if tasks else 0},
+        "today_focus": {
+            "top_three": active[:3],
+            "max_risk": max_risk,
+            "yesterday_result": yesterday_results[0] if yesterday_results else None,
+            "unsynced_data": unsynced_data[:8],
+        },
         "roles": ["货架商品", "直播投放", "内容"],
         "modules": {"shelf": {"status": shelf["data_status"], "action_count": len(shelf["recommendations"])}, "live": {"status": live["data_status"], "action_count": len(live["recommendations"])}, "qianchuan": {"action_count": len(plans)}, "creative": {"status": creative["data_status"], "action_count": len(creative["recommendations"])}, "inventory": {"alert_count": len(inventory)}},
         "mode": "read_only",
@@ -2886,8 +3564,126 @@ def _task_states_path() -> Path:
     return DATA_DIR / "task_states.json"
 
 
-def load_task_states() -> dict[str, Any]:
+def _task_scope_key(store_key: str | None = None, business_date: str | None = None) -> str:
+    settings = load_agent_settings()
+    selected_store = str(store_key or settings.get("store_key") or "unscoped").lower()
+    safe_store = re.sub(r"[^a-z0-9_-]", "_", selected_store)[:80] or "unscoped"
+    day = str(business_date or time.strftime("%Y-%m-%d"))
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise ValueError("invalid business_date")
+    return f"{safe_store}:{day}"
+
+
+def _load_task_state_document() -> dict[str, Any]:
     path = _task_states_path()
+    if not path.exists():
+        return {"schema_version": 2, "scopes": {}}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            return {"schema_version": 2, "scopes": {}}
+        if value.get("schema_version") == 2 and isinstance(value.get("scopes"), dict):
+            return value
+        # v1 stored one global task map. Keep it readable in the current scope
+        # and migrate on the next mutation instead of discarding user history.
+        legacy = {
+            key: item for key, item in value.items()
+            if re.fullmatch(r"[a-f0-9]{16}", str(key)) and isinstance(item, dict)
+        }
+        return {"schema_version": 2, "scopes": {_task_scope_key(): legacy}}
+    except (OSError, json.JSONDecodeError):
+        return {"schema_version": 2, "scopes": {}}
+
+
+def load_task_states(store_key: str | None = None, business_date: str | None = None) -> dict[str, Any]:
+    document = _load_task_state_document()
+    scope = _task_scope_key(store_key, business_date)
+    values = document.get("scopes", {}).get(scope, {})
+    return values if isinstance(values, dict) else {}
+
+
+def update_task_state(
+    task_id: str,
+    status: str,
+    *,
+    operator: str = "",
+    assignee: str = "",
+    note: str = "",
+    title: str = "",
+    owner: str = "",
+    store_key: str | None = None,
+    business_date: str | None = None,
+) -> dict[str, Any]:
+    if not re.fullmatch(r"[a-f0-9]{16}", str(task_id or "")):
+        raise ValueError("invalid task_id")
+    if status not in {"todo", "doing", "observing", "blocked", "done"}:
+        raise ValueError("invalid task status")
+    operator = str(operator or "本机运营")[:80]
+    assignee = str(assignee or "")[:80]
+    note = str(note or "")[:300]
+    title = str(title or "")[:160]
+    owner = str(owner or "")[:80]
+    if status == "blocked" and not note:
+        raise ValueError("阻止任务时必须填写原因")
+    effective_store = str(store_key or load_agent_settings().get("store_key") or "").lower()
+    known_stores = {str(item.get("key") or "") for item in list_store_identities()}
+    if not effective_store or effective_store not in known_stores:
+        raise ValueError("尚未识别当前店铺，任务状态不会写入未归属账本。")
+    store_key = effective_store
+    with _state_lock:
+        document = _load_task_state_document()
+        scope = _task_scope_key(store_key, business_date)
+        scopes = document.setdefault("scopes", {})
+        states = scopes.setdefault(scope, {})
+        previous = states.get(task_id, {}) if isinstance(states.get(task_id), dict) else {}
+        previous_status = previous.get("status", "todo")
+        now = _now_label()
+        event_type = "transferred" if assignee and assignee != previous.get("assignee") and status == previous_status else "status_changed"
+        event = {
+            "event": event_type,
+            "from": previous_status,
+            "to": status,
+            "operator": operator,
+            "assignee": assignee or previous.get("assignee") or owner,
+            "note": note,
+            "at": now,
+        }
+        next_state = {
+            **previous,
+            "status": status,
+            "updated_at": now,
+            "operator": operator,
+            "assignee": assignee or previous.get("assignee") or owner,
+            "title": title or previous.get("title") or "",
+            "owner": owner or previous.get("owner") or "",
+            "history": [*(previous.get("history") or []), event][-50:],
+        }
+        if status == "doing":
+            next_state["started_at"] = previous.get("started_at") or now
+            next_state["blocked_reason"] = None
+        elif status == "observing":
+            next_state["review_started_at"] = now
+            next_state["blocked_reason"] = None
+        elif status == "blocked":
+            next_state["blocked_at"] = now
+            next_state["blocked_reason"] = note
+        elif status == "done":
+            next_state["completed_at"] = now
+            next_state["blocked_reason"] = None
+        states[task_id] = next_state
+        _atomic_json_write(_task_states_path(), document)
+    # When task transitions to done, evaluate suggestion effectiveness
+    if status == "done" and previous_status != "done":
+        _evaluate_on_completion(task_id)
+    return {"task_id": task_id, "scope": scope, **states[task_id]}
+
+
+def _onboarding_state_path() -> Path:
+    return DATA_DIR / "onboarding_state.json"
+
+
+def _load_onboarding_state() -> dict[str, Any]:
+    path = _onboarding_state_path()
     if not path.exists():
         return {}
     try:
@@ -2897,20 +3693,242 @@ def load_task_states() -> dict[str, Any]:
         return {}
 
 
-def update_task_state(task_id: str, status: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[a-f0-9]{16}", str(task_id or "")):
-        raise ValueError("invalid task_id")
-    if status not in {"todo", "doing", "observing", "done"}:
-        raise ValueError("invalid task status")
+def _onboarding_scope(state: dict[str, Any], store_key: str) -> dict[str, Any]:
+    """Return one store's onboarding state without trusting legacy global progress."""
+    scopes = state.get("scopes") if isinstance(state.get("scopes"), dict) else {}
+    scope = scopes.get(store_key) if store_key and isinstance(scopes.get(store_key), dict) else {}
+    return dict(scope)
+
+
+def _label_timestamp(value: Any) -> int:
+    try:
+        return int(time.mktime(time.strptime(str(value or ""), "%Y-%m-%d %H:%M:%S")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _confirm_onboarding_store(store_key: str) -> None:
+    """Persist an explicit, store-scoped confirmation without erasing prior data."""
+    store_key = str(store_key or "").lower()
+    if not SAFE_KEY.fullmatch(store_key):
+        return
     with _state_lock:
-        states = load_task_states()
-        previous_status = states.get(task_id, {}).get("status")
-        states[task_id] = {"status": status, "updated_at": _now_label()}
-        _atomic_json_write(_task_states_path(), states)
-    # When task transitions to done, evaluate suggestion effectiveness
-    if status == "done" and previous_status != "done":
-        _evaluate_on_completion(task_id)
-    return {"task_id": task_id, **states[task_id]}
+        state = _load_onboarding_state()
+        scopes = state.get("scopes") if isinstance(state.get("scopes"), dict) else {}
+        scope = scopes.get(store_key) if isinstance(scopes.get(store_key), dict) else {}
+        now = _now_label()
+        scope["started_at"] = scope.get("started_at") or now
+        scope["store_confirmed_at"] = scope.get("store_confirmed_at") or now
+        scope["updated_at"] = now
+        scopes[store_key] = scope
+        state.update({"schema_version": 2, "scopes": scopes, "updated_at": now})
+        _atomic_json_write(_onboarding_state_path(), state)
+
+
+def update_onboarding_state(event: str) -> dict[str, Any]:
+    if event not in {"start", "first_task_viewed", "reset"}:
+        raise ValueError("invalid onboarding event")
+    with _state_lock:
+        selected_key = str(build_store_catalog().get("selected_store_key") or "")
+        if event == "reset":
+            state = _load_onboarding_state()
+            scopes = state.get("scopes") if isinstance(state.get("scopes"), dict) else {}
+            scopes[selected_key or "unscoped"] = {"started_at": _now_label(), "last_event": "reset"}
+            state.update({"schema_version": 2, "scopes": scopes})
+        else:
+            state = _load_onboarding_state()
+            scopes = state.get("scopes") if isinstance(state.get("scopes"), dict) else {}
+            scope_key = selected_key or "unscoped"
+            scope = scopes.get(scope_key) if isinstance(scopes.get(scope_key), dict) else {}
+            scope["started_at"] = scope.get("started_at") or _now_label()
+            scope["last_event"] = event
+            if event == "first_task_viewed":
+                scope["first_task_viewed_at"] = _now_label()
+            scope["updated_at"] = _now_label()
+            scopes[scope_key] = scope
+            state.update({"schema_version": 2, "scopes": scopes})
+        state["updated_at"] = _now_label()
+        _atomic_json_write(_onboarding_state_path(), state)
+    return build_onboarding_status(state=state)
+
+
+def build_onboarding_status(*, state: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build a resumable first-value journey from real local evidence."""
+
+    state = state if isinstance(state, dict) else _load_onboarding_state()
+    catalog = build_store_catalog()
+    selected_key = str(catalog.get("selected_store_key") or "")
+    selected_store = next((item for item in catalog.get("stores", []) if item.get("key") == selected_key), {})
+    scoped_state = _onboarding_scope(state, selected_key)
+    confirmed_at = _label_timestamp(scoped_state.get("store_confirmed_at"))
+    snapshots = list_snapshots()
+    ops = build_ops_manager()
+    active_tasks = [item for item in ops.get("all_tasks", []) if item.get("status") != "done"]
+    first_task = active_tasks[0] if active_tasks else (ops.get("all_tasks") or [None])[0]
+    fresh_snapshots = [item for item in snapshots if item.get("fresh")]
+    formal_snapshots = [
+        item for item in fresh_snapshots
+        if confirmed_at and int(item.get("captured_at") or 0) >= confirmed_at
+    ]
+    usable_snapshots = [item for item in formal_snapshots if int(item.get("quality_score") or 0) >= 60]
+    formal_doudian_types = {
+        str(item.get("page_type") or "") for item in usable_snapshots if item.get("source") == "doudian"
+    }
+    required_doudian_types = {"overview", "orders", "products", "shelf"}
+    store_confirmed = bool(selected_key and confirmed_at)
+    sync_complete = bool(store_confirmed and required_doudian_types.issubset(formal_doudian_types))
+    first_task_ready = bool(sync_complete and first_task)
+    first_task_viewed = bool(scoped_state.get("first_task_viewed_at")) or bool(
+        first_task and first_task.get("status") in {"doing", "observing", "blocked", "done"}
+    ) if first_task_ready else False
+    steps = [
+        {"id": "environment", "label": "环境检查", "complete": True, "action": "none", "instruction": "本地 Agent 已连接。"},
+        {"id": "store", "label": "确认抖店店铺", "complete": store_confirmed, "action": "select_store", "instruction": "先识别并确认当前抖店，后续数据、任务和日志才会按店隔离。"},
+        {"id": "sync", "label": "完成快速巡店", "complete": sync_complete, "action": "quick_scan", "instruction": "确认店铺后同步经营概览、订单、商品和商城四类关键页面，约 3 分钟。"},
+        {"id": "first_task", "label": "生成第一条今日任务", "complete": first_task_ready, "action": "view_first_task", "instruction": "系统会用最新证据生成一个明确下一步。"},
+        {"id": "evidence", "label": "查看证据与下一步", "complete": first_task_viewed, "action": "view_first_task", "instruction": "核对数据依据、负责人和完成验收标准。"},
+    ]
+    current_index = next((index for index, item in enumerate(steps) if not item["complete"]), len(steps) - 1)
+    current = steps[current_index]
+    completed_count = sum(1 for item in steps if item["complete"])
+    missing_data: list[dict[str, str]] = []
+    sources = {item.get("source") for item in formal_snapshots}
+    for page_type, label, path in [
+        ("overview", "经营概览", "抖店后台 → 首页/经营概览 → 点击重新识别"),
+        ("orders", "订单", "抖店后台 → 订单 → 点击单页重试"),
+        ("products", "商品", "抖店后台 → 商品 → 点击单页重试"),
+        ("shelf", "商城经营", "抖店后台 → 商城 → 商城经营 → 点击单页重试"),
+    ]:
+        if page_type not in formal_doudian_types:
+            missing_data.append({"id": f"doudian_{page_type}", "label": label, "path": path})
+    optional_enhancements: list[dict[str, str]] = []
+    if "qianchuan" not in sources:
+        optional_enhancements.append({"id": "qianchuan_overview", "label": "千川投放增强", "path": "巨量千川 → 首页 → 同步当前账户后人工确认关联"})
+    return {
+        "schema_version": 2,
+        "status": "completed" if all(item["complete"] for item in steps) else "in_progress",
+        "status_label": "首次经营闭环已建立" if all(item["complete"] for item in steps) else f"继续第 {current_index + 1} 步：{current['label']}",
+        "progress": {"completed": completed_count, "total": len(steps), "percent": round(completed_count / len(steps) * 100)},
+        "current_step": current,
+        "steps": steps,
+        "store_key": selected_key,
+        "store_confirmed": store_confirmed,
+        "store_confirmed_at": scoped_state.get("store_confirmed_at"),
+        "selected_store": selected_store,
+        "first_task": first_task,
+        "missing_data": missing_data[:4],
+        "optional_enhancements": optional_enhancements,
+        "started_at": scoped_state.get("started_at"),
+        "updated_at": scoped_state.get("updated_at") or state.get("updated_at"),
+        "discovered": {
+            "store_count": int(catalog.get("store_count") or 0),
+            "snapshot_count": len(fresh_snapshots),
+            "formal_snapshot_count": len(formal_snapshots),
+            "usable_snapshot_count": len(usable_snapshots),
+            "out_of_order": bool(fresh_snapshots and not sync_complete),
+            "note": "已发现历史页面，但需先确认店铺并重新快速巡店，才计入正式进度。" if fresh_snapshots and not sync_complete else "",
+        },
+        "resume_supported": True,
+        "note": "纯抖店数据可以完成首次经营闭环；千川仅增强投放分析，未关联时不会阻塞抖店任务。",
+    }
+
+
+def build_connection_guide() -> dict[str, Any]:
+    """Converge identity, first value and optional ads into one next-best action."""
+    catalog = build_store_catalog()
+    onboarding = build_onboarding_status()
+    context = build_operation_context(catalog=catalog)
+    readiness = build_automation_readiness()
+    selected_key = str(catalog.get("selected_store_key") or "")
+    selected = next((item for item in catalog.get("stores", []) if item.get("key") == selected_key), {})
+    l1 = bool(onboarding.get("store_confirmed"))
+    l2 = bool(l1 and next((item.get("complete") for item in onboarding.get("steps", []) if item.get("id") == "sync"), False))
+    l3 = bool(l2 and catalog.get("selected_account_key") and int(selected.get("qianchuan_page_count") or 0) > 0)
+    readiness_summary = readiness.get("summary") if isinstance(readiness.get("summary"), dict) else {}
+    l4 = bool(l3 and context.get("execution_review_allowed") and int(readiness_summary.get("preflight_ready") or 0) > 0)
+    reached_level = 4 if l4 else 3 if l3 else 2 if l2 else 1 if l1 else 0
+    levels = [
+        {"id": "L1", "label": "店铺已识别", "reached": l1, "next_action": "确认当前抖店"},
+        {"id": "L2", "label": "经营数据可用", "reached": l2, "next_action": "完成 3 分钟快速巡店"},
+        {"id": "L3", "label": "投放已连接", "reached": l3, "next_action": "同步并关联当前千川页"},
+        {"id": "L4", "label": "受控执行可用", "reached": l4, "next_action": "选择方案并完成安全检查"},
+    ]
+    store_count = int(catalog.get("store_count") or 0)
+    first_value_complete = onboarding.get("status") == "completed"
+    current_step = onboarding.get("current_step") if isinstance(onboarding.get("current_step"), dict) else {}
+    if not store_count:
+        action = {
+            "id": "identify_store", "label": "打开抖店经营概览并识别", "eta": "约 1 分钟",
+            "value": "识别成功后，数据、任务和日志会按店铺隔离。",
+            "failure": "尚未发现抖店身份，因为经营概览页还未完成读取。现在请打开目标页面并点击重新识别。",
+        }
+    elif not l1:
+        action = {
+            "id": "confirm_store", "label": "确认这是我的店铺", "eta": "不到 1 分钟",
+            "value": "确认后才会开始计算这家店的正式经营进度。",
+            "failure": "已经发现店铺，但还没有得到你的确认，所以历史快照不会计入进度。现在请选择店铺并确认。",
+        }
+    elif not l2:
+        action = {
+            "id": "quick_scan", "label": "开始 3 分钟快速巡店", "eta": "约 3–5 分钟",
+            "value": "同步经营概览、订单、商品和商城后，生成第一条今日任务。",
+            "failure": "关键页面还没有在确认店铺后完整同步，因此旧快照只算已发现。现在点击快速巡店，失败页可单独重试。",
+        }
+    elif current_step.get("id") in {"first_task", "evidence"} and not first_value_complete:
+        action = {
+            "id": "view_first_task", "label": "查看第一条经营任务", "eta": "约 2 分钟",
+            "value": "看到问题、证据、动作和验收标准，首次闭环才算完成。",
+            "failure": "经营数据已经可用，但第一条任务还未确认查看。现在打开任务卡并核对证据。",
+        }
+    elif not l3:
+        action = {
+            "id": "sync_qianchuan", "label": "同步当前千川页", "eta": "约 1–3 分钟",
+            "value": "可选：连接后才会出现投放建议和受控执行；不影响抖店巡店。",
+            "optional": True,
+            "failure": "尚未连接千川，因此投放自动化未开启；纯抖店诊断仍可正常使用。现在可同步当前千川页，或暂不使用投放功能。",
+        }
+    elif not l4:
+        action = {
+            "id": "view_ad_candidates", "label": "选择一个投放方案", "eta": "约 3 分钟",
+            "value": "选择方案后再确认授权，内部安全检查会按需展开。",
+            "failure": "千川已连接，但还没有方案同时满足计划 ID、时效、质量、额度和人工授权。现在选择候选并查看缺少项。",
+        }
+    else:
+        action = {
+            "id": "view_controlled_execution", "label": "进入受控执行", "eta": "约 3–5 分钟",
+            "value": "按选择方案、确认授权、查看结果三步完成单次受监督调整。",
+        }
+    tutorial = [
+        {"id": "connect_doudian", "label": "连接抖店", "complete": l1, "detail": "只读取已登录经营页面，不读取密码。"},
+        {"id": "quick_scan", "label": "快速巡店", "complete": l2, "detail": "约 3–5 分钟，确认店铺后的数据才计入进度。"},
+        {"id": "first_task", "label": "查看第一条任务", "complete": first_value_complete, "detail": "核对证据、建议动作和验收标准。"},
+        {"id": "optional_qianchuan", "label": "按需连接千川", "complete": l3, "optional": True, "detail": "不投放可以跳过；连接后才显示计划建议。"},
+    ]
+    return {
+        "schema_version": 1,
+        "status": "collapsed" if first_value_complete else "expanded",
+        "collapsed": first_value_complete,
+        "store": {
+            "key": selected_key,
+            "label": str(selected.get("label") or "尚未识别店铺"),
+            "updated_at": selected.get("updated_at"),
+        },
+        "level": f"L{reached_level}" if reached_level else "L0",
+        "level_label": levels[reached_level - 1]["label"] if reached_level else "尚未连接店铺",
+        "levels": levels,
+        "next_upgrade": action,
+        "tutorial": tutorial,
+        "onboarding": onboarding,
+        "operation_context": context,
+        "automation": {
+            "mode": "three_step" if l3 else "off",
+            "qianchuan_connected": l3,
+            "candidate_count": len(readiness.get("items") or []),
+            "steps": ["选择方案", "确认授权", "查看结果"] if l3 else [],
+            "safety_details_available": True,
+        },
+        "note": "千川是可选增强；没有千川时不阻塞抖店首次诊断。",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -3067,6 +4085,7 @@ def export_tasks(fmt: str = "clipboard") -> dict[str, Any]:
     todo = [item for item in tasks if item.get("status") == "todo"]
     doing = [item for item in tasks if item.get("status") == "doing"]
     observing = [item for item in tasks if item.get("status") == "observing"]
+    blocked = [item for item in tasks if item.get("status") == "blocked"]
     done = [item for item in tasks if item.get("status") == "done"]
     total = len(tasks)
     completed = len(done)
@@ -3082,6 +4101,9 @@ def export_tasks(fmt: str = "clipboard") -> dict[str, Any]:
         if observing:
             lines.append("\n## 待观察")
             lines.extend(f"- [{item['owner']}] {item['title']}" for item in observing)
+        if blocked:
+            lines.append("\n## 已阻止")
+            lines.extend(f"- [{item['assignee']}] {item['title']}：{item.get('blocked_reason') or '等待解除阻止'}" for item in blocked)
         if done:
             lines.append("\n## 已完成")
             lines.extend(f"- ~~[{item['owner']}] {item['title']}~~" for item in done)
@@ -3101,6 +4123,10 @@ def export_tasks(fmt: str = "clipboard") -> dict[str, Any]:
     lines.append("【待观察】")
     for item in observing:
         lines.append(f"  [{item['owner']}] {item['title']}")
+    lines.append("")
+    lines.append("【已阻止】")
+    for item in blocked:
+        lines.append(f"  [{item['assignee']}] {item['title']}：{item.get('blocked_reason') or '等待解除阻止'}")
     lines.append("")
     lines.append("【已完成】")
     for item in done:
@@ -3128,8 +4154,12 @@ def load_suggestion_snapshots() -> dict[str, Any]:
 
 
 def save_suggestion_snapshot(task_id: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    selected_store = str(load_agent_settings().get("store_key") or "")
+    if not selected_store or selected_store not in {str(item.get("key") or "") for item in list_store_identities()}:
+        raise ValueError("尚未识别当前店铺，暂不写入效果基线。")
     with _state_lock:
         snapshots = load_suggestion_snapshots()
+        scope = _task_scope_key()
         # Capture current metrics as baseline
         metrics: dict[str, Any] = {}
         for item in list_snapshots():
@@ -3139,20 +4169,23 @@ def save_suggestion_snapshot(task_id: str, context: dict[str, Any] | None = None
                 metrics[f"{item['source']}/{item['page_type']}/{key}"] = value
         entry = {
             "task_id": str(task_id or "")[:64],
+            "scope": scope,
             "created_at": _now_label(),
             "context": context or {},
             "metrics_snapshot": metrics,
             "evaluated": False,
             "evaluation": None,
         }
-        snapshots[str(task_id)] = entry
+        snapshots[f"{scope}|{task_id}"] = entry
         _atomic_json_write(_suggestion_snapshots_path(), snapshots)
     return entry
 
 
 def _evaluate_on_completion(task_id: str) -> dict[str, Any] | None:
     snapshots = load_suggestion_snapshots()
-    entry = snapshots.get(str(task_id))
+    scope = _task_scope_key()
+    storage_key = f"{scope}|{task_id}"
+    entry = snapshots.get(storage_key) or snapshots.get(str(task_id))
     if not entry or entry.get("evaluated"):
         return None
     old_metrics = entry.get("metrics_snapshot", {})
@@ -3199,19 +4232,26 @@ def _evaluate_on_completion(task_id: str) -> dict[str, Any] | None:
         "degradations": degradations,
         "changes": changes[:10],
     }
-    snapshots[str(task_id)] = entry
+    snapshots[storage_key] = entry
+    if storage_key != str(task_id):
+        snapshots.pop(str(task_id), None)
     _atomic_json_write(_suggestion_snapshots_path(), snapshots)
     return entry
 
 
 def get_effectiveness_report() -> dict[str, Any]:
     snapshots = load_suggestion_snapshots()
-    evaluated = [item for item in snapshots.values() if item.get("evaluated")]
+    scope = _task_scope_key()
+    scoped = [
+        item for item in snapshots.values()
+        if isinstance(item, dict) and item.get("scope", scope) == scope
+    ]
+    evaluated = [item for item in scoped if item.get("evaluated")]
     effective = sum(1 for item in evaluated if item.get("evaluation", {}).get("effective"))
     total = len(evaluated)
     return {
         "generated_at": _now_label(),
-        "total_tracked": len(snapshots),
+        "total_tracked": len(scoped),
         "total_evaluated": total,
         "effective_count": effective,
         "effective_rate": round(effective / total * 100, 1) if total else 0,
@@ -3235,13 +4275,24 @@ def _scan_status_path() -> Path:
 def save_scan_status(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("scan status must be an object")
-    allowed = {"status", "reason", "account_mode", "account_key", "account_label", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
+    allowed = {"status", "scope", "targeted_page_ids", "coverage_complete", "reason", "store_key", "account_mode", "account_key", "account_label", "started_at", "finished_at", "current", "index", "total", "success", "failed", "low_quality", "results", "error"}
     status = {key: value[key] for key in allowed if key in value}
     if status.get("status") not in {"idle", "running", "completed", "partial", "cancelled", "error"}:
         raise ValueError("invalid scan status")
     results = status.get("results", [])
     if not isinstance(results, list) or len(results) > 100:
         raise ValueError("invalid scan results")
+    if status.get("scope") not in {None, "full", "quick"}:
+        raise ValueError("invalid scan scope")
+    for key_name in ("store_key", "account_key"):
+        key_value = str(status.get(key_name) or "").lower()
+        if key_value and not SAFE_KEY.fullmatch(key_value):
+            raise ValueError(f"invalid {key_name}")
+        status[key_name] = key_value
+    status["account_label"] = _private_alias("account", status["account_key"]) if status.get("account_key") else ""
+    targeted_page_ids = status.get("targeted_page_ids", [])
+    if not isinstance(targeted_page_ids, list) or len(targeted_page_ids) > 20:
+        raise ValueError("invalid targeted page ids")
     _atomic_json_write(_scan_status_path(), status)
     return status
 
@@ -3307,12 +4358,16 @@ def build_scan_receipt() -> dict[str, Any]:
     completed = len(results)
     coverage_rate = round(completed / total * 100) if total else 0
     status = str(scan.get("status") or "idle")
+    quick_scope = str(scan.get("scope") or "") == "quick"
     if status == "running":
         readiness = "running"
-        readiness_label = "正在采集"
+        readiness_label = "正在采集首诊断数据" if quick_scope else "正在采集"
     elif not results:
         readiness = "empty"
         readiness_label = "等待巡查"
+    elif status == "completed" and quick_scope and not failed and not needs_review:
+        readiness = "quick_ready"
+        readiness_label = "首诊断数据已就绪"
     elif status == "completed" and not failed and not needs_review and coverage_rate == 100:
         readiness = "ready"
         readiness_label = "数据可用于分析"
@@ -3333,9 +4388,12 @@ def build_scan_receipt() -> dict[str, Any]:
     return {
         "generated_at": _now_label(),
         "scan_status": status,
+        "scope": "quick" if quick_scope else "full",
         "readiness": readiness,
         "readiness_label": readiness_label,
         "analysis_ready": readiness == "ready",
+        "first_value_ready": readiness in {"quick_ready", "ready"},
+        "store_key": str(scan.get("store_key") or "")[:80],
         "account_key": str(scan.get("account_key") or "")[:80],
         "account_label": account_label,
         "started_at": int(scan.get("started_at", 0) or 0),
@@ -3383,8 +4441,12 @@ def build_operation_context(
         ),
         None,
     )
-    receipt_key = str(receipt.get("account_key") or "")
-    identity_match = not receipt_key or not selected_key or receipt_key == selected_key
+    receipt_store_key = str(receipt.get("store_key") or "")
+    receipt_account_key = str(receipt.get("account_key") or "")
+    selected_account_key = str(catalog.get("selected_account_key") or "")
+    identity_match = receipt_store_key == selected_key if receipt_store_key else (
+        receipt_account_key == (selected_account_key or selected_key) if receipt_account_key else True
+    )
     updated_at = max(
         _timestamp_seconds(selected.get("updated_at") if selected else 0),
         _timestamp_seconds(receipt.get("finished_at")),
@@ -3438,7 +4500,7 @@ def build_operation_context(
 
     source_label = "尚未绑定"
     if selected:
-        source_label = "千川官方 API" if selected.get("channel") == "official_api" else "浏览器网页"
+        source_label = "千川官方 API" if selected.get("channel") == "official_api" else "抖店 + 千川网页" if selected.get("channel") == "browser_multi" else "千川网页" if selected.get("channel") == "qianchuan_browser" else "抖店网页"
     freshness_label = "暂无更新时间"
     if age_seconds is not None:
         if age_seconds < 60:
@@ -3456,7 +4518,7 @@ def build_operation_context(
         "state_label": state_label,
         "decision_policy": decision_policy,
         "analysis_allowed": state != "blocked",
-        "execution_review_allowed": state == "ready",
+        "execution_review_allowed": state == "ready" and bool(selected_account_key) and int(selected.get("qianchuan_page_count") or 0) > 0 if selected else False,
         "selected_store": {
             "key": selected_key,
             "label": str(selected.get("label") or "未命名店铺") if selected else "尚未选择",
@@ -3684,7 +4746,9 @@ def _atomic_text_write(path: Path, text: str) -> None:
 
 
 def _reports_dir() -> Path:
-    return DATA_DIR / "reports"
+    store_key = str(load_agent_settings().get("store_key") or "legacy_unscoped").lower()
+    safe_scope = store_key if SAFE_KEY.fullmatch(store_key) else "legacy_unscoped"
+    return DATA_DIR / "reports" / safe_scope
 
 
 def _report_list(items: list[str], empty: str) -> str:
@@ -4020,8 +5084,42 @@ def _daily_report_scheduler(stop_event: threading.Event) -> None:
             logger.exception("生成定时日报失败")
 
 
+def _knowledge_update_scheduler(stop_event: threading.Event) -> None:
+    """Check the configured signed knowledge feed once per day."""
+    while not stop_event.is_set():
+        if os.environ.get("DIAN_AGENT_UPDATE_MANIFEST_URL"):
+            try:
+                center = _update_center()
+                result = center.check_for_update()
+                _save_update_settings({"last_check_at": _now_label(), "last_check": result})
+                if result.get("available"):
+                    installed = center.install()
+                    # Loading and constructing the engine is the final local
+                    # canary before this process exposes the new rules.
+                    RuleEngine(center.load_effective_pack())
+                    _save_update_settings({
+                        "last_check_at": _now_label(),
+                        "last_check": {"available": False, "candidate_version": installed.get("pack_version")},
+                    })
+                    _invalidate_cache()
+                    logger.info("经营知识包已自动更新: %s", installed.get("pack_version"))
+            except (UpdateError, RulePackError, ValueError, OSError) as error:
+                logger.warning("经营知识包自动更新失败，继续使用当前版本: %s", error)
+                _save_update_settings({"last_check_at": _now_label(), "last_check": {"available": False, "error": str(error)}})
+        stop_event.wait(24 * 60 * 60)
+
+
+def _current_memory_scope(query: dict[str, list[str]] | None = None) -> tuple[str, str]:
+    """Resolve memory scope from an explicit request or the locked current shop."""
+    query = query or {}
+    catalog = build_store_catalog()
+    store_key = str((query.get("store_key") or [""])[0] or catalog.get("selected_store_key") or "").lower()
+    account_key = str((query.get("account_key") or [""])[0] or catalog.get("selected_account_key") or "").lower()
+    return store_key, account_key
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DianAgent/3.5.1"
+    server_version = f"DianAgent/{AGENT_VERSION}"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(fmt, *args)
@@ -4075,7 +5173,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {
                     "status": "ok",
-                    "version": "3.5.1",
+                    "version": AGENT_VERSION,
+                    "bridge_protocol_version": 2,
                     "mode": execution_mode,
                     "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}.get(execution_mode, "未知模式"),
                     "execution_enabled": execution_mode == "supervised",
@@ -4164,6 +5263,51 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/stores":
             self._json(build_store_catalog())
+            return
+        if path == "/system/status":
+            self._json(build_system_status())
+            return
+        if path == "/runtime/status":
+            self._json(build_agent_runtime_status())
+            return
+        if path == "/onboarding/status":
+            self._json(build_onboarding_status())
+            return
+        if path == "/connection-guide":
+            self._json(build_connection_guide())
+            return
+        if path == "/distribution/status":
+            self._json(build_distribution_status(DATA_DIR.parent))
+            return
+        if path == "/telemetry/status":
+            settings = _load_update_settings()
+            self._json(LocalAnonymousFeedbackQueue(DATA_DIR.parent).status(
+                consent_enabled=settings["telemetry_enabled"]
+            ))
+            return
+        if path == "/release/readiness":
+            self._json(build_release_readiness(
+                DATA_DIR.parent,
+                production_ed25519_trust=bool(PRODUCTION_OFFLINE_PUBLIC_KEYS),
+            ))
+            return
+        if path == "/rules/status":
+            self._json(_knowledge_status())
+            return
+        if path == "/memory":
+            store_key, account_key = _current_memory_scope(query)
+            if not store_key:
+                self._json({
+                    "schema_version": 1,
+                    "scope": {"store_key": "", "account_key": account_key},
+                    "entries": [],
+                    "count": 0,
+                    "counts": {},
+                    "storage": "local",
+                    "note": "请先选择当前店铺，再读取经营记忆。",
+                })
+                return
+            self._json(list_operator_memory(DATA_DIR, store_key, account_key))
             return
         if path == "/ops-manager":
             self._json(_cached("ops_manager", build_ops_manager))
@@ -4264,12 +5408,126 @@ class Handler(BaseHTTPRequestHandler):
                 saved = save_data(source, data)
                 _invalidate_cache()
                 account = saved.get("data", {}).get("account") if isinstance(saved.get("data"), dict) else None
-                self._json({"ok": True, "source": source, "page_type": saved["page_type"], "account": account})
+                store = saved.get("data", {}).get("store") if isinstance(saved.get("data"), dict) else None
+                self._json({"ok": True, "source": source, "page_type": saved["page_type"], "account": account, "store": store, "identity_resolution": saved.get("data", {}).get("identity_resolution")})
+                return
+            if path == "/stores/select":
+                result = select_store_context(str(payload.get("store_key") or ""), str(payload.get("account_key") or ""))
+                _invalidate_cache()
+                self._json({"ok": True, **result})
+                return
+            if path == "/stores/link":
+                result = link_store_account(str(payload.get("store_key") or ""), str(payload.get("account_key") or ""))
+                _invalidate_cache()
+                self._json({"ok": True, **result})
                 return
             if path == "/settings":
                 settings = save_agent_settings(payload)
                 _invalidate_cache()
                 self._json({"ok": True, "settings": settings})
+                return
+            if path == "/memory/upsert":
+                store_key, account_key = _current_memory_scope({})
+                memory_payload = dict(payload)
+                memory_payload["store_key"] = str(payload.get("store_key") or store_key)
+                memory_payload["account_key"] = str(payload.get("account_key") or account_key)
+                saved = upsert_operator_memory(DATA_DIR, memory_payload)
+                self._json(saved)
+                return
+            if path == "/memory/archive":
+                store_key, account_key = _current_memory_scope({})
+                archived = archive_operator_memory(
+                    DATA_DIR,
+                    payload.get("id"),
+                    str(payload.get("store_key") or store_key),
+                    str(payload.get("account_key") or account_key),
+                )
+                self._json(archived)
+                return
+            if path == "/updates/channel":
+                settings = _save_update_settings({"channel": payload.get("channel")})
+                self._json({"ok": True, "channel": settings["channel"], "message": "更新通道已保存"})
+                return
+            if path == "/telemetry/settings":
+                if not isinstance(payload.get("enabled"), bool):
+                    raise ValueError("enabled 必须是布尔值")
+                settings = _save_update_settings({"telemetry_enabled": payload["enabled"]})
+                self._json({
+                    "ok": True,
+                    "enabled": settings["telemetry_enabled"],
+                    "raw_shop_data_uploaded": False,
+                    "message": "匿名改进计划已开启" if settings["telemetry_enabled"] else "匿名改进计划已关闭",
+                })
+                return
+            if path == "/telemetry/queue":
+                settings = _load_update_settings()
+                queued = LocalAnonymousFeedbackQueue(DATA_DIR.parent).enqueue(
+                    payload,
+                    consent_enabled=settings["telemetry_enabled"],
+                )
+                self._json({
+                    "ok": True,
+                    "queued": queued,
+                    "upload_attempted": False,
+                    "mode": "local_queue_only",
+                })
+                return
+            if path == "/telemetry/queue/clear":
+                if payload.get("confirm") is not True:
+                    raise ValueError("confirm 必须为 true 才能清空匿名反馈队列")
+                removed = LocalAnonymousFeedbackQueue(DATA_DIR.parent).clear()
+                self._json({
+                    "ok": True,
+                    "removed": removed,
+                    "shop_data_removed": False,
+                })
+                return
+            if path == "/distribution/extension-source":
+                origin = str(self.headers.get("Origin") or "").strip().lower()
+                origin_match = re.fullmatch(r"chrome-extension://([a-p]{32})", origin)
+                result = save_extension_install_state(
+                    DATA_DIR.parent,
+                    payload,
+                    origin_extension_id=origin_match.group(1) if origin_match else None,
+                )
+                self._json({"ok": True, "extension": result})
+                return
+            if path == "/updates/check":
+                center = _update_center()
+                result = center.check_for_update()
+                _save_update_settings({"last_check_at": _now_label(), "last_check": result})
+                self._json({"ok": True, **result, "message": "发现新的知识包" if result.get("available") else "当前已是最新知识包"})
+                return
+            if path == "/updates/apply":
+                if str(payload.get("component") or "knowledge") != "knowledge":
+                    raise ValueError("当前只支持独立更新知识包；程序和扩展必须使用签名安装包")
+                result = _update_center().install()
+                _save_update_settings({"last_check_at": _now_label(), "last_check": None})
+                self._json({**result, "message": f"知识包 {result.get('pack_version')} 已验证并启用"})
+                return
+            if path == "/rules/import-local":
+                pack = payload.get("pack")
+                if not isinstance(pack, dict):
+                    raise ValueError("pack 必须是知识包对象")
+                result = _update_center().install_local(pack)
+                _save_update_settings({"last_check_at": _now_label(), "last_check": None})
+                self._json({**result, "message": f"行业知识包 {result.get('pack_version')} 已验证并启用"})
+                return
+            if path == "/updates/rollback":
+                if str(payload.get("component") or "knowledge") != "knowledge":
+                    raise ValueError("当前只支持知识包回滚")
+                requested_version = str(payload.get("pack_version") or "").strip() or None
+                result = _update_center().rollback(pack_version=requested_version)
+                _save_update_settings({"last_check_at": _now_label(), "last_check": None})
+                self._json({**result, "message": f"已回滚到知识包 {result.get('pack_version')}"})
+                return
+            if path == "/rules/evaluate":
+                facts = payload.get("facts")
+                if not isinstance(facts, dict):
+                    raise ValueError("facts 必须是对象")
+                pack = _update_center().load_effective_pack()
+                result = RuleEngine(pack).evaluate(facts, payload.get("settings") or load_agent_settings())
+                self._json({"ok": True, **result})
                 return
             if path == "/actions/strategy/select":
                 decision = save_strategy_decision(str(payload.get("policy_key") or ""))
@@ -4327,9 +5585,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "report": report, "deliveries": deliveries})
                 return
             if path == "/tasks/update":
-                task = update_task_state(str(payload.get("task_id") or ""), str(payload.get("status") or ""))
+                task = update_task_state(
+                    str(payload.get("task_id") or ""),
+                    str(payload.get("status") or ""),
+                    operator=str(payload.get("operator") or ""),
+                    assignee=str(payload.get("assignee") or ""),
+                    note=str(payload.get("note") or ""),
+                    title=str(payload.get("title") or ""),
+                    owner=str(payload.get("owner") or ""),
+                    store_key=str(payload.get("store_key") or "") or None,
+                    business_date=str(payload.get("business_date") or "") or None,
+                )
                 _invalidate_cache()
                 self._json({"ok": True, "task": task})
+                return
+            if path == "/onboarding/update":
+                self._json({"ok": True, "onboarding": update_onboarding_state(str(payload.get("event") or ""))})
                 return
             if path == "/tasks/track":
                 self._json({"ok": True, "snapshot": save_suggestion_snapshot(str(payload.get("task_id") or ""), payload.get("context"))})
@@ -4399,11 +5670,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "scan": save_scan_status(payload)})
                 return
             self._json({"error": "not_found"}, 404)
-        except (json.JSONDecodeError, ValueError, TypeError) as error:
+        except (json.JSONDecodeError, ValueError, TypeError, UpdateError, RollbackError, RulePackError) as error:
             self._json({"error": str(error)}, 400)
 
 
 def main() -> None:
+    database = _initialize_local_store()
+    if database.get("status") != "ready":
+        logger.error("SQLite 初始化失败，服务将仅使用兼容 JSON，等待用户修复: %s", database.get("error"))
+    if os.environ.get("DIAN_AGENT_SELF_TEST") == "1":
+        knowledge = _knowledge_status()
+        if database.get("status") == "ready" and knowledge.get("status") == "ready":
+            logger.info("独立 Agent 自检通过: database=%s knowledge=%s", database.get("schema_version"), knowledge.get("version"))
+            return
+        logger.error("独立 Agent 自检失败: database=%s knowledge=%s", database, knowledge)
+        raise SystemExit(1)
     # allow_reuse_address must be set before __init__ calls server_bind()
     ThreadingHTTPServer.allow_reuse_address = True
     try:
@@ -4417,7 +5698,9 @@ def main() -> None:
         sys.exit(1)
     stop_event = threading.Event()
     scheduler = threading.Thread(target=_daily_report_scheduler, args=(stop_event,), daemon=True)
+    update_scheduler = threading.Thread(target=_knowledge_update_scheduler, args=(stop_event,), daemon=True)
     scheduler.start()
+    update_scheduler.start()
     logger.info("店策 Agent 本地服务已启动: http://127.0.0.1:%d", PORT)
     logger.info("方案确认模式（不执行千川操作）；数据目录: %s", DATA_DIR)
     try:
@@ -4427,6 +5710,7 @@ def main() -> None:
     finally:
         stop_event.set()
         scheduler.join(timeout=2)
+        update_scheduler.join(timeout=2)
         server.server_close()
 
 

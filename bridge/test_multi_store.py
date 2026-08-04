@@ -19,8 +19,12 @@ class MultiStoreCatalogTests(unittest.TestCase):
             (official_dir / "plans.json").write_text("{}", encoding="utf-8")
             (browser_dir / "overview.json").write_text("{}", encoding="utf-8")
             accounts = [
-                {"key": "acct_official", "label": "甲店"},
-                {"key": "acct_browser", "label": "乙店"},
+                {"key": "acct_official", "label": "千川账户 A", "store_key": "store_official"},
+                {"key": "acct_browser", "label": "千川账户 B", "store_key": "store_browser"},
+            ]
+            stores = [
+                {"key": "store_official", "label": "店铺 A", "account_keys": ["acct_official"]},
+                {"key": "store_browser", "label": "店铺 B", "account_keys": ["acct_browser"]},
             ]
             sync = {
                 "accounts": [
@@ -34,11 +38,12 @@ class MultiStoreCatalogTests(unittest.TestCase):
             with (
                 patch.object(http_receiver, "DATA_DIR", data_dir),
                 patch.object(http_receiver, "list_qianchuan_accounts", return_value=accounts),
+                patch.object(http_receiver, "list_store_identities", return_value=stores),
                 patch.object(http_receiver, "load_sync_status", return_value=sync),
                 patch.object(
                     http_receiver,
                     "load_agent_settings",
-                    return_value={"qianchuan_account_key": "acct_official"},
+                    return_value={"store_key": "store_official", "qianchuan_account_key": "acct_official"},
                 ),
             ):
                 result = http_receiver.build_store_catalog()
@@ -47,16 +52,19 @@ class MultiStoreCatalogTests(unittest.TestCase):
             self.assertEqual(result["data_isolation"], "per_store")
             self.assertEqual(result["store_count"], 2)
             by_key = {item["key"]: item for item in result["stores"]}
-            self.assertEqual(by_key["acct_official"]["state"], "ready")
-            self.assertEqual(by_key["acct_official"]["page_count"], 1)
-            self.assertTrue(by_key["acct_official"]["selected"])
-            self.assertEqual(by_key["acct_browser"]["state"], "browser_only")
-            self.assertEqual(by_key["acct_browser"]["channel"], "browser")
+            self.assertEqual(by_key["store_official"]["state"], "ready")
+            self.assertEqual(by_key["store_official"]["page_count"], 1)
+            self.assertTrue(by_key["store_official"]["selected"])
+            self.assertEqual(by_key["store_browser"]["state"], "browser_only")
+            self.assertEqual(by_key["store_browser"]["channel"], "qianchuan_browser")
 
     def test_store_without_advertiser_is_not_reported_as_sync_failure(self):
         with (
             patch.object(http_receiver, "list_qianchuan_accounts", return_value=[
-                {"key": "acct_empty", "label": "未投放店"}
+                {"key": "acct_empty", "label": "千川账户 EMPTY", "store_key": "store_empty"}
+            ]),
+            patch.object(http_receiver, "list_store_identities", return_value=[
+                {"key": "store_empty", "label": "店铺 EMPTY", "account_keys": ["acct_empty"]}
             ]),
             patch.object(http_receiver, "load_sync_status", return_value={
                 "accounts": [{"account_key": "acct_empty", "advertiser_count": 0}]
@@ -64,7 +72,7 @@ class MultiStoreCatalogTests(unittest.TestCase):
             patch.object(
                 http_receiver,
                 "load_agent_settings",
-                return_value={"qianchuan_account_key": "acct_empty"},
+                return_value={"store_key": "store_empty", "qianchuan_account_key": "acct_empty"},
             ),
         ):
             result = http_receiver.build_store_catalog()
@@ -76,6 +84,7 @@ class MultiStoreCatalogTests(unittest.TestCase):
         result = http_receiver.build_operation_context(
             catalog={
                 "selected_store_key": "acct_ready",
+                "selected_account_key": "acct_ready_account",
                 "stores": [{
                     "key": "acct_ready",
                     "label": "甲店",
@@ -84,6 +93,8 @@ class MultiStoreCatalogTests(unittest.TestCase):
                     "channel": "official_api",
                     "advertiser_count": 1,
                     "page_count": 4,
+                    "qianchuan_page_count": 4,
+                    "account_keys": ["acct_ready_account"],
                     "updated_at": now,
                 }],
             },

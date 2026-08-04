@@ -8,98 +8,63 @@
   let lastUrl = location.href;
   let routeTimer = null;
 
-  function accountHash(value) {
-    let hash = 2166136261;
-    for (const character of String(value || "")) {
-      hash ^= character.charCodeAt(0);
-      hash = Math.imul(hash, 16777619);
-    }
-    return `acct_${(hash >>> 0).toString(16).padStart(8, "0")}`;
-  }
-
-  function normalizeAccountLabel(value) {
-    const label = String(value || "")
-      .replace(/\u200b/g, "")
-      .replace(/\s+/g, " ")
-      .replace(/^(?:当前账号|账号名称|千川账号|店铺名称)\s*[:：]?\s*/i, "")
-      .trim();
-    if (label.length < 2 || label.length > 48) return "";
-    if (/^(?:店铺|账号|账户|广告主|千川|巨量千川|全部账号|切换账号|账号管理|ID|ID[:：])$/i.test(label)) return "";
-    if (/(?:我的资金|账户明细|账户余额|活动福利|福利明细|立即充值|消息中心|帮助中心|切换账号|账号管理|全部账号)/.test(label)) return "";
-    if (/^(?:ID|账号ID|账户ID|店铺ID)\s*[:：]?\s*$/i.test(label)) return "";
-    return label;
-  }
-
-  function detectStoredAccountId() {
-    const idKeyPattern = /(?:advertiser(?:[_-]?id|Id)|aadvid|advid|account(?:[_-]?id|Id)|shop(?:[_-]?id|Id))/i;
-    const jsonIdPattern = /"(?:advertiser_id|advertiserId|aadvid|advid|account_id|accountId|shop_id|shopId)"\s*:\s*"?([A-Za-z0-9_-]{4,64})"?/;
+  function storedIdentityId(keys, jsonKeys) {
+    const keyPattern = new RegExp(`^(?:${keys.join("|")})$`, "i");
+    const jsonPattern = new RegExp(`"(?:${jsonKeys.join("|")})"\\s*:\\s*"?([A-Za-z0-9_-]{4,80})"?`);
+    const found = [];
     for (const storage of [globalThis.sessionStorage, globalThis.localStorage]) {
       if (!storage) continue;
       try {
         for (let index = 0; index < Math.min(storage.length, 120); index += 1) {
           const key = String(storage.key(index) || "");
           const value = String(storage.getItem(key) || "").slice(0, 4096);
-          if (idKeyPattern.test(key) && /^[A-Za-z0-9_-]{4,64}$/.test(value)) return value;
-          const match = value.match(jsonIdPattern);
-          if (match?.[1]) return match[1];
+          if (keyPattern.test(key) && /^[A-Za-z0-9_-]{4,80}$/.test(value)) found.push(value);
+          const match = value.match(jsonPattern);
+          if (match?.[1]) found.push(match[1]);
         }
       } catch {
-        // Storage access can be blocked by browser policy on some routes.
+        // Storage evidence is optional and never treated as high confidence.
       }
     }
-    return "";
+    return [...new Set(found)];
   }
 
-  function detectAccountContext() {
-    if (location.pathname === "/login" || location.pathname.startsWith("/login/")) return null;
-    const searchParams = new URLSearchParams(location.search);
+  function identityClaim(kind, parameterKeys, attributeNames, storedKeys) {
+    const searchParams = new URLSearchParams(location.search || "");
     const hashSearch = String(location.hash || "").includes("?")
       ? String(location.hash).slice(String(location.hash).indexOf("?"))
       : "";
     const hashParams = new URLSearchParams(hashSearch);
-    const pageText = (document.body?.innerText || "").slice(0, 12000);
-    const idKeys = ["advertiser_id", "advertiserId", "aadvid", "advid", "adv_id", "account_id", "accountId", "shop_id", "shopId"];
-    const queryAccountId = idKeys
-      .flatMap((key) => [searchParams.get(key), hashParams.get(key)])
-      .find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
-    const attributeAccountId = Array.from(document.querySelectorAll(
-      "[data-advertiser-id], [data-account-id], [data-shop-id], [data-aadvid]",
-    )).map((element) => (
-      element.getAttribute("data-advertiser-id")
-      || element.getAttribute("data-account-id")
-      || element.getAttribute("data-shop-id")
-      || element.getAttribute("data-aadvid")
-    )).find((value) => value && /^[A-Za-z0-9_-]{4,64}$/.test(value));
-    const textAccountId = pageText.match(/(?:广告主|账户|账号|店铺)\s*(?:ID|id|编号)\s*[:：]?\s*([A-Za-z0-9_-]{4,64})/)?.[1] || "";
-    const accountId = queryAccountId || attributeAccountId || detectStoredAccountId() || textAccountId;
-    const selectors = [
-      "[data-testid*='account-name']", "[data-testid*='shop-name']", "[data-testid*='advertiser-name']",
-      "[class*='accountName']", "[class*='advertiserName']", "[class*='shopName']",
-      "[class*='account-name']", "[class*='advertiser-name']", "[class*='shop-name']",
-      "[class*='account'] [class*='name']", "[class*='header'] [class*='account']",
-    ];
-    let label = "";
-    for (const selector of selectors) {
-      const elements = Array.from(document.querySelectorAll(selector)).filter((item) => item.getClientRects().length > 0);
-      const value = elements.map((element) => normalizeAccountLabel(element.innerText)).find(Boolean);
-      if (value) {
-        label = value;
-        break;
-      }
+    const queryIds = parameterKeys.flatMap((key) => [searchParams.get(key), hashParams.get(key)])
+      .filter((value) => value && /^[A-Za-z0-9_-]{4,80}$/.test(value));
+    const selector = attributeNames.map((name) => `[${name}]`).join(", ");
+    const attributeIds = selector ? Array.from(document.querySelectorAll(selector))
+      .flatMap((element) => attributeNames.map((name) => element.getAttribute(name)))
+      .filter((value) => value && /^[A-Za-z0-9_-]{4,80}$/.test(value)) : [];
+    const highCandidates = [...new Set([...queryIds, ...attributeIds])];
+    if (highCandidates.length > 1) return { conflict: true, kind };
+    if (highCandidates.length === 1) {
+      return {
+        kind,
+        raw_id: highCandidates[0],
+        evidence_source: queryIds.includes(highCandidates[0]) ? "url_parameter" : "data_attribute",
+        confidence: "high",
+      };
     }
-    if (!label) {
-      const match = pageText.match(/(?:当前账号|账号名称|千川账号|店铺名称)\s*[:：]?\s*\n?\s*([^\n]{2,80})/);
-      label = normalizeAccountLabel(match?.[1]);
-    }
-    if (!accountId && !label) return null;
-    // A platform account ID is the only safe discriminator when several
-    // Qianchuan accounts share the same visible shop name.
-    const identity = accountId || label;
+    const storedIds = storedIdentityId(storedKeys, parameterKeys);
+    if (storedIds.length > 1) return { conflict: true, kind };
+    return storedIds.length === 1 ? { kind, raw_id: storedIds[0], evidence_source: "allowlisted_storage", confidence: "medium" } : null;
+  }
+
+  function detectIdentityClaims() {
+    if (location.pathname === "/login" || location.pathname.startsWith("/login/")) return { claims: [], status: "unresolved" };
+    const store = identityClaim("douyin_shop_id", ["shop_id", "shopId", "store_id", "storeId"], ["data-shop-id", "data-store-id"], ["shop_id", "shopId", "store_id", "storeId", "selected_shop_id"]);
+    const advertiser = identityClaim("qianchuan_advertiser_id", ["advertiser_id", "advertiserId", "aadvid", "advid", "adv_id"], ["data-advertiser-id", "data-aadvid"], ["advertiser_id", "advertiserId", "aadvid", "advid", "adv_id", "selected_advertiser_id"]);
+    const account = advertiser?.raw_id ? null : identityClaim("qianchuan_account_id", ["account_id", "accountId"], ["data-account-id"], ["account_id", "accountId", "selected_account_id"]);
+    const values = [store, advertiser, account].filter(Boolean);
     return {
-      key: accountHash(identity),
-      label: label || `千川账号 · ${String(accountId).slice(-4)}`,
-      confidence: accountId ? "high" : "medium",
-      identity_source: accountId ? "platform_id" : "account_label",
+      claims: values.filter((item) => item.raw_id),
+      status: values.some((item) => item.conflict) ? "conflict" : values.some((item) => item.raw_id) ? "resolved_by_bridge" : "unresolved",
     };
   }
 
@@ -127,9 +92,18 @@
     const stored = await chrome.storage.local.get("settings");
     const privacyMode = stored.settings?.privacyMode !== false;
     const data = await globalThis.DianAgentExtractor.collect(SOURCE, detectPageType(), privacyMode, reason);
-    data.account = detectAccountContext();
+    const identity = detectIdentityClaims();
+    data.identity_claims = identity.claims;
+    data.identity_status = identity.status;
     const response = await chrome.runtime.sendMessage({ type: "page-data", source: SOURCE, data });
-    return { ok: true, page_type: data.page_type, quality: data.quality, account: data.account, bridge: response };
+    return { ok: true, page_type: data.page_type, quality: data.quality, account: response?.account || null, store: response?.store || null, bridge: response };
+  }
+
+  async function ensureResolvedAccount(request) {
+    const resolved = await capture("execution-identity-check");
+    const account = resolved.account;
+    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    return account;
   }
 
   function normalizedNumber(value) {
@@ -139,6 +113,21 @@
 
   function visible(element) {
     return Boolean(element && element.getClientRects().length > 0);
+  }
+
+  function normalizedPlanIdTokens(value) {
+    return String(value || "")
+      .normalize("NFKC")
+      .toLowerCase()
+      .match(/[a-z0-9_-]+/g) || [];
+  }
+
+  function rowHasExactPlanId(rowText, planId) {
+    const target = String(planId || "").normalize("NFKC").trim().toLowerCase();
+    if (!target || !/^[a-z0-9_-]+$/.test(target)) return false;
+    const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(rowText, "计划");
+    return normalizedPlanIdTokens(rowText).includes(target)
+      || normalizedPlanIdTokens(pseudonymized).includes(target);
   }
 
   async function waitFor(check, timeoutMs = 8000, intervalMs = 200) {
@@ -151,12 +140,11 @@
     return null;
   }
 
-  function probeBudgetExecution(request) {
+  async function probeBudgetExecution(request) {
     if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
       throw new Error("当前页面执行器只支持受监督降低预算或恢复原预算。");
     }
-    const account = detectAccountContext();
-    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    await ensureResolvedAccount(request);
     const planId = String(request.plan_id || "").trim();
     const planName = String(request.plan_name || "").trim();
     const expected = Number(request.expected_current_value);
@@ -172,8 +160,7 @@
       .filter(visible);
     const matches = rows.filter((row) => {
       const text = String(row.innerText || "").replace(/\s+/g, " ");
-      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
-      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+      return rowHasExactPlanId(text, planId) && text.includes(planName);
     });
     if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止执行。" : "当前页面未找到授权计划，请打开对应计划列表。");
     const row = matches[0];
@@ -200,8 +187,7 @@
     const rows = Array.from(document.querySelectorAll("tr, [role='row'], [class*='table-row'], [class*='TableRow']")).filter(visible);
     const matches = rows.filter((row) => {
       const text = String(row.innerText || "").replace(/\s+/g, " ");
-      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
-      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+      return rowHasExactPlanId(text, planId) && text.includes(planName);
     });
     if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止执行。" : "当前页面未找到授权计划，请打开对应计划列表。");
     return matches[0];
@@ -211,10 +197,9 @@
     return String(row.innerText || "").replace(/\s+/g, " ").trim();
   }
 
-  function pausePlanProbe(request) {
+  async function pausePlanProbe(request) {
     if (request?.operation_type !== "pause_plan" || request?.mode !== "supervised_submit") throw new Error("当前页面不是受监督暂停动作。");
-    const account = detectAccountContext();
-    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
+    await ensureResolvedAccount(request);
     if (String(request.expected_current_value || "") !== "投放中" && !["启用", "生效中", "运行中"].includes(String(request.expected_current_value || ""))) throw new Error("当前计划状态不是可暂停状态。");
     if (String(request.target_value || "") !== "暂停") throw new Error("暂停目标无效。");
     const row = findPlanRow(request);
@@ -224,7 +209,7 @@
   }
 
   async function supervisedPauseSubmit(request) {
-    pausePlanProbe(request);
+    await pausePlanProbe(request);
     const row = findPlanRow(request);
     const button = Array.from(row.querySelectorAll("button, [role='button'], [role='switch']")).filter((item) => visible(item) && !item.disabled && /^(暂停|停用)$/.test(String(item.innerText || item.textContent || "").trim()))[0];
     if (!button) throw new Error("未找到唯一暂停按钮，页面未做任何修改。");
@@ -238,12 +223,10 @@
   }
 
   async function supervisedBudgetSubmit(request) {
-    probeBudgetExecution(request);
+    await probeBudgetExecution(request);
     if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
       throw new Error("当前页面执行器只支持受监督降低预算或恢复原预算。");
     }
-    const account = detectAccountContext();
-    if (!account || account.key !== request.account_key) throw new Error("当前千川账号与授权账号不一致。");
     const planId = String(request.plan_id || "").trim();
     const planName = String(request.plan_name || "").trim();
     if (!planId || !planName) throw new Error("授权缺少计划唯一 ID 或名称。");
@@ -251,8 +234,7 @@
       .filter((row) => row.getClientRects().length > 0);
     const matches = rows.filter((row) => {
       const text = String(row.innerText || "").replace(/\s+/g, " ");
-      const pseudonymized = globalThis.DianAgentExtractor.pseudonymizePlanIdentifier(text, "计划");
-      return (text.includes(planId) || pseudonymized.includes(planId)) && text.includes(planName);
+      return rowHasExactPlanId(text, planId) && text.includes(planName);
     });
     if (matches.length !== 1) throw new Error(matches.length ? "页面存在多个同名计划，已停止辅助填写。" : "当前页面未找到授权计划，请打开对应计划列表。");
     const row = matches[0];
@@ -322,11 +304,9 @@
       return true;
     }
     if (message.type === "qianchuan-execution-probe") {
-      try {
-        sendResponse(message.request?.operation_type === "pause_plan" ? pausePlanProbe(message.request) : probeBudgetExecution(message.request));
-      } catch (error) {
-        sendResponse({ ok: false, ready: false, error: error.message || String(error) });
-      }
+      (message.request?.operation_type === "pause_plan" ? pausePlanProbe(message.request) : probeBudgetExecution(message.request))
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, ready: false, error: error.message || String(error) }));
       return true;
     }
     return false;

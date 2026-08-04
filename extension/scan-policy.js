@@ -2,16 +2,6 @@
 (function () {
   "use strict";
 
-  function normalizedLabel(value) {
-    return String(value || "").replace(/\s+/g, "").trim().toLocaleLowerCase();
-  }
-
-  function sameAccountLabel(left, right) {
-    const a = normalizedLabel(left);
-    const b = normalizedLabel(right);
-    return Boolean(a && b && a === b);
-  }
-
   function matchAccount(captured, expected) {
     if (!expected?.key) return { ok: true, matchedBy: "auto" };
     if (!captured?.key) {
@@ -23,12 +13,6 @@
     }
     if (captured.key === expected.key) return { ok: true, matchedBy: "key" };
 
-    const sameLabel = sameAccountLabel(captured.label, expected.label);
-    const capturedStable = captured.identity_source === "platform_id";
-    const expectedStable = expected.identity_source === "platform_id";
-    if (sameLabel && !(capturedStable && expectedStable)) {
-      return { ok: true, matchedBy: "label" };
-    }
     return {
       ok: false,
       code: "ACCOUNT_MISMATCH",
@@ -41,12 +25,14 @@
     const message = String(error?.message || error || "");
     if (/未识别当前千川账号/.test(message)) return "ACCOUNT_UNRESOLVED";
     if (/与本轮锁定账号不一致|与所选巡查账号不一致/.test(message)) return "ACCOUNT_MISMATCH";
+    if (/所属店铺与已选店铺不一致/.test(message)) return "STORE_MISMATCH";
+    if (/没有可靠店铺身份|尚未识别当前店铺/.test(message)) return "STORE_IDENTITY_UNRESOLVED";
     if (/登录已失效|完成登录/.test(message)) return "LOGIN_REQUIRED";
     return "";
   }
 
   function isNonRetryable(error) {
-    return ["ACCOUNT_UNRESOLVED", "ACCOUNT_MISMATCH", "LOGIN_REQUIRED"].includes(errorCode(error));
+    return ["ACCOUNT_UNRESOLVED", "ACCOUNT_MISMATCH", "STORE_MISMATCH", "STORE_IDENTITY_UNRESOLVED", "LOGIN_REQUIRED"].includes(errorCode(error));
   }
 
   function rankSeedTabs(tabs, preferredTabId = null) {
@@ -82,7 +68,6 @@
   }
 
   globalThis.DianAgentScanPolicy = {
-    sameAccountLabel,
     matchAccount,
     errorCode,
     isNonRetryable,

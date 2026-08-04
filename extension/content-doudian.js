@@ -8,6 +8,54 @@
   let lastUrl = location.href;
   let routeTimer = null;
 
+  function detectStoredShopId() {
+    const keyPattern = /(?:shop|store)(?:[_-]?id|Id)/i;
+    const jsonPattern = /"(?:shop_id|shopId|store_id|storeId)"\s*:\s*"?([A-Za-z0-9_-]{4,80})"?/;
+    const found = [];
+    for (const storage of [globalThis.sessionStorage, globalThis.localStorage]) {
+      if (!storage) continue;
+      try {
+        for (let index = 0; index < Math.min(storage.length, 120); index += 1) {
+          const key = String(storage.key(index) || "");
+          const value = String(storage.getItem(key) || "").slice(0, 4096);
+          if (keyPattern.test(key) && /^[A-Za-z0-9_-]{4,80}$/.test(value)) found.push(value);
+          const match = value.match(jsonPattern);
+          if (match?.[1]) found.push(match[1]);
+        }
+      } catch {
+        // Some routes deny access to one of the storage areas.
+      }
+    }
+    return [...new Set(found)];
+  }
+
+  function detectShopIdentityClaim() {
+    const searchParams = new URLSearchParams(location.search || "");
+    const hashSearch = String(location.hash || "").includes("?")
+      ? String(location.hash).slice(String(location.hash).indexOf("?"))
+      : "";
+    const hashParams = new URLSearchParams(hashSearch);
+    const keys = ["shop_id", "shopId", "store_id", "storeId"];
+    const queryIds = keys.flatMap((key) => [searchParams.get(key), hashParams.get(key)])
+      .filter((value) => value && /^[A-Za-z0-9_-]{4,80}$/.test(value));
+    const attributeIds = Array.from(document.querySelectorAll("[data-shop-id], [data-store-id]"))
+      .map((element) => element.getAttribute("data-shop-id") || element.getAttribute("data-store-id"))
+      .filter((value) => value && /^[A-Za-z0-9_-]{4,80}$/.test(value));
+    const highCandidates = [...new Set([...queryIds, ...attributeIds])];
+    if (highCandidates.length > 1) return { conflict: true, confidence: "conflict" };
+    if (highCandidates.length === 1) {
+      return {
+        kind: "douyin_shop_id",
+        raw_id: highCandidates[0],
+        evidence_source: queryIds.includes(highCandidates[0]) ? "url_parameter" : "data_attribute",
+        confidence: "high",
+      };
+    }
+    const storedIds = detectStoredShopId();
+    if (storedIds.length > 1) return { conflict: true, confidence: "conflict" };
+    return storedIds.length === 1 ? { kind: "douyin_shop_id", raw_id: storedIds[0], evidence_source: "allowlisted_storage", confidence: "medium" } : null;
+  }
+
   function detectPageType() {
     const path = location.pathname.toLowerCase();
     if (path.includes("/ad/promotion-v2")) {
@@ -37,8 +85,13 @@
     const stored = await chrome.storage.local.get("settings");
     const privacyMode = stored.settings?.privacyMode !== false;
     const data = await globalThis.DianAgentExtractor.collect(SOURCE, detectPageType(), privacyMode, reason);
+    const identityClaim = location.pathname === "/login" || location.pathname.startsWith("/login/")
+      ? null
+      : detectShopIdentityClaim();
+    data.identity_claims = identityClaim?.raw_id ? [identityClaim] : [];
+    data.identity_status = identityClaim?.conflict ? "conflict" : identityClaim ? "resolved_by_bridge" : "unresolved";
     const response = await chrome.runtime.sendMessage({ type: "page-data", source: SOURCE, data });
-    return { ok: true, page_type: data.page_type, quality: data.quality, bridge: response };
+    return { ok: true, page_type: data.page_type, quality: data.quality, store: response?.store || null, bridge: response };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

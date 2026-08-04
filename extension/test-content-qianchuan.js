@@ -4,26 +4,21 @@ const vm = require("vm");
 
 const source = fs.readFileSync(require.resolve("./content-qianchuan.js"), "utf8");
 
-async function collectAccount({ href, pathname, search = "", bodyText = "", selectorValues = {}, storageValues = {} }) {
+async function collectIdentity({ href, pathname, search = "", hash = "", bodyText = "", selectorValues = {}, storageValues = {} }) {
   let listener;
+  let pushedData;
   const context = {
     URLSearchParams,
-    location: {
-      href,
-      pathname,
-      search,
-      hash: "",
-      hostname: "qianchuan.jinritemai.com",
-    },
+    location: { href, pathname, search, hash, hostname: "qianchuan.jinritemai.com" },
     document: {
       title: "巨量千川",
       body: { innerText: bodyText },
       documentElement: {},
       querySelectorAll(selector) {
-        return (selectorValues[selector] || []).map((innerText) => ({
-          innerText,
+        return (selectorValues[selector] || []).map((value) => ({
+          innerText: typeof value === "string" ? value : value.text || "",
           getClientRects: () => [1],
-          getAttribute: () => null,
+          getAttribute: (name) => typeof value === "object" ? value.attrs?.[name] || null : null,
         }));
       },
     },
@@ -32,7 +27,15 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
       runtime: {
         onMessage: { addListener(callback) { listener = callback; } },
         async sendMessage(message) {
-          return { ok: true, account: message.data.account };
+          pushedData = message.data;
+          const claims = message.data.identity_claims || [];
+          const storeClaim = claims.find((item) => item.kind === "douyin_shop_id");
+          const accountClaim = claims.find((item) => item.kind === "qianchuan_advertiser_id" || item.kind === "qianchuan_account_id");
+          return {
+            ok: true,
+            store: storeClaim ? { key: `store_${storeClaim.raw_id}`, identity_source: "hmac_douyin_shop_id" } : null,
+            account: accountClaim ? { key: `acct_${accountClaim.raw_id}`, identity_source: `hmac_${accountClaim.kind}` } : null,
+          };
         },
       },
     },
@@ -41,19 +44,12 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
       key(index) { return Object.keys(storageValues)[index] || null; },
       getItem(key) { return storageValues[key] ?? null; },
     },
-    localStorage: {
-      length: 0,
-      key() { return null; },
-      getItem() { return null; },
-    },
+    localStorage: { length: 0, key() { return null; }, getItem() { return null; } },
     DianAgentExtractor: {
-      async collect(sourceName, pageType) {
-        return { source: sourceName, page_type: pageType, quality: { score: 80 } };
-      },
+      async collect(sourceName, pageType) { return { source: sourceName, page_type: pageType, quality: { score: 80 } }; },
+      pseudonymizePlanIdentifier(value) { return value; },
     },
-    MutationObserver: class {
-      observe() {}
-    },
+    MutationObserver: class { observe() {} },
     setTimeout() { return 1; },
     clearTimeout() {},
     console,
@@ -61,77 +57,45 @@ async function collectAccount({ href, pathname, search = "", bodyText = "", sele
   context.globalThis = context;
   vm.runInNewContext(source, context, { filename: "content-qianchuan.js" });
   assert.strictEqual(typeof listener, "function");
-  return new Promise((resolve, reject) => {
-    listener({ type: "collect-now", reason: "test" }, {}, (response) => {
-      if (!response?.ok) reject(new Error(response?.error || "capture failed"));
-      else resolve(response.account);
-    });
+  const response = await new Promise((resolve, reject) => {
+    listener({ type: "collect-now", reason: "test" }, {}, (result) => result?.ok ? resolve(result) : reject(new Error(result?.error || "capture failed")));
   });
+  return { ...response, pushedData };
 }
 
 (async () => {
-  const real = await collectAccount({
+  const sameStoreA = await collectIdentity({ href: "https://qianchuan.jinritemai.com/home?shop_id=778899", pathname: "/home", search: "?shop_id=778899" });
+  const sameStoreB = await collectIdentity({ href: "https://qianchuan.jinritemai.com/report?shop_id=778899", pathname: "/report", search: "?shop_id=778899" });
+  assert.strictEqual(sameStoreA.store.key, sameStoreB.store.key);
+
+  const combined = await collectIdentity({ href: "https://qianchuan.jinritemai.com/home?shop_id=778899&advertiser_id=12345678", pathname: "/home", search: "?shop_id=778899&advertiser_id=12345678" });
+  assert.strictEqual(combined.store.key, "store_778899");
+  assert.strictEqual(combined.account.key, "acct_12345678");
+  assert.notStrictEqual(combined.store.key, combined.account.key);
+
+  const labelOnly = await collectIdentity({
     href: "https://qianchuan.jinritemai.com/home",
     pathname: "/home",
-    bodyText: "我的资金 账户明细 账户余额 0.00 元 立即充值",
-    selectorValues: {
-      "[class*='shopName']": ["兽醒纪男士活力裤"],
-      "[class*='account'] [class*='name']": ["我的资金 账户明细 账户余额 0.00 元 立即充值"],
-    },
-  });
-  assert.strictEqual(real.label, "兽醒纪男士活力裤");
-  assert.strictEqual(real.identity_source, "account_label");
-
-  const falseAccount = await collectAccount({
-    href: "https://qianchuan.jinritemai.com/home",
-    pathname: "/home",
-    bodyText: "当前账号\n店铺\n我的资金 账户余额 0.00 元",
-    selectorValues: {
-      "[class*='account'] [class*='name']": ["店铺"],
-    },
-  });
-  assert.strictEqual(falseAccount, null);
-
-  const idOnly = await collectAccount({
-    href: "https://qianchuan.jinritemai.com/home?advertiser_id=12345678",
-    pathname: "/home",
-    search: "?advertiser_id=12345678",
-  });
-  assert.strictEqual(idOnly.label, "千川账号 · 5678");
-  assert.strictEqual(idOnly.identity_source, "platform_id");
-
-  const sameNameAccountA = await collectAccount({
-    href: "https://qianchuan.jinritemai.com/home?advertiser_id=10000001",
-    pathname: "/home",
-    search: "?advertiser_id=10000001",
     selectorValues: { "[class*='shopName']": ["同名旗舰店"] },
   });
-  const sameNameAccountB = await collectAccount({
-    href: "https://qianchuan.jinritemai.com/home?advertiser_id=10000002",
-    pathname: "/home",
-    search: "?advertiser_id=10000002",
-    selectorValues: { "[class*='shopName']": ["同名旗舰店"] },
-  });
-  assert.strictEqual(sameNameAccountA.label, sameNameAccountB.label);
-  assert.notStrictEqual(sameNameAccountA.key, sameNameAccountB.key);
-  assert.strictEqual(sameNameAccountA.identity_source, "platform_id");
-  assert.strictEqual(sameNameAccountA.confidence, "high");
+  assert.strictEqual(labelOnly.store, null);
+  assert.strictEqual(labelOnly.account, null);
 
-  const storedId = await collectAccount({
+  const advertiserA = await collectIdentity({ href: "https://qianchuan.jinritemai.com/home?advertiser_id=10000001", pathname: "/home", search: "?advertiser_id=10000001" });
+  const advertiserB = await collectIdentity({ href: "https://qianchuan.jinritemai.com/home?advertiser_id=10000002", pathname: "/home", search: "?advertiser_id=10000002" });
+  assert.notStrictEqual(advertiserA.account.key, advertiserB.account.key);
+
+  const stored = await collectIdentity({
     href: "https://qianchuan.jinritemai.com/dataV2/roi2-material-analysis",
     pathname: "/dataV2/roi2-material-analysis",
-    selectorValues: { "[class*='shopName']": ["会话账号"] },
     storageValues: { selected_advertiser_id: "99887766" },
   });
-  assert.strictEqual(storedId.identity_source, "platform_id");
-  assert.strictEqual(storedId.confidence, "high");
+  assert.strictEqual(stored.account.key, "acct_99887766");
+  assert.strictEqual(stored.pushedData.identity_claims[0].confidence, "medium");
 
-  const loginPage = await collectAccount({
-    href: "https://qianchuan.jinritemai.com/login",
-    pathname: "/login",
-    storageValues: { selected_advertiser_id: "99887766" },
-  });
-  assert.strictEqual(loginPage, null);
+  const login = await collectIdentity({ href: "https://qianchuan.jinritemai.com/login", pathname: "/login", storageValues: { selected_advertiser_id: "99887766" } });
+  assert.strictEqual(login.account, null);
+  assert.strictEqual(login.store, null);
 
   console.log("content-qianchuan tests passed");
 })().catch((error) => {

@@ -38,40 +38,113 @@
         <button id="priority-reminder-action" type="button">立即处理</button>
       </section>
 
-      <section class="store-switcher" aria-label="多店铺模式">
-        <div class="store-switcher-copy">
-          <span class="store-mode-badge">多店铺模式</span>
+      <section id="connection-guide" class="connection-guide expanded" aria-labelledby="connection-guide-title" aria-live="polite">
+        <header class="connection-guide-heading">
+          <div><span>经营连接向导</span><h2 id="connection-guide-title">先完成一件事，再开始经营诊断</h2></div>
+          <b id="connection-level">L0 · 尚未连接店铺</b>
+        </header>
+        <div id="connection-status-strip" class="connection-status-strip" hidden>
           <strong id="active-store-name">正在读取店铺</strong>
-          <small id="store-mode-summary">每个店铺的数据、建议和日志独立保存。</small>
+          <span id="connection-update-time">暂无更新时间</span>
+          <span id="connection-level-compact">L0 · 尚未连接</span>
+          <button id="connection-switch-store" type="button" class="text-button">切换店铺</button>
         </div>
-        <label>当前店铺
-          <select id="qianchuan-account-select">
-            <option value="">正在读取店铺列表</option>
-          </select>
-        </label>
-        <button id="current-qianchuan-button" class="current-page-button">绑定当前千川页</button>
+        <div id="connection-guide-expanded">
+          <div id="connection-levels" class="connection-levels" aria-label="经营连接能力等级"></div>
+          <article class="connection-next">
+            <div class="connection-next-copy">
+              <span>现在只做这一步</span>
+              <h3 id="connection-next-title">正在检查连接状态</h3>
+              <p id="connection-next-detail">确认当前状态后，会给出唯一下一步。</p>
+              <div class="connection-benefits">
+                <span id="connection-eta">预计约 1 分钟</span>
+                <span id="connection-value">完成后开始生成经营任务</span>
+              </div>
+            </div>
+            <button id="connection-guide-action" type="button" data-action="none">正在检查</button>
+          </article>
+          <p id="connection-failure-help" class="connection-failure-help" hidden></p>
+          <div id="connection-store-controls" class="connection-store-controls" hidden>
+            <div class="store-switcher-copy">
+              <span class="store-mode-badge">店铺数据严格隔离</span>
+              <small id="store-mode-summary">请选择你正在经营的店铺。</small>
+            </div>
+            <label>当前店铺
+              <select id="qianchuan-account-select">
+                <option value="">正在读取店铺列表</option>
+              </select>
+            </label>
+            <div id="store-link-review" class="store-link-review" hidden>
+              <strong>千川账户无法自动确认归属</strong>
+              <small>系统不会按同名店铺猜测，请核对证据后人工确认；冲突时会停止关联。</small>
+              <select id="unlinked-account-select" aria-label="待关联千川账户"></select>
+              <button id="link-account-button" type="button">确认关联到当前店铺</button>
+            </div>
+          </div>
+          <button id="current-qianchuan-button" class="current-page-button" type="button" hidden>同步当前千川页</button>
+          <button id="connection-skip-qianchuan" class="text-button" type="button" hidden>暂不使用投放功能</button>
+          <details class="connection-tutorial">
+            <summary>第一次使用？跟着四步完成</summary>
+            <ol id="connection-tutorial-steps"></ol>
+          </details>
+        </div>
       </section>
 
-      <section id="operation-context" class="operation-context checking" aria-label="当前经营上下文" aria-live="polite">
-        <div class="context-heading">
-          <div>
-            <span class="context-eyebrow">操作前先确认</span>
-            <strong>当前经营上下文</strong>
+      <details id="data-version-center" class="fold-card version-center">
+        <summary>
+          <span class="version-center-title">数据与版本中心 <b id="system-readiness">正在检查</b></span>
+          <span id="system-update-state">本地运行 · AI 可选</span>
+        </summary>
+        <section class="version-center-panel">
+          <div class="version-grid">
+            <article><small>本地 Agent</small><strong id="agent-version">检测中</strong><span id="agent-version-note">仅监听本机</span></article>
+            <article><small>浏览器扩展</small><strong id="extension-version">检测中</strong><span>采集与展示</span></article>
+            <article><small>经营知识包</small><strong id="knowledge-version">检测中</strong><span id="knowledge-expiry">本地规则判断</span></article>
+            <article><small>本地数据库</small><strong id="database-version">检测中</strong><span id="database-status">店铺数据不上传</span></article>
           </div>
-          <span id="context-state">正在核对</span>
-        </div>
-        <div class="context-grid">
-          <div><small>当前店铺</small><strong id="context-store">正在读取</strong></div>
-          <div><small>数据来源</small><strong id="context-source">正在读取</strong></div>
-          <div><small>最近更新</small><strong id="context-freshness">正在读取</strong></div>
-          <div><small>数据覆盖</small><strong id="context-coverage">正在读取</strong></div>
-        </div>
-        <div class="context-decision">
-          <p id="context-next-action">核对店铺、千川账户和数据质量后，才能进入今日任务。</p>
-          <button id="context-action" type="button">补齐经营数据</button>
-        </div>
-        <div id="context-warnings" class="context-warnings" hidden></div>
-      </section>
+          <div class="data-freshness-row">
+            <div><small>上次成功巡检</small><strong id="last-scan-at">暂无记录</strong></div>
+            <div><small>过期页面</small><strong id="stale-page-count">检测中</strong></div>
+            <label>更新通道
+              <select id="update-channel">
+                <option value="stable">稳定版</option>
+                <option value="beta">测试版</option>
+                <option value="internal">内部版</option>
+              </select>
+            </label>
+          </div>
+          <div id="update-message" class="update-message">经营判断在本机完成；不连接 AI 也可正常诊断。</div>
+          <section class="release-readiness-card" aria-label="4.0 发布就绪度">
+            <div class="release-readiness-heading">
+              <div><small>推广前必须看</small><strong>4.0 发布就绪度</strong></div>
+              <b id="release-readiness-state" class="blocked">正在核对</b>
+            </div>
+            <p id="release-readiness-summary">正在检查签名、安装来源和浏览器商店状态，不会把内测包误报为正式版。</p>
+            <div id="release-blocker-list" class="release-blocker-list">
+              <div><span id="release-ed25519-state" class="status-dot"></span><strong>生产离线签名</strong><small id="release-ed25519-note">正在检查生产公钥</small></div>
+              <div><span id="release-authenticode-state" class="status-dot"></span><strong>Windows 数字签名</strong><small id="release-authenticode-note">正在检查安装包签名</small></div>
+              <div><span id="release-store-state" class="status-dot"></span><strong>浏览器商店发布</strong><small id="release-store-note">正在检查发布渠道</small></div>
+            </div>
+            <div class="promotion-state-grid">
+              <div><small>当前扩展来源</small><strong id="extension-install-source">正在识别</strong></div>
+              <div><small>匿名反馈队列</small><strong id="feedback-queue-state">默认关闭</strong></div>
+              <div><small>行业知识包</small><strong id="industry-pack-state">正在读取</strong></div>
+            </div>
+          </section>
+          <div class="version-actions">
+            <button id="check-updates" type="button">检查更新</button>
+            <button id="apply-knowledge-update" type="button" disabled>更新知识包</button>
+            <button id="rollback-knowledge" class="secondary" type="button" disabled>回滚知识包</button>
+            <button id="import-industry-pack" class="secondary" type="button">导入行业知识包</button>
+            <input id="industry-pack-file" type="file" accept="application/json,.json" hidden>
+          </div>
+          <label class="telemetry-consent">
+            <input id="telemetry-opt-in" type="checkbox">
+            <span><strong>匿名改进计划（默认关闭）</strong><small>只上传行业、规则编号、指标区间与效果方向；不上传店名、订单、素材、截图、Cookie 或 Token。</small></span>
+          </label>
+          <div class="feedback-queue-row"><span id="feedback-queue-note">未同意时不会入队，也不会发送。</span><button id="clear-feedback-queue" type="button">清空本地队列</button></div>
+        </section>
+      </details>
 
       <details id="oceanengine-oauth-card" class="fold-card oauth-card">
         <summary>官方 API 授权 <span id="oceanengine-oauth-state">尚未连接</span></summary>
@@ -167,6 +240,36 @@
           <p id="next-best-action-detail">完成一次同步后，这里会自动显示当前岗位最优先的动作。</p>
         </div>
         <button id="next-best-action-button" type="button">去处理</button>
+      </section>
+
+      <section class="today-focus-card" aria-label="今日经营四问">
+        <div><small>今日三件事</small><strong id="today-three-summary">等待任务</strong></div>
+        <div class="risk"><small>当前最大风险</small><strong id="today-max-risk">正在检查</strong></div>
+        <div><small>昨日动作结果</small><strong id="yesterday-action-result">暂无复盘</strong></div>
+        <div class="warning"><small>未同步数据</small><strong id="unsynced-data-summary">正在检查</strong></div>
+      </section>
+
+      <section class="operator-memory-card" aria-label="本店经营记忆">
+        <div class="section-heading">
+          <div>
+            <h3>本店经营记忆</h3>
+            <small id="operator-memory-status">等待当前店铺</small>
+          </div>
+          <button id="operator-memory-refresh" class="secondary" type="button">刷新记忆</button>
+        </div>
+        <p id="operator-memory-note" class="section-intro">只保存当前店铺和千川账号的可复用经验，不保存 Token、Cookie 或原始页面内容。</p>
+        <div id="operator-memory-list" class="operator-memory-list empty-state">选择店铺并完成一次同步后，这里会显示可复用的经营经验。</div>
+        <form id="operator-memory-form" class="operator-memory-form">
+          <input id="operator-memory-title" maxlength="120" placeholder="记忆标题，例如：库存红线" aria-label="记忆标题" required>
+          <select id="operator-memory-type" aria-label="记忆类型">
+            <option value="fact">经营事实</option>
+            <option value="strategy">投放策略</option>
+            <option value="preference">团队偏好</option>
+            <option value="outcome">动作结果</option>
+          </select>
+          <textarea id="operator-memory-value" maxlength="1200" rows="2" placeholder="写下以后可以复用的判断或操作规则" aria-label="记忆内容" required></textarea>
+          <button class="primary" type="submit">保存到本店记忆</button>
+        </form>
       </section>
 
       <section class="manager-card" aria-label="今日处置队列">
@@ -291,19 +394,23 @@
 
       <section class="module-section wide-module automation-section" data-owner="直播投放">
         <div class="section-heading"><h3>自动化投放准备度</h3><span id="automation-status">影子模式</span></div>
-        <p class="section-intro">先筛出可进入执行器的计划，再完成账号、计划 ID、数据质量、人工授权和执行前回读。首批只允许受监督降低单计划预算，并在提交后自动回读验收。</p>
-        <div class="automation-path" aria-label="自动化投放演进路径">
-          <div class="done" data-automation-stage="diagnosis"><strong>1</strong><span>诊断建议</span></div>
-          <div class="current" data-automation-stage="qualification"><strong>2</strong><span>资格校验</span></div>
-          <div data-automation-stage="authorization"><strong>3</strong><span>人工授权</span></div>
-          <div data-automation-stage="preflight"><strong>4</strong><span>执行前检查</span></div>
-          <div data-automation-stage="execution"><strong>5</strong><span>执行回读</span></div>
-        </div>
-        <div id="automation-summary" class="metric-strip"></div>
-        <details class="inner-fold automation-criteria">
-          <summary>查看进入自动执行器的必要条件 <span>5 项闸门</span></summary>
-          <ul id="automation-criteria-list"></ul>
-        </details>
+        <article id="automation-off-state" class="automation-off-state">
+          <strong>投放自动化尚未开启</strong>
+          <p>连接千川后，我们会找到可以止损、观察或放量的计划。纯抖店巡店不受影响。</p>
+          <div><button id="automation-sync-qianchuan" type="button">同步当前千川页</button><button id="automation-skip" type="button" class="text-button">暂不使用投放功能</button></div>
+        </article>
+        <div id="automation-workflow" hidden>
+          <p class="section-intro">用户只需完成三步；账号、计划 ID、数据质量、额度、人工授权和执行前回读等安全检查在确认时按需展开。</p>
+          <div class="automation-path three-step" aria-label="投放调整三步流程">
+            <div class="current" data-automation-step="proposal"><strong>1</strong><span>选择方案</span></div>
+            <div data-automation-step="authorization"><strong>2</strong><span>确认授权</span></div>
+            <div data-automation-step="result"><strong>3</strong><span>查看结果</span></div>
+          </div>
+          <div id="automation-summary" class="metric-strip"></div>
+          <details class="inner-fold automation-criteria">
+            <summary>查看安全检查详情 <span>按需展开</span></summary>
+            <ul id="automation-criteria-list"></ul>
+          </details>
         <article id="execution-preflight" class="execution-preflight" hidden>
           <header>
             <div><strong>受监督单步执行前检查</strong><small id="preflight-target">等待选择已授权的止损方案</small></div>
@@ -324,7 +431,8 @@
           </header>
           <div id="execution-effectiveness" class="stack empty-state">完成一次受监督执行后，这里会生成复查任务。</div>
         </article>
-        <div id="automation-candidates" class="stack empty-state">同步千川计划后，这里会显示哪些动作可授权、哪些被阻止以及下一步怎么补齐。</div>
+          <div id="automation-candidates" class="stack empty-state">同步千川计划后，这里会显示哪些动作可授权、哪些被阻止以及下一步怎么补齐。</div>
+        </div>
       </section>
 
       <section class="module-section shadow-section" data-owner="直播投放">
@@ -443,6 +551,7 @@
         <p>扩展不读取 Cookie；数据仅发送至本机 127.0.0.1。当前只生成调整建议、预警和报告，不会自动修改预算、库存或计划状态。</p>
       </section>
     </main>
+    <script src="connection-guide-policy.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

@@ -3,6 +3,8 @@ bridge/data/
 bridge/bridge.log
 bridge/bridge.stdout.log
 bridge/bridge.stderr.log
+bridge/config/
+reports/
 
 # Private extension signing material and generated packages
 *.pem

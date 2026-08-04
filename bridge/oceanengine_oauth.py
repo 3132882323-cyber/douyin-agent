@@ -23,6 +23,8 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from version import AGENT_VERSION
+
 DEFAULT_APP_ID = "1871942906223351"
 PUBLIC_CALLBACK_URL = (
     "https://dian-agent-oauth-3132882323.abuzz-cod-4955.chatgpt.site"
@@ -171,7 +173,7 @@ def _request_json(
 ) -> dict[str, Any]:
     request_headers = {
         "Accept": "application/json",
-        "User-Agent": "DianAgent/2.25",
+        "User-Agent": f"DianAgent/{AGENT_VERSION}",
         **(headers or {}),
     }
     data = None

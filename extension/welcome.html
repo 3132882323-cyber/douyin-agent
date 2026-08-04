@@ -24,7 +24,7 @@
       <section class="promise" aria-label="轻量哨兵承诺">
         <article><strong>零自动扫描</strong><p>不定时打开抖店或千川页面，不在后台轮询经营数据。</p></article>
         <article><strong>多店数据隔离</strong><p>每家店铺独立保存快照、建议和日志，切换店铺后再分析。</p></article>
-        <article><strong>投放只读</strong><p>当前只读取官方 API 和页面数据，不启停计划、不修改预算。</p></article>
+        <article><strong>投放受监督</strong><p>默认只读；只有单计划校验、人工最终授权和页面回读全部通过后，才允许受控降预算或暂停。</p></article>
       </section>
 
       <section class="steps">
@@ -61,10 +61,15 @@
       </section>
 
       <section class="finish">
+        <div><strong>本地可用，不等于已经适合公开发行</strong><p>完整工作台会分别显示本地能力与 4.0 发行条件；生产签名、Windows 数字签名或浏览器商店任一缺失，都会明确标记为“发行受阻”。</p></div>
+        <button id="open-readiness">查看发布状态</button>
+      </section>
+
+      <section class="finish">
         <div><strong>现在可以开始体验</strong><p>建议先打开轻量哨兵确认状态，再按需进入完整工作台。</p></div>
         <button id="finish-setup" class="primary">打开完整工作台</button>
       </section>
-      <p class="footer">店策 Agent v3.5.1 · 三类业务工作台 · 多店铺隔离 · 本地优先</p>
+      <p class="footer">店策 Agent v4.0.0 · 推广准备状态透明 · 三类业务工作台 · 本地优先</p>
     </main>
     <script src="welcome.js"></script>
   </body>

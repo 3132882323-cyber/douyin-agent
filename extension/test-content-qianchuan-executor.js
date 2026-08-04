@@ -62,7 +62,7 @@ const context = {
     storage: { local: { get: async () => ({ settings: { privacyMode: true } }) } },
     runtime: {
       onMessage: { addListener(callback) { listener = callback; } },
-      sendMessage: async () => ({ ok: true }),
+      sendMessage: async () => ({ ok: true, account: { key: "adacct_test", identity_source: "hmac_qianchuan_advertiser_id" } }),
     },
   },
   sessionStorage: { length: 0, key: () => null, getItem: () => null },
@@ -88,7 +88,7 @@ function send(request, type = "qianchuan-supervised-submit") {
 }
 
 (async () => {
-  const accountKey = "acct_0aa8abcd"; // FNV-1a hash used by the content script for advertiser_id 12345678.
+  const accountKey = "adacct_test"; // Local bridge-resolved HMAC account key.
   const request = {
     operation_type: "adjust_budget",
     mode: "supervised_submit",
@@ -98,6 +98,26 @@ function send(request, type = "qianchuan-supervised-submit") {
     expected_current_value: 500,
     target_value: 400,
   };
+  const budgetSubstringMismatch = await send({
+    ...request,
+    plan_id: "plan_12",
+  }, "qianchuan-execution-probe");
+  assert.equal(budgetSubstringMismatch.ready, false);
+  assert.match(budgetSubstringMismatch.error, /未找到授权计划/);
+  assert.equal(input.value, "500");
+
+  const pauseSubstringMismatch = await send({
+    operation_type: "pause_plan",
+    mode: "supervised_submit",
+    account_key: accountKey,
+    plan_id: "plan_12",
+    plan_name: "春季止损计划",
+    expected_current_value: "投放中",
+    target_value: "暂停",
+  }, "qianchuan-execution-probe");
+  assert.equal(pauseSubstringMismatch.ready, false);
+  assert.match(pauseSubstringMismatch.error, /未找到授权计划/);
+
   const probe = await send(request, "qianchuan-execution-probe");
   assert.equal(probe.ready, true);
   assert.equal(input.value, "500");

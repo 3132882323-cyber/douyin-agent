@@ -2,6 +2,11 @@
 chcp 65001 >nul
 setlocal
 set "BRIDGE_DIR=%~dp0"
+set "PACKAGED_AGENT=%BRIDGE_DIR%..\app\DianAgent.exe"
+if exist "%PACKAGED_AGENT%" (
+  "%PACKAGED_AGENT%"
+  exit /b %errorlevel%
+)
 if defined DIAN_AGENT_PYTHON (
   set "PYTHON_EXE=%DIAN_AGENT_PYTHON%"
 ) else if exist "%BRIDGE_DIR%.venv\Scripts\python.exe" (
