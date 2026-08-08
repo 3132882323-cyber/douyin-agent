@@ -29,6 +29,7 @@ let currentOperationContext = null;
 let currentOnboarding = null;
 let currentConnectionGuide = null;
 let qianchuanFeatureDeferred = false;
+let currentPromotionView = "chengfang";
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DOUDIAN_SCAN_PAGE_IDS = ["overview", "orders", "refunds", "products", "inventory", "reviews", "shelf", "live", "short_video", "image_text", "recommend_card"];
 
@@ -1338,6 +1339,89 @@ function renderQianchuanAccounts(payload = {}) {
   }));
 }
 
+const PROMOTION_MODE_LABELS = {
+  standard: "标准计划",
+  full_domain: "全域推广",
+  chengfang: "千川乘方",
+  unknown: "尚未确认",
+};
+
+const PROMOTION_CONFIDENCE_LABELS = {
+  high: "高可信",
+  medium: "中等可信",
+  low: "低可信",
+  conflict: "证据冲突",
+  unknown: "待验证",
+};
+
+function chengfangDisplayValue(field, formatter = (value) => String(value)) {
+  if (!field || field.status !== "present" || field.value === null || field.value === undefined) return "待同步";
+  return formatter(field.value);
+}
+
+function renderChengfangReadiness(report = {}) {
+  const dashboard = report.dashboard || {};
+  const summary = report.summary || {};
+  const mode = dashboard.mode || {};
+  const scope = dashboard.scope || {};
+  const metric = dashboard.metric_contract || {};
+  const quality = dashboard.data_quality_gate || {};
+  const observed = quality.observed || {};
+  const strategy = dashboard.strategy || {};
+  const snapshot = report.snapshot || {};
+  const contract = report.field_contract || {};
+  const activeMode = mode.value || summary.promotion_mode || "unknown";
+  const isChengfang = activeMode === "chengfang";
+  const tag = document.getElementById("promotion-mode-readonly-tag");
+  tag.textContent = isChengfang ? "乘方 · 只读" : activeMode === "unknown" ? "模式待确认 · 禁止写入" : `${PROMOTION_MODE_LABELS[activeMode] || "投放"} · 只读核验`;
+  tag.className = `promotion-status ${isChengfang ? "danger" : activeMode === "unknown" ? "warning" : "safe"}`;
+  document.getElementById("chengfang-summary").textContent = isChengfang
+    ? "已识别乘方模式；先完成真实字段与指标口径验真，再生成经营建议。"
+    : "尚未取得可信乘方模式证据；当前页面不会展示猜测的预算或 ROI。";
+
+  const freshness = observed.freshness_seconds == null
+    ? "待同步"
+    : observed.freshness_seconds === 0 ? "0 秒" : `${Math.ceil(observed.freshness_seconds / 60)} 分钟前`;
+  const completeness = typeof observed.completeness === "number" ? `${Math.round(observed.completeness * 100)}%` : "待同步";
+  const cards = [
+    ["投放模式", PROMOTION_MODE_LABELS[activeMode] || "尚未确认", mode.conflict ? "danger" : isChengfang ? "safe" : "warning", PROMOTION_CONFIDENCE_LABELS[mode.confidence || summary.mode_confidence] || "待验证"],
+    ["账户绑定", scope.complete ? "已确认" : scope.conflict ? "存在冲突" : "待同步", scope.complete ? "safe" : scope.conflict ? "danger" : "warning", scope.complete ? "店铺与千川账户作用域完整" : "不完整时禁止任何写操作"],
+    ["超级策略", chengfangDisplayValue(strategy.strategy_id), strategy.strategy_id?.status === "present" ? "safe" : "warning", "策略 ID 未确认时不生成策略动作"],
+    ["综合 ROI 口径", metric.definition && metric.definition !== "unknown" && metric.version ? metric.name || metric.definition : "暂不可用", metric.definition && metric.definition !== "unknown" && metric.version ? "safe" : "danger", metric.version ? `口径版本 ${metric.version}` : "必须确认分子、分母和退款归因"],
+    ["数据新鲜度", freshness, observed.freshness_seconds != null && observed.freshness_seconds <= 1800 ? "safe" : "warning", `完整度 ${completeness}`],
+    ["成本 / 结果", dashboard.profit_safety?.calculable ? "可计算利润" : "待补齐", dashboard.profit_safety?.calculable ? "safe" : "warning", dashboard.profit_safety?.calculable ? "允许生成只读利润诊断" : "不展示猜测的利润、预算或 ROI"],
+    ["字段合同", contract.verified ? "已验证" : "暂不可用", contract.verified ? "safe" : "danger", contract.verified ? `版本 ${contract.contract_version}` : "尚未验证真实乘方字段"],
+    ["最近快照", snapshot.available ? snapshot.saved_at || "已同步" : "待同步", snapshot.available ? "safe" : "warning", snapshot.page_type ? `页面 ${snapshot.page_type}` : "请打开乘方页面后同步"],
+  ];
+  const grid = document.getElementById("chengfang-status-grid");
+  grid.replaceChildren(...cards.map(([label, value, level, detail]) => {
+    const card = document.createElement("article");
+    card.className = `chengfang-status-card ${level}`;
+    const small = document.createElement("small"); small.textContent = label;
+    const strong = document.createElement("strong"); strong.textContent = value;
+    const p = document.createElement("p"); p.textContent = detail;
+    card.append(small, strong, p);
+    return card;
+  }));
+
+  const blockers = [...(report.blockers || [])];
+  if (!contract.verified) blockers.push(...(contract.blockers || []));
+  const uniqueBlockers = [...new Set(blockers.filter(Boolean))];
+  document.getElementById("chengfang-blocker-count").textContent = `${uniqueBlockers.length} 项`;
+  const blockerList = document.getElementById("chengfang-blockers-list");
+  blockerList.replaceChildren(...(uniqueBlockers.length ? uniqueBlockers : ["只读数据已就绪；乘方写操作仍保持关闭。"])
+    .map((message) => { const li = document.createElement("li"); li.textContent = message; return li; }));
+  document.getElementById("chengfang-next-step").textContent = report.next_step || dashboard.next_step || "同步真实乘方页面并完成字段验真。";
+}
+
+function renderChengfangUnavailable(message) {
+  renderChengfangReadiness({
+    summary: { promotion_mode: "unknown", mode_confidence: "unknown" },
+    blockers: [message || "乘方准备度暂时无法读取。"],
+    next_step: "确认本地 Agent 已启动，然后重新同步当前千川页面。",
+  });
+}
+
 function renderOperationContext(payload = {}) {
   currentOperationContext = payload;
   renderPriorityReminder();
@@ -2024,7 +2108,7 @@ async function loadDashboard() {
   const focusId = focusedEl?.id || focusedEl?.closest("[id]")?.id;
 
   const [
-    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, onboardingR, healthR, effectivenessR, readinessR, stopLossR, strategySimulationR, preflightR, shadowR, executionEffectivenessR, valueLedgerR, integrationsR, oceanengineR, oceanengineSyncR, connectionGuideR
+    insightsR, actionCenterR, settingsR, opsR, extensionR, trendsR, accountsR, contextR, onboardingR, healthR, effectivenessR, readinessR, stopLossR, strategySimulationR, preflightR, shadowR, executionEffectivenessR, valueLedgerR, integrationsR, oceanengineR, oceanengineSyncR, connectionGuideR, promotionReadinessR
   ] = await Promise.allSettled([
     bridgeFetch("/insights"),
     bridgeFetch("/action-center"),
@@ -2048,6 +2132,7 @@ async function loadDashboard() {
     bridgeFetch("/oauth/oceanengine/status"),
     bridgeFetch("/oauth/oceanengine/sync-status"),
     bridgeFetch("/connection-guide"),
+    bridgeFetch("/qianchuan/promotion-readiness"),
   ]);
 
   const val = (r, fallback) => r.status === "fulfilled" ? r.value : fallback;
@@ -2077,6 +2162,7 @@ async function loadDashboard() {
     next_upgrade: { id: "identify_store", label: "重新识别抖店", eta: "约 1 分钟", value: "恢复后继续经营诊断", failure: "连接向导暂时无法读取。现在请刷新后重新识别。" },
     tutorial: [], operation_context: operationContext, onboarding,
   });
+  const promotionReadiness = val(promotionReadinessR, null);
 
   // Hide loading skeleton
   hideLoadingSkeleton();
@@ -2117,6 +2203,8 @@ async function loadDashboard() {
   renderShadowExecution(shadow);
   renderExecutionEffectiveness(executionEffectiveness);
   renderValueLedger(valueLedger);
+  if (promotionReadiness) renderChengfangReadiness(promotionReadiness);
+  else renderChengfangUnavailable(promotionReadinessR.reason?.message);
   await loadSystemStatus();
   await loadOperatorMemory();
 
@@ -2264,6 +2352,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
 document.getElementById("sync-diagnose").addEventListener("click", () => refreshAll(true));
+document.getElementById("chengfang-sync").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "正在同步…";
+  try {
+    await syncRecentQianchuanPage();
+  } catch (_) {
+    // The shared sync dock already presents the actionable error.
+  } finally {
+    button.disabled = false;
+    button.textContent = "同步当前千川页";
+  }
+});
+document.querySelectorAll("[data-promotion-view]").forEach((button) => button.addEventListener("click", () => {
+  currentPromotionView = button.dataset.promotionView || "overview";
+  document.querySelectorAll("[data-promotion-view]").forEach((item) => item.classList.toggle("active", item === button));
+  document.getElementById("chengfang-panel").hidden = currentPromotionView !== "chengfang";
+}));
 document.getElementById("operator-memory-refresh").addEventListener("click", () => loadOperatorMemory());
 document.getElementById("check-updates").addEventListener("click", () => runUpdateAction("/updates/check", "正在检查 Agent、扩展与知识包版本…"));
 document.getElementById("apply-knowledge-update").addEventListener("click", () => runUpdateAction("/updates/apply", "正在验证并切换新的知识包…"));
