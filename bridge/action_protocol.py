@@ -12,6 +12,11 @@ import json
 import time
 from typing import Any
 
+try:
+    from .promotion_mode import build_promotion_context
+except ImportError:
+    from promotion_mode import build_promotion_context
+
 ACTION_SCHEMA_VERSION = 1
 ACTION_DRAFT_TTL_SECONDS = 10 * 60
 EXECUTABLE_OPERATIONS = {"adjust_budget", "restore_budget", "pause_plan", "adjust_bid", "set_schedule"}
@@ -74,6 +79,7 @@ def _identity_payload(action: dict[str, Any]) -> dict[str, Any]:
         "can_confirm": action.get("can_confirm"),
         "expires_at_ms": action.get("expires_at_ms"),
         "copy_text": action.get("copy_text"),
+        "promotion_context": action.get("promotion_context"),
     }
 
 
@@ -105,6 +111,7 @@ def build_action_draft(
     confidence: str,
     evidence: dict[str, Any] | None = None,
     copy_text: str = "",
+    promotion_context: dict[str, Any] | str | None = None,
     now_ms: int | None = None,
 ) -> dict[str, Any]:
     """Create a policy-checked action draft.
@@ -207,6 +214,7 @@ def build_action_draft(
         "created_at_ms": now_ms,
         "expires_at_ms": captured_at_ms + ACTION_DRAFT_TTL_SECONDS * 1000 if captured_at_ms else now_ms,
         "copy_text": str(copy_text or "")[:500],
+        "promotion_context": build_promotion_context(promotion_context),
         # Backward-compatible fields for the existing side-panel renderer.
         "target": target_name,
         "field": field,

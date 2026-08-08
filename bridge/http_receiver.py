@@ -25,11 +25,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from action_protocol import assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
+from deployment_mode import blocked_browser_capability, request_origin_allowed, resolve_deployment_policy
+from marketplace_readiness import build_marketplace_readiness
 from local_store import LocalStore, LocalStoreError, SCHEMA_VERSION as DATABASE_SCHEMA_VERSION
 from offline_upgrade import PRODUCTION_OFFLINE_PUBLIC_KEYS
 from oceanengine_data import OceanEngineDataClient, load_sync_status
 from oceanengine_oauth import OceanEngineOAuth
 from operator_memory import archive_operator_memory, list_operator_memory, upsert_operator_memory
+from promotion_mode import build_chengfang_readiness, build_promotion_context, legacy_execution_guard
 from promotion_readiness import (
     LocalAnonymousFeedbackQueue,
     build_distribution_status,
@@ -981,6 +984,23 @@ def load_data(source: str, page_type: str | None = None, account_key: str | None
         return None
 
 
+def build_current_promotion_readiness() -> dict[str, Any]:
+    """Expose the latest explicit mode evidence without assuming platform fields."""
+
+    snapshot = load_data("qianchuan")
+    data = (snapshot or {}).get("data") if isinstance(snapshot, dict) else {}
+    context = data.get("promotion_context") if isinstance(data, dict) else None
+    readiness = build_chengfang_readiness(context)
+    return {
+        **readiness,
+        "snapshot": {
+            "page_type": str((snapshot or {}).get("page_type") or ""),
+            "saved_at": (snapshot or {}).get("saved_at"),
+            "available": bool(snapshot),
+        },
+    }
+
+
 def list_snapshots() -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     settings = load_agent_settings()
@@ -1156,7 +1176,6 @@ def _evaluate_knowledge_rules(catalog: list[dict[str, Any]], settings: dict[str,
             if number is not None:
                 return number
         return None
-
     inventory_values = [
         number
         for _item, _label, value in _metric_matches("doudian", ("可售库存", "库存"))
@@ -1600,6 +1619,7 @@ def _table_records(source: str, page_types: set[str]) -> list[dict[str, Any]]:
                         "captured_at_ms": captured_at_ms,
                         "account_key": str(account.get("key") or "").lower(),
                         "account_label": str(account.get("label") or ""),
+                        "promotion_context": build_promotion_context(snapshot_data.get("promotion_context")),
                         "table_index": table_index,
                         "row_index": row_index,
                         "record": record,
@@ -1710,6 +1730,7 @@ def _action_params_for_plan(
         confidence=confidence,
         evidence=compact_evidence,
         copy_text=copy_text,
+        promotion_context=entry.get("promotion_context"),
     )
 
 
@@ -2054,6 +2075,7 @@ def create_budget_rollback_draft(action_id: str) -> dict[str, Any]:
             "roi": readback.get("roi"),
             "orders": readback.get("orders"),
         },
+        promotion_context=original.get("promotion_context"),
         copy_text=f"{target.get('name') or '千川计划'} | 预算 {float(current_value):g} → {float(original_value):g}（恢复原值）",
     )
 
@@ -2077,6 +2099,9 @@ def start_execution_preflight(action_id: str) -> dict[str, Any]:
     )
     if not action or action.get("state") != "confirmed":
         raise ValueError("只有已确认且未撤销的方案可以启动执行前检查。")
+    promotion_guard = legacy_execution_guard(action.get("operation_type"), action.get("promotion_context"))
+    if not promotion_guard["allowed"]:
+        raise ValueError(f"{promotion_guard['code']}：{promotion_guard['reason']}")
     errors = validate_action_draft(action)
     if errors:
         messages = "；".join(dict.fromkeys(str(item.get("message") or "动作校验失败") for item in errors))
@@ -2209,6 +2234,9 @@ def consume_execution_authorization(authorization_id: str) -> dict[str, Any]:
             }
             _save_execution_preflight(invalidated)
             raise ValueError("授权对应的动作已撤销、已停止或不再允许执行。")
+        promotion_guard = legacy_execution_guard(action.get("operation_type"), action.get("promotion_context"))
+        if not promotion_guard["allowed"]:
+            raise ValueError(f"{promotion_guard['code']}：{promotion_guard['reason']}")
         quota = assess_execution_quota(action)
         if not quota["allowed"]:
             raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
@@ -2242,6 +2270,7 @@ def _execution_request_for_action(action: dict[str, Any]) -> dict[str, Any]:
         "field": change.get("field"),
         "expected_current_value": change.get("current_value"),
         "target_value": change.get("target_value"),
+        "promotion_context": build_promotion_context(action.get("promotion_context")),
         "mode": "supervised_submit",
     }
 
@@ -2265,6 +2294,9 @@ def preview_execution_authorization(authorization_id: str) -> dict[str, Any]:
     )
     if not action or action.get("state") != "confirmed":
         raise ValueError("授权对应的动作不可执行。")
+    promotion_guard = legacy_execution_guard(action.get("operation_type"), action.get("promotion_context"))
+    if not promotion_guard["allowed"]:
+        raise ValueError(f"{promotion_guard['code']}：{promotion_guard['reason']}")
     quota = assess_execution_quota(action)
     if not quota["allowed"]:
         raise ValueError("；".join(item["message"] for item in quota["blocked_reasons"]))
@@ -5126,7 +5158,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _cors(self) -> None:
         origin = self.headers.get("Origin", "")
-        if origin.startswith("chrome-extension://") or origin.startswith("moz-extension://") or origin.startswith("safari-web-extension://"):
+        if request_origin_allowed(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
 
@@ -5164,8 +5196,16 @@ class Handler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         path = unquote(parsed_url.path).rstrip("/") or "/"
         query = parse_qs(parsed_url.query)
+        policy = resolve_deployment_policy()
+        if not policy.local_companion and path not in {"/health", "/marketplace/status", "/marketplace/readiness"}:
+            self._json({
+                "error": "marketplace_authenticated_gateway_required",
+                "deployment_mode": policy.mode,
+                "message": "服务市场数据读取必须经租户/店铺绑定的认证网关。",
+            }, 403)
+            return
         if path == "/health":
-            catalog = list_snapshots()
+            catalog = list_snapshots() if policy.local_companion else []
             schema_warnings = _schema_version_check()
             disk_info = _disk_usage_check()
             agent_settings = load_agent_settings()
@@ -5177,7 +5217,8 @@ class Handler(BaseHTTPRequestHandler):
                     "bridge_protocol_version": 2,
                     "mode": execution_mode,
                     "execution_mode_label": {"observe": "观察模式", "shadow": "影子模式", "supervised": "受控执行"}.get(execution_mode, "未知模式"),
-                    "execution_enabled": execution_mode == "supervised",
+                    "execution_enabled": execution_mode == "supervised" and policy.browser_dom_execution,
+                    "deployment": policy.public_status(),
                     "snapshot_count": len(catalog),
                     "schema_warnings": schema_warnings,
                     "disk": disk_info,
@@ -5261,6 +5302,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/qianchuan-accounts":
             self._json(build_store_catalog())
             return
+        if path == "/qianchuan/promotion-readiness":
+            self._json(build_current_promotion_readiness())
+            return
         if path == "/stores":
             self._json(build_store_catalog())
             return
@@ -5278,6 +5322,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/distribution/status":
             self._json(build_distribution_status(DATA_DIR.parent))
+            return
+        if path in {"/marketplace/status", "/marketplace/readiness"}:
+            self._json(build_marketplace_readiness())
             return
         if path == "/telemetry/status":
             settings = _load_update_settings()
@@ -5389,6 +5436,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = unquote(urlparse(self.path).path).rstrip("/") or "/"
+        policy = resolve_deployment_policy()
+        blocked_capability = blocked_browser_capability(path, policy)
+        if blocked_capability:
+            self._json({
+                "error": blocked_capability,
+                "deployment_mode": policy.mode,
+                "message": "服务市场模式只允许官方 OAuth/Open API 数据链路，已拒绝本地扩展通道。",
+            }, 403)
+            return
+        if not policy.local_companion:
+            self._json({
+                "error": "marketplace_authenticated_gateway_required",
+                "deployment_mode": policy.mode,
+                "message": "当前 HTTP 接收器不提供云端身份认证，服务市场写操作必须经租户/店铺绑定的认证网关。",
+            }, 403)
+            return
         if self.headers.get("X-Dian-Agent") not in {"1", "2"}:
             self._json({"error": "missing_bridge_header"}, 403)
             return
