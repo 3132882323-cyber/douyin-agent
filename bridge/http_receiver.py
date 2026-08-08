@@ -32,7 +32,8 @@ from offline_upgrade import PRODUCTION_OFFLINE_PUBLIC_KEYS
 from oceanengine_data import OceanEngineDataClient, load_sync_status
 from oceanengine_oauth import OceanEngineOAuth
 from operator_memory import archive_operator_memory, list_operator_memory, upsert_operator_memory
-from promotion_mode import build_chengfang_readiness, build_promotion_context, legacy_execution_guard
+from promotion_mode import build_chengfang_dashboard_summary, build_chengfang_readiness, build_promotion_context, legacy_execution_guard
+from chengfang_contract import assess_page_fingerprint, build_chengfang_contract_registry
 from promotion_readiness import (
     LocalAnonymousFeedbackQueue,
     build_distribution_status,
@@ -902,6 +903,29 @@ def save_data(source: str, data: dict[str, Any]) -> dict[str, Any]:
         if canonical_key and detected_key and canonical_key != detected_key and SAFE_KEY.fullmatch(detected_key):
             account["aliases"] = list(dict.fromkeys([*(account.get("aliases") or []), detected_key]))[:20]
         normalized["account"] = account
+    if source == "qianchuan":
+        raw_promotion = normalized.get("promotion_context") if isinstance(normalized.get("promotion_context"), dict) else {}
+        account_scope = raw_promotion.get("account_scope") if isinstance(raw_promotion.get("account_scope"), dict) else {}
+        store_key = str((normalized.get("store") or {}).get("key") or account_scope.get("store_id") or "") if isinstance(normalized.get("store"), dict) else str(account_scope.get("store_id") or "")
+        account_key = str((normalized.get("account") or {}).get("key") or account_scope.get("account_id") or "") if isinstance(normalized.get("account"), dict) else str(account_scope.get("account_id") or "")
+        snapshot_quality = normalized.get("quality") if isinstance(normalized.get("quality"), dict) else {}
+        normalized["promotion_context"] = build_promotion_context({
+            **raw_promotion,
+            "account_scope": {
+                **account_scope,
+                "store_id": store_key,
+                "account_id": account_key,
+                "binding_status": "verified" if store_key and account_key and normalized.get("identity_resolution") != "conflict" else "unverified",
+                "conflict": normalized.get("identity_resolution") == "conflict",
+            },
+            "data_quality": {
+                **(raw_promotion.get("data_quality") if isinstance(raw_promotion.get("data_quality"), dict) else {}),
+                "confidence": str(snapshot_quality.get("confidence") or ("high" if int(snapshot_quality.get("score") or 0) >= 80 else "medium" if int(snapshot_quality.get("score") or 0) >= 60 else "low")),
+                "completeness": min(1.0, max(0.0, float(snapshot_quality.get("score") or 0) / 100)),
+                "freshness_seconds": max(0, int((time.time() * 1000 - captured_at_ms) / 1000)),
+                "metric_conflict": normalized.get("identity_resolution") == "conflict",
+            },
+        })
     payload = {
         "source": source,
         "page_type": page_type,
@@ -993,6 +1017,9 @@ def build_current_promotion_readiness() -> dict[str, Any]:
     readiness = build_chengfang_readiness(context)
     return {
         **readiness,
+        "dashboard": build_chengfang_dashboard_summary(context),
+        "field_contract": build_chengfang_contract_registry(),
+        "page_fingerprint": assess_page_fingerprint(None),
         "snapshot": {
             "page_type": str((snapshot or {}).get("page_type") or ""),
             "saved_at": (snapshot or {}).get("saved_at"),
