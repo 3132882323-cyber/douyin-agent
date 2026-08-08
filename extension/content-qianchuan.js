@@ -88,10 +88,40 @@
     return "unknown";
   }
 
+  function detectPromotionContext() {
+    const visibleText = `${document.title || ""}\n${document.body?.innerText || ""}`.slice(0, 120000);
+    const matched = [
+      ["chengfang", "乘方"],
+      ["full_domain", "全域推广"],
+      ["standard", "标准推广"],
+    ].filter(([, label]) => visibleText.includes(label));
+    const promotionMode = matched.length === 1 ? matched[0][0] : "unknown";
+    return {
+      schema_version: 1,
+      promotion_mode: promotionMode,
+      strategy_id: "",
+      metric: { definition: "unknown", label: "", value: null, period: "" },
+      cost_ledger: {},
+      platform_managed_fields: promotionMode === "chengfang" ? ["预算分配", "流量分配", "素材协同"] : [],
+      evidence: {
+        source: matched.length === 1 ? "visible_label" : matched.length > 1 ? "conflicting_visible_labels" : "unverified",
+        label: matched.length === 1 ? matched[0][1] : "",
+        captured_at_ms: Date.now(),
+      },
+    };
+  }
+
+  function assertLegacyExecutionMode(request) {
+    const mode = String(request?.promotion_context?.promotion_mode || "unknown");
+    if (mode === "chengfang") throw new Error("UNSUPPORTED_FOR_CHENGFANG：乘方模式禁止使用旧单计划预算、暂停和恢复执行器。");
+    if (!["standard", "full_domain"].includes(mode)) throw new Error("PROMOTION_MODE_UNVERIFIED：尚未确认当前投放模式，已停止执行。");
+  }
+
   async function capture(reason = "auto") {
     const stored = await chrome.storage.local.get("settings");
     const privacyMode = stored.settings?.privacyMode !== false;
     const data = await globalThis.DianAgentExtractor.collect(SOURCE, detectPageType(), privacyMode, reason);
+    data.promotion_context = detectPromotionContext();
     const identity = detectIdentityClaims();
     data.identity_claims = identity.claims;
     data.identity_status = identity.status;
@@ -141,6 +171,7 @@
   }
 
   async function probeBudgetExecution(request) {
+    assertLegacyExecutionMode(request);
     if (!["adjust_budget", "restore_budget"].includes(request?.operation_type) || request?.mode !== "supervised_submit") {
       throw new Error("当前页面执行器只支持受监督降低预算或恢复原预算。");
     }
@@ -198,6 +229,7 @@
   }
 
   async function pausePlanProbe(request) {
+    assertLegacyExecutionMode(request);
     if (request?.operation_type !== "pause_plan" || request?.mode !== "supervised_submit") throw new Error("当前页面不是受监督暂停动作。");
     await ensureResolvedAccount(request);
     if (String(request.expected_current_value || "") !== "投放中" && !["启用", "生效中", "运行中"].includes(String(request.expected_current_value || ""))) throw new Error("当前计划状态不是可暂停状态。");

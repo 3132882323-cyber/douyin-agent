@@ -6,6 +6,8 @@
 
 4.0 将两个结论严格分开：`product_operational` 表示本机数据、规则和受监督执行链路可以工作；`public_distribution_ready` 表示产品同时具备生产 Ed25519 信任锚，Agent、Updater、安装升级入口和维护脚本的完整 Windows Authenticode，以及与内嵌官方扩展 ID、请求 Origin、安装来源和目标版本一致的浏览器商店发布证据。前者为真不能替代后者，任何发行证据缺失都必须在工作台显示为阻塞。
 
+本文件描述本地版分发。抖店服务市场 SaaS 使用独立发行模式、官方 OAuth/Open API 与云端多租户安全边界，不复用本地浏览器采集入口，详见 [MARKETPLACE_DEPLOYMENT.md](MARKETPLACE_DEPLOYMENT.md)。
+
 ## 数据分层
 
 发布版默认使用 `%LOCALAPPDATA%\DianAgent`：

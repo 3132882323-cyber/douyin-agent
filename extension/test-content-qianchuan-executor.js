@@ -97,6 +97,7 @@ function send(request, type = "qianchuan-supervised-submit") {
     plan_name: "春季止损计划",
     expected_current_value: 500,
     target_value: 400,
+    promotion_context: { promotion_mode: "standard" },
   };
   const budgetSubstringMismatch = await send({
     ...request,
@@ -114,6 +115,7 @@ function send(request, type = "qianchuan-supervised-submit") {
     plan_name: "春季止损计划",
     expected_current_value: "投放中",
     target_value: "暂停",
+    promotion_context: { promotion_mode: "standard" },
   }, "qianchuan-execution-probe");
   assert.equal(pauseSubstringMismatch.ready, false);
   assert.match(pauseSubstringMismatch.error, /未找到授权计划/);
@@ -136,9 +138,15 @@ function send(request, type = "qianchuan-supervised-submit") {
     plan_name: "春季止损计划",
     expected_current_value: 500,
     target_value: 400,
+    promotion_context: { promotion_mode: "standard" },
   });
   assert.equal(mismatch.ok, false);
   assert.match(mismatch.error, /当前预算一致/);
+  assert.equal(input.value, "450");
+
+  const chengfang = await send({ ...request, promotion_context: { promotion_mode: "chengfang" } });
+  assert.equal(chengfang.ok, false);
+  assert.match(chengfang.error, /UNSUPPORTED_FOR_CHENGFANG/);
   assert.equal(input.value, "450");
   console.log("content-qianchuan executor tests passed");
 })().catch((error) => {
