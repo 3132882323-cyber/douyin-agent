@@ -115,6 +115,12 @@
     const mode = String(request?.promotion_context?.promotion_mode || "unknown");
     if (mode === "chengfang") throw new Error("UNSUPPORTED_FOR_CHENGFANG：乘方模式禁止使用旧单计划预算、暂停和恢复执行器。");
     if (!["standard", "full_domain"].includes(mode)) throw new Error("PROMOTION_MODE_UNVERIFIED：尚未确认当前投放模式，已停止执行。");
+    const scope = request?.promotion_context?.account_scope || {};
+    const metricVersion = String(request?.promotion_context?.metric_contract?.version || "");
+    const strategyId = String(request?.promotion_context?.strategy_id || "");
+    if (!scope.store_id || !scope.account_id || scope.conflict || !strategyId || !metricVersion) {
+      throw new Error("PROMOTION_SCOPE_UNVERIFIED：店铺、账户、策略或指标合同绑定不完整，已停止执行。");
+    }
   }
 
   async function capture(reason = "auto") {

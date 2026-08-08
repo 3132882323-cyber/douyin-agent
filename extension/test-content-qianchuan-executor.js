@@ -97,7 +97,7 @@ function send(request, type = "qianchuan-supervised-submit") {
     plan_name: "春季止损计划",
     expected_current_value: 500,
     target_value: 400,
-    promotion_context: { promotion_mode: "standard" },
+    promotion_context: { promotion_mode: "standard", account_scope: { store_id: "store_test", account_id: accountKey }, strategy_id: "strategy_test", metric_contract: { version: "v1" } },
   };
   const budgetSubstringMismatch = await send({
     ...request,
@@ -115,7 +115,7 @@ function send(request, type = "qianchuan-supervised-submit") {
     plan_name: "春季止损计划",
     expected_current_value: "投放中",
     target_value: "暂停",
-    promotion_context: { promotion_mode: "standard" },
+    promotion_context: { promotion_mode: "standard", account_scope: { store_id: "store_test", account_id: accountKey }, strategy_id: "strategy_test", metric_contract: { version: "v1" } },
   }, "qianchuan-execution-probe");
   assert.equal(pauseSubstringMismatch.ready, false);
   assert.match(pauseSubstringMismatch.error, /未找到授权计划/);
@@ -138,7 +138,7 @@ function send(request, type = "qianchuan-supervised-submit") {
     plan_name: "春季止损计划",
     expected_current_value: 500,
     target_value: 400,
-    promotion_context: { promotion_mode: "standard" },
+    promotion_context: { promotion_mode: "standard", account_scope: { store_id: "store_test", account_id: accountKey }, strategy_id: "strategy_test", metric_contract: { version: "v1" } },
   });
   assert.equal(mismatch.ok, false);
   assert.match(mismatch.error, /当前预算一致/);
