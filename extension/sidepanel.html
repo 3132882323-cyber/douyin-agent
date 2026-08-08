@@ -374,6 +374,41 @@
         <div id="live-actions" class="stack empty-state">同步店铺直播或千川直播大屏后，这里会生成直播调整清单。</div>
       </section>
 
+      <section id="promotion-mode-workbench" class="module-section wide-module promotion-mode-workbench" data-owner="直播投放" aria-labelledby="promotion-mode-heading">
+        <div class="section-heading promotion-mode-heading">
+          <div>
+            <h3 id="promotion-mode-heading">千川投放模式</h3>
+            <p>标准计划、全域推广和千川乘方在同一个投放工作台查看。</p>
+          </div>
+          <span id="promotion-mode-readonly-tag" class="promotion-status warning">正在识别</span>
+        </div>
+        <nav class="promotion-mode-nav" aria-label="选择千川投放模式">
+          <button type="button" data-promotion-view="overview">投放总览</button>
+          <button type="button" data-promotion-view="standard">标准计划</button>
+          <button type="button" data-promotion-view="full_domain">全域推广</button>
+          <button type="button" class="active" data-promotion-view="chengfang">千川乘方</button>
+        </nav>
+        <div id="chengfang-panel" class="chengfang-panel" aria-live="polite">
+          <article id="chengfang-notice" class="chengfang-notice danger">
+            <div aria-hidden="true">!</div>
+            <p><strong>千川乘方当前仅提供只读诊断</strong><span>乘方采用总预算与综合 ROI 经营模式，不得使用旧版单计划预算、暂停或恢复功能。</span></p>
+          </article>
+          <div class="chengfang-summary-head">
+            <div><strong>乘方经营驾驶舱</strong><p id="chengfang-summary">正在读取本地 Agent 的乘方准备度。</p></div>
+            <button id="chengfang-sync" type="button">同步当前千川页</button>
+          </div>
+          <div id="chengfang-status-grid" class="chengfang-status-grid"></div>
+          <article class="chengfang-next-step">
+            <span>下一步</span>
+            <strong id="chengfang-next-step">请先同步真实乘方页面并确认店铺、账户、策略和指标口径。</strong>
+          </article>
+          <details class="inner-fold chengfang-blockers" open>
+            <summary>当前阻塞与数据缺口 <span id="chengfang-blocker-count">正在检查</span></summary>
+            <ul id="chengfang-blockers-list"><li>等待本地 Agent 返回准备度。</li></ul>
+          </details>
+        </div>
+      </section>
+
       <section class="module-section wide-module" data-owner="内容">
         <div class="section-heading"><h3>千川素材表现</h3><span id="creative-status">等待数据</span></div>
         <p class="section-intro">先判断哪些素材在消耗、哪些值得复用、哪些应该停止测试，再查看单条视频。</p>
