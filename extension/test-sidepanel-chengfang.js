@@ -14,6 +14,12 @@ assert.match(js, /bridgeFetch\("\/qianchuan\/promotion-readiness"\)/);
 assert.match(js, /field\.status !== "present"[\s\S]*return "待同步"/);
 assert.match(js, /不展示猜测的利润、预算或 ROI/);
 assert.match(css, /\.chengfang-notice[\s\S]*\.chengfang-status-grid/);
+assert.match(html, /经营目标与保本线测算/);
+assert.match(html, /测算而非平台预测/);
+assert.match(html, /商品乘方资格[\s\S]*增长瓶颈[\s\S]*影子建议/);
+assert.match(html, /src="chengfang-planner\.js"/);
+assert.match(js, /chengfangLocalPlanningV1/);
+assert.doesNotMatch(html, /平台费用率（%）[^<]*<input[^>]+value=/);
 assert.doesNotMatch(html, /id="chengfang-[^"]*"[^>]*>[^<]*(自动执行|立即调整预算)/);
 
 console.log("sidepanel chengfang visibility tests passed");

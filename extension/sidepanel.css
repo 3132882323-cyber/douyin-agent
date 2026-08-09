@@ -1241,7 +1241,47 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .chengfang-next-step strong { display: block; margin-top: 3px; color: #143f9e; font-size: 15px; }
 .chengfang-blockers { border-color: #f1c46a; background: #fffaf0; }
 .chengfang-blockers ul { margin: 10px 0 0; padding-left: 22px; color: #734713; }
+.chengfang-planner { display: grid; gap: 14px; border: 1px solid #cbd8fa; border-radius: 13px; padding: 16px; background: #fbfcff; }
+.chengfang-planner-heading { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.chengfang-planner-heading h4 { margin: 0; color: #15213a; font-size: 18px; }
+.chengfang-planner-heading p { margin: 5px 0 0; color: #596579; font-size: 13px; }
+.chengfang-planner-heading > span { flex: none; border-radius: 999px; padding: 5px 9px; color: #174dbb; background: #eaf0ff; font-weight: 700; }
+.chengfang-goals { margin: 0; border: 0; padding: 0; }
+.chengfang-goals legend { margin-bottom: 8px; color: #26334c; font-weight: 800; }
+.chengfang-goals > div { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.chengfang-goals label { display: flex; justify-content: center; gap: 5px; border: 1px solid #d6ddea; border-radius: 9px; padding: 9px 6px; background: #fff; cursor: pointer; }
+.chengfang-goals label:has(input:checked) { border-color: #2b63e8; color: #174dbb; background: #edf3ff; font-weight: 800; }
+.chengfang-goals small { display: block; margin-top: 7px; color: #667085; }
+.chengfang-calculator-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.chengfang-calculator-grid label { color: #3c4960; font-size: 12px; font-weight: 700; }
+.chengfang-calculator-grid input { box-sizing: border-box; width: 100%; margin-top: 5px; border: 1px solid #cfd7e6; border-radius: 8px; padding: 9px; background: #fff; }
+.chengfang-calculator-grid input.invalid { border-color: #d52c3b; background: #fff4f5; }
+.chengfang-formula { margin: 0; border-left: 3px solid #5478d7; padding-left: 10px; color: #596579; font-size: 12px; }
+.chengfang-calculation-result { border-radius: 10px; padding: 12px; color: #183d84; background: #eef4ff; }
+.chengfang-calculation-result.empty { color: #667085; background: #f3f5f8; }
+.chengfang-calculation-result.danger { border: 1px solid #ee9aa3; color: #a31827; background: #fff1f3; font-weight: 700; }
+.chengfang-result-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.chengfang-result-metrics span { display: block; color: #5e6c84; font-size: 11px; }
+.chengfang-result-metrics strong { display: block; margin-top: 3px; font-size: 17px; }
+.chengfang-sandbox-head { display: flex; justify-content: space-between; gap: 12px; }
+.chengfang-sandbox-head span { color: #b21625; font-size: 12px; font-weight: 800; }
+.chengfang-scenarios { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.chengfang-scenario { border: 1px solid #d9e0ec; border-radius: 10px; padding: 11px; background: #fff; }
+.chengfang-scenario strong { color: #173e94; }
+.chengfang-scenario b { display: block; margin: 7px 0; color: #18243c; font-size: 16px; }
+.chengfang-scenario p { margin: 0; color: #68748a; font-size: 12px; }
+.chengfang-readonly-foundation { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.chengfang-readonly-foundation article { border: 1px dashed #c7cfdd; border-radius: 10px; padding: 12px; background: #fafbfc; }
+.chengfang-readonly-foundation p { margin: 6px 0 0; color: #69758a; font-size: 12px; }
+.chengfang-readonly-foundation article > div { margin-top: 8px; color: #455268; font-size: 13px; line-height: 1.55; }
+.chengfang-evidence-inputs { display: grid; gap: 10px; border: 1px solid #d9e1ef; border-radius: 12px; padding: 14px; background: #fff; }
+.chengfang-evidence-inputs > strong { color: #16233b; font-size: 16px; }
+.chengfang-evidence-inputs > span { color: #68758a; font-size: 12px; }
+.chengfang-dimension { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid #eef1f6; }
+.chengfang-dimension:last-child { border-bottom: 0; }
+.chengfang-dimension b { color: #174dbb; }
 @media (max-width: 760px) {
-  .promotion-mode-nav, .chengfang-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .promotion-mode-nav, .chengfang-status-grid, .chengfang-calculator-grid, .chengfang-goals > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chengfang-scenarios, .chengfang-readonly-foundation { grid-template-columns: 1fr; }
   .chengfang-summary-head { align-items: stretch; flex-direction: column; }
 }

@@ -402,6 +402,53 @@
             <span>下一步</span>
             <strong id="chengfang-next-step">请先同步真实乘方页面并确认店铺、账户、策略和指标口径。</strong>
           </article>
+          <section class="chengfang-planner" aria-labelledby="chengfang-planner-heading">
+            <div class="chengfang-planner-heading">
+              <div><h4 id="chengfang-planner-heading">经营目标与保本线测算</h4><p>所有输入仅保存在本机浏览器扩展中，不会发送到平台，也不会触发投放操作。</p></div>
+              <span>只读测算</span>
+            </div>
+            <fieldset class="chengfang-goals">
+              <legend>今天的经营目标</legend>
+              <div id="chengfang-goal-options">
+                <label><input type="radio" name="chengfang-goal" value="profit">保利润</label>
+                <label><input type="radio" name="chengfang-goal" value="stable">稳规模</label>
+                <label><input type="radio" name="chengfang-goal" value="growth">冲增长</label>
+                <label><input type="radio" name="chengfang-goal" value="new_product">测新品</label>
+                <label><input type="radio" name="chengfang-goal" value="clearance">清库存</label>
+                <label><input type="radio" name="chengfang-goal" value="live_burst">直播爆发</label>
+              </div>
+              <small id="chengfang-goal-status">请选择目标；这里只保存偏好，不会修改乘方策略。</small>
+            </fieldset>
+            <div class="chengfang-calculator-grid">
+              <label>商品售价（元）<input data-chengfang-input="price" type="number" min="0" step="0.01" placeholder="必填"></label>
+              <label>商品成本（元）<input data-chengfang-input="product_cost" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
+              <label>达人佣金率（%）<input data-chengfang-input="commission_rate" type="number" min="0" max="100" step="0.01" placeholder="必填，不预设"></label>
+              <label>平台费用率（%）<input data-chengfang-input="platform_fee_rate" type="number" min="0" max="100" step="0.01" placeholder="按账户实际填写"></label>
+              <label>商家优惠（元/件）<input data-chengfang-input="merchant_discount" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
+              <label>履约成本（元/件）<input data-chengfang-input="fulfillment_cost" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
+              <label>预估退款率（%）<input data-chengfang-input="refund_rate" type="number" min="0" max="100" step="0.01" placeholder="必填，可填 0"></label>
+              <label>广告消耗（元/件）<input data-chengfang-input="advertising_cost" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
+            </div>
+            <p class="chengfang-formula">测算口径：退款后预计收入 ÷ 可承受广告消耗。佣金和平台费用暂按退款后预计收入计提；请以账户真实规则为准。</p>
+            <div id="chengfang-calculation-result" class="chengfang-calculation-result empty">请补齐全部 8 项输入。空值与真实的 0 会被严格区分。</div>
+            <div class="chengfang-sandbox-head"><strong>三档经营沙盘</strong><span>测算而非平台预测，不会生成或提交写操作</span></div>
+            <div id="chengfang-scenarios" class="chengfang-scenarios empty-state">完成有效测算后显示保守、基准和进取三档假设。</div>
+          </section>
+          <section class="chengfang-readonly-foundation">
+            <article><strong>商品乘方资格</strong><div id="chengfang-eligibility-empty">先补齐利润、库存、退款、履约、素材与数据质量。</div></article>
+            <article><strong>增长瓶颈</strong><div id="chengfang-bottleneck-empty">缺少真实经营数据，当前不判断增长瓶颈。</div></article>
+            <article><strong>影子建议与观察</strong><div id="chengfang-shadow-empty">只保存建议和回读槽位，不执行任何投放动作。</div></article>
+          </section>
+          <section class="chengfang-evidence-inputs">
+            <strong>只读经营证据</strong><span>手工数据仅保存在本机；空值不会按 0 处理。</span>
+            <div class="chengfang-calculator-grid">
+              <label>库存覆盖（天）<input data-chengfang-evidence="inventory_days" type="number" min="0" step="0.1" placeholder="待填写"></label>
+              <label>履约率（%）<input data-chengfang-evidence="fulfillment_rate" type="number" min="0" max="100" step="0.01" placeholder="待填写"></label>
+              <label>可用素材数<input data-chengfang-evidence="creative_count" type="number" min="0" step="1" placeholder="待填写"></label>
+              <label>数据完整度（%）<input data-chengfang-evidence="data_completeness" type="number" min="0" max="100" step="1" placeholder="待填写"></label>
+              <label>数据距今（分钟）<input data-chengfang-evidence="data_freshness_minutes" type="number" min="0" step="1" placeholder="待填写"></label>
+            </div>
+          </section>
           <details class="inner-fold chengfang-blockers" open>
             <summary>当前阻塞与数据缺口 <span id="chengfang-blocker-count">正在检查</span></summary>
             <ul id="chengfang-blockers-list"><li>等待本地 Agent 返回准备度。</li></ul>
@@ -587,6 +634,7 @@
       </section>
     </main>
     <script src="connection-guide-policy.js"></script>
+    <script src="chengfang-planner.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

@@ -1422,6 +1422,130 @@ function renderChengfangUnavailable(message) {
   });
 }
 
+const CHENGFANG_LOCAL_PLAN_KEY = "chengfangLocalPlanningV1";
+
+function readChengfangCalculatorInputs() {
+  return Object.fromEntries([...document.querySelectorAll("[data-chengfang-input]")]
+    .map((input) => [input.dataset.chengfangInput, input.value]));
+}
+
+function readChengfangEvidenceInputs() {
+  return Object.fromEntries([...document.querySelectorAll("[data-chengfang-evidence]")]
+    .map((input) => [input.dataset.chengfangEvidence, input.value]));
+}
+
+function renderChengfangFoundation(planner, calculation) {
+  const evidence = readChengfangEvidenceInputs();
+  const diagnosticInput = {
+    ...evidence,
+    contribution_margin: calculation.status === "ready" ? calculation.contribution_margin : "",
+    refund_rate: calculation.parsed?.refund_rate?.status === "present" ? calculation.parsed.refund_rate.value : "",
+  };
+  const qualification = planner.assessQualification(diagnosticInput);
+  const eligibilityNode = document.getElementById("chengfang-eligibility-empty");
+  eligibilityNode.replaceChildren(...qualification.dimensions.map((dimension) => {
+    const row = document.createElement("div"); row.className = "chengfang-dimension";
+    const label = document.createElement("span"); label.textContent = dimension.label;
+    const value = document.createElement("b"); value.textContent = dimension.score === null ? "数据不足" : `${dimension.score} 分`;
+    row.title = dimension.evidence; row.append(label, value); return row;
+  }));
+  if (qualification.score !== null) {
+    const total = document.createElement("p"); total.textContent = `证据完整后综合资格分：${qualification.score}。分数只用于排序，不代表平台准入。`;
+    eligibilityNode.prepend(total);
+  }
+  const bottlenecks = planner.identifyBottlenecks(diagnosticInput);
+  const bottleneckNode = document.getElementById("chengfang-bottleneck-empty");
+  if (bottlenecks.status === "insufficient") {
+    bottleneckNode.textContent = `数据不足：${bottlenecks.next_steps.join("、")}。当前不输出瓶颈结论。`;
+  } else if (bottlenecks.status === "clear") {
+    bottleneckNode.textContent = "当前规则未发现明确瓶颈；这不等于可以扩量，仍需持续观察。";
+  } else {
+    bottleneckNode.replaceChildren(...[bottlenecks.primary, ...bottlenecks.secondary].map((item, index) => {
+      const row = document.createElement("p"); row.textContent = `${index ? "次要" : "主要"}：${item.title}（${item.evidence_level}）— ${item.evidence}；${item.action}`; return row;
+    }));
+  }
+  const shadowNode = document.getElementById("chengfang-shadow-empty");
+  const goal = document.querySelector('input[name="chengfang-goal"]:checked')?.value || "";
+  const primary = bottlenecks.primary;
+  const shadow = planner.buildShadowRecord({ goal, recommendation: primary?.action || "", evidence: primary ? [primary.evidence] : [] });
+  shadowNode.textContent = shadow.status === "ready"
+    ? `影子记录已具备：${shadow.record.recommendation}；等待 2h / 24h / 3d / 7d 回读。不会执行。`
+    : `尚不能生成影子记录：缺少 ${shadow.missing.join("、")}。`;
+}
+
+function money(value) {
+  return `¥${Number(value).toFixed(2)}`;
+}
+
+function renderChengfangPlanner() {
+  const planner = globalThis.DianChengfangPlanner;
+  const resultNode = document.getElementById("chengfang-calculation-result");
+  const scenarioNode = document.getElementById("chengfang-scenarios");
+  const result = planner.calculate(readChengfangCalculatorInputs());
+  document.querySelectorAll("[data-chengfang-input]").forEach((input) => {
+    input.classList.toggle("invalid", result.invalid?.includes(input.dataset.chengfangInput));
+  });
+  if (result.status === "incomplete") {
+    resultNode.className = "chengfang-calculation-result empty";
+    resultNode.textContent = `还缺 ${result.missing.length} 项。空值不会按 0 处理；没有数据时不输出保本结论。`;
+  } else if (result.status === "invalid") {
+    resultNode.className = "chengfang-calculation-result danger";
+    resultNode.textContent = result.reason || "存在无效输入，请检查红色标记字段。";
+  } else if (result.status === "loss_before_ads") {
+    resultNode.className = "chengfang-calculation-result danger";
+    resultNode.textContent = `暂不适合投放：退款后预计收入 ${money(result.retained_revenue)}，非广告成本 ${money(result.non_ad_cost)}，未投广告前已无正向空间。`;
+  } else {
+    resultNode.className = "chengfang-calculation-result";
+    resultNode.replaceChildren();
+    const metrics = document.createElement("div");
+    metrics.className = "chengfang-result-metrics";
+    [["退款后预计收入", money(result.retained_revenue)], ["单件最高可承受广告消耗", money(result.max_ad_spend)], ["当前贡献毛利", money(result.contribution_margin)], ["测算保本 ROI", result.break_even_roi.toFixed(2)]]
+      .forEach(([label, value]) => { const item = document.createElement("div"); const span = document.createElement("span"); const strong = document.createElement("strong"); span.textContent = label; strong.textContent = value; item.append(span, strong); metrics.append(item); });
+    const note = document.createElement("p"); note.textContent = result.assumptions; note.style.marginBottom = "0";
+    resultNode.append(metrics, note);
+  }
+  const scenarios = planner.buildScenarios(result);
+  if (!scenarios.length) {
+    scenarioNode.className = "chengfang-scenarios empty-state";
+    scenarioNode.textContent = "完成有效测算后显示保守、基准和进取三档假设。";
+  } else {
+    scenarioNode.className = "chengfang-scenarios";
+    scenarioNode.replaceChildren(...scenarios.map((scenario) => {
+      const card = document.createElement("article"); card.className = "chengfang-scenario";
+      const title = document.createElement("strong"); title.textContent = `${scenario.label}方案`;
+      const value = document.createElement("b"); value.textContent = `参考 ROI ≥ ${scenario.target_roi.toFixed(2)}`;
+      const spend = document.createElement("p"); spend.textContent = `单件测算广告空间：${money(scenario.max_ad_spend)}。${scenario.risk}`;
+      card.append(title, value, spend); return card;
+    }));
+  }
+  renderChengfangFoundation(planner, result);
+  return result;
+}
+
+async function saveChengfangLocalPlan() {
+  const goal = document.querySelector('input[name="chengfang-goal"]:checked')?.value || "";
+  const inputs = readChengfangCalculatorInputs();
+  const evidence = readChengfangEvidenceInputs();
+  await chrome.storage.local.set({ [CHENGFANG_LOCAL_PLAN_KEY]: { schema_version: 2, goal, inputs, evidence, saved_at: Date.now(), local_only: true } });
+  renderChengfangPlanner();
+}
+
+function restoreChengfangLocalPlan(saved = {}) {
+  const planner = globalThis.DianChengfangPlanner;
+  const goal = planner.GOALS[saved.goal] ? saved.goal : "";
+  if (goal) document.querySelector(`input[name="chengfang-goal"][value="${goal}"]`).checked = true;
+  document.getElementById("chengfang-goal-status").textContent = goal ? `已选择“${planner.GOALS[goal]}”；偏好仅保存在本机。` : "请选择目标；这里只保存偏好，不会修改乘方策略。";
+  document.querySelectorAll("[data-chengfang-input]").forEach((input) => {
+    const value = saved.inputs?.[input.dataset.chengfangInput];
+    input.value = value === 0 || value ? String(value) : "";
+  });
+  document.querySelectorAll("[data-chengfang-evidence]").forEach((input) => {
+    const value = saved.evidence?.[input.dataset.chengfangEvidence];
+    input.value = value === 0 || value ? String(value) : "";
+  });
+  renderChengfangPlanner();
+}
+
 function renderOperationContext(payload = {}) {
   currentOperationContext = payload;
   renderPriorityReminder();
@@ -2330,7 +2454,7 @@ async function syncRecentQianchuanPage() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanStorePreference", "scanAccountPreference", "lastQianchuanManualSync", "qianchuanFeatureDeferred"]);
+  const stored = await chrome.storage.local.get(["preferredRole", "workbenchScene", "templateChecks", "scanStorePreference", "scanAccountPreference", "lastQianchuanManualSync", "qianchuanFeatureDeferred", CHENGFANG_LOCAL_PLAN_KEY]);
   if (stored.preferredRole) currentRole = ROLE_MIGRATION[stored.preferredRole] || stored.preferredRole;
   if (!ROLE_WORKBENCH[currentRole]) currentRole = "货架商品";
   if (SCENE_WORKBENCH[stored.workbenchScene]) workbenchScene = stored.workbenchScene;
@@ -2345,11 +2469,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item.dataset.role === currentRole));
   await chrome.storage.local.set({ preferredRole: currentRole });
   restoreQianchuanSyncUi(stored.lastQianchuanManualSync || {});
+  restoreChengfangLocalPlan(stored[CHENGFANG_LOCAL_PLAN_KEY] || {});
   renderWorkbench();
   applyModuleVisibility();
   await reportExtensionInstallSource().catch(() => undefined);
   refreshAll(false);
 });
+document.querySelectorAll('input[name="chengfang-goal"]').forEach((input) => input.addEventListener("change", async () => {
+  document.getElementById("chengfang-goal-status").textContent = `已选择“${globalThis.DianChengfangPlanner.GOALS[input.value]}”；偏好仅保存在本机。`;
+  await saveChengfangLocalPlan();
+}));
+document.querySelectorAll("[data-chengfang-input]").forEach((input) => input.addEventListener("input", () => saveChengfangLocalPlan()));
+document.querySelectorAll("[data-chengfang-evidence]").forEach((input) => input.addEventListener("input", () => saveChengfangLocalPlan()));
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
 document.getElementById("sync-diagnose").addEventListener("click", () => refreshAll(true));
 document.getElementById("chengfang-sync").addEventListener("click", async (event) => {
