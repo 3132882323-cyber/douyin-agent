@@ -1,4 +1,4 @@
-/** 店策 Agent - MV3 service worker (v4.0.0) */
+/** 店策 Agent - MV3 service worker (v4.1.0) */
 
 importScripts("scan-policy.js");
 

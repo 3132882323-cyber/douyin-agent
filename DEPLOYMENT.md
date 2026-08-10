@@ -6,6 +6,8 @@
 
 4.0 将两个结论严格分开：`product_operational` 表示本机数据、规则和受监督执行链路可以工作；`public_distribution_ready` 表示产品同时具备生产 Ed25519 信任锚，Agent、Updater、安装升级入口和维护脚本的完整 Windows Authenticode，以及与内嵌官方扩展 ID、请求 Origin、安装来源和目标版本一致的浏览器商店发布证据。前者为真不能替代后者，任何发行证据缺失都必须在工作台显示为阻塞。
 
+本文件描述本地版分发。抖店服务市场 SaaS 使用独立发行模式、官方 OAuth/Open API 与云端多租户安全边界，不复用本地浏览器采集入口，详见 [MARKETPLACE_DEPLOYMENT.md](MARKETPLACE_DEPLOYMENT.md)。
+
 ## 数据分层
 
 发布版默认使用 `%LOCALAPPDATA%\DianAgent`：
@@ -92,7 +94,7 @@ powershell -ExecutionPolicy Bypass -File tools/build_release_bundle.ps1 -Develop
 
 1. 更新器内嵌与生产私钥匹配的 Ed25519 公钥，且生产私钥从未进入仓库或构建日志。
 2. Agent、Updater、安装/升级入口和全部发布维护脚本均完成 Windows Authenticode，并通过目标 Windows 版本的 SmartScreen/杀软抽检；只给 Agent 主程序签名不算通过。
-3. 扩展已在目标浏览器商店正式发布，运行时请求 Origin 与内嵌官方扩展 ID 匹配，安装来源属于该商店且版本与 4.0.0 完全一致；开发者模式加载和仅靠环境变量声明只能作为内测来源。
+3. 扩展已在目标浏览器商店正式发布，运行时请求 Origin 与内嵌官方扩展 ID 匹配，安装来源属于该商店且版本与 4.1.0 完全一致；开发者模式加载和仅靠环境变量声明只能作为内测来源。
 
 当前仓库仅达到“产品本地可运行、发行条件透明可查”。便携包仍由 `.bat` 入口启动，仓库也未内嵌正式商店扩展 ID；在签名安装器/升级器替代不可验证入口且全部证据补齐前，构建产物只能作为内部验收包，不得宣传为正式公开发行版。
 

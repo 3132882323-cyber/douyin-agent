@@ -5,6 +5,9 @@ bridge/bridge.stdout.log
 bridge/bridge.stderr.log
 bridge/config/
 reports/
+.env
+.env.*
+!.env.marketplace.example
 
 # Private extension signing material and generated packages
 *.pem
