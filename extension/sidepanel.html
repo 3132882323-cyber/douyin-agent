@@ -114,9 +114,9 @@
             </label>
           </div>
           <div id="update-message" class="update-message">经营判断在本机完成；不连接 AI 也可正常诊断。</div>
-          <section class="release-readiness-card" aria-label="4.0 发布就绪度">
+          <section class="release-readiness-card" aria-label="4.1 发布就绪度">
             <div class="release-readiness-heading">
-              <div><small>推广前必须看</small><strong>4.0 发布就绪度</strong></div>
+              <div><small>推广前必须看</small><strong>4.1 发布就绪度</strong></div>
               <b id="release-readiness-state" class="blocked">正在核对</b>
             </div>
             <p id="release-readiness-summary">正在检查签名、安装来源和浏览器商店状态，不会把内测包误报为正式版。</p>
@@ -397,18 +397,24 @@
             <div><strong>乘方经营驾驶舱</strong><p id="chengfang-summary">正在读取本地 Agent 的乘方准备度。</p></div>
             <button id="chengfang-sync" type="button">同步当前千川页</button>
           </div>
-          <div id="chengfang-status-grid" class="chengfang-status-grid"></div>
-          <article class="chengfang-next-step">
-            <span>下一步</span>
-            <strong id="chengfang-next-step">请先同步真实乘方页面并确认店铺、账户、策略和指标口径。</strong>
+          <article id="chengfang-decision" class="chengfang-decision warning">
+            <div><span>今日结论</span><strong id="chengfang-today-conclusion">数据尚未达到可信诊断条件</strong></div>
+            <div><span>今日唯一动作</span><strong id="chengfang-today-action">先补齐经营建档和真实乘方数据</strong></div>
+            <details><summary>为什么</summary><p id="chengfang-today-why">缺少经营边界或可验证数据时，不生成预算与投放动作。</p></details>
+            <div><span>下一步</span><strong id="chengfang-next-step">请先同步真实乘方页面并确认店铺、账户、策略和指标口径。</strong></div>
           </article>
-          <section class="chengfang-planner" aria-labelledby="chengfang-planner-heading">
+          <details class="inner-fold chengfang-status-fold">
+            <summary>数据身份、口径与时间 <span id="chengfang-status-summary">正在核验</span></summary>
+            <div id="chengfang-status-grid" class="chengfang-status-grid"></div>
+          </details>
+          <section class="chengfang-profile" aria-labelledby="chengfang-profile-heading">
             <div class="chengfang-planner-heading">
-              <div><h4 id="chengfang-planner-heading">经营目标与保本线测算</h4><p>所有输入仅保存在本机浏览器扩展中，不会发送到平台，也不会触发投放操作。</p></div>
-              <span>只读测算</span>
+              <div><h4 id="chengfang-profile-heading">首次使用 · 经营建档</h4><p>先确认店铺身份、经营目标、成本口径和经营边界。全部资料只保存在本机，可随时修改或重置。</p></div>
+              <span id="chengfang-profile-progress">0 / 4 完成</span>
             </div>
+            <div class="chengfang-binding-summary"><strong>1. 店铺与账户</strong><span id="chengfang-binding-guide">等待本地 Agent 核验；身份不完整时只读。</span></div>
             <fieldset class="chengfang-goals">
-              <legend>今天的经营目标</legend>
+              <legend>2. 今天的经营目标</legend>
               <div id="chengfang-goal-options">
                 <label><input type="radio" name="chengfang-goal" value="profit">保利润</label>
                 <label><input type="radio" name="chengfang-goal" value="stable">稳规模</label>
@@ -419,6 +425,7 @@
               </div>
               <small id="chengfang-goal-status">请选择目标；这里只保存偏好，不会修改乘方策略。</small>
             </fieldset>
+            <div><strong>3. 利润与成本口径</strong><p class="chengfang-field-help">请按本店真实账本填写；平台费率不预设。空值表示未知，真实的 0 请填写 0。</p></div>
             <div class="chengfang-calculator-grid">
               <label>商品售价（元）<input data-chengfang-input="price" type="number" min="0" step="0.01" placeholder="必填"></label>
               <label>商品成本（元）<input data-chengfang-input="product_cost" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
@@ -429,26 +436,62 @@
               <label>预估退款率（%）<input data-chengfang-input="refund_rate" type="number" min="0" max="100" step="0.01" placeholder="必填，可填 0"></label>
               <label>广告消耗（元/件）<input data-chengfang-input="advertising_cost" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
             </div>
+            <div><strong>4. 经营边界</strong><p class="chengfang-field-help">这些是只读判断边界，不是平台参数，也不会自动提交。</p></div>
+            <div class="chengfang-calculator-grid">
+              <label>最低单件贡献毛利（元）<input data-chengfang-boundary="minimum_contribution_margin" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
+              <label>单日预算上限（元）<input data-chengfang-boundary="daily_budget_cap" type="number" min="0" step="0.01" placeholder="必须大于 0"></label>
+              <label>单日最大可承受亏损（元）<input data-chengfang-boundary="daily_loss_cap" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
+              <label>退款率预警线（%）<input data-chengfang-boundary="refund_rate_ceiling" type="number" min="0" max="100" step="0.01" placeholder="0–100"></label>
+              <label>库存覆盖底线（天）<input data-chengfang-boundary="inventory_days_floor" type="number" min="0" step="0.1" placeholder="必填，可填 0"></label>
+              <label>单次预算调整上限（%）<input data-chengfang-boundary="single_adjustment_cap" type="number" min="0" max="100" step="0.1" placeholder="仅为未来授权边界"></label>
+            </div>
+            <div class="chengfang-profile-actions"><span id="chengfang-boundary-status">请补齐经营边界。</span><button id="chengfang-profile-reset" type="button">重置本机建档</button></div>
+          </section>
+          <section class="chengfang-planner" aria-labelledby="chengfang-planner-heading">
+            <div class="chengfang-planner-heading">
+              <div><h4 id="chengfang-planner-heading">经营测算与诊断</h4><p>先测算利润安全线，再查看资格、瓶颈和策略沙盘；结果不是平台预测。</p></div>
+              <span>只读测算</span>
+            </div>
             <p class="chengfang-formula">测算口径：退款后预计收入 ÷ 可承受广告消耗。佣金和平台费用暂按退款后预计收入计提；请以账户真实规则为准。</p>
             <div id="chengfang-calculation-result" class="chengfang-calculation-result empty">请补齐全部 8 项输入。空值与真实的 0 会被严格区分。</div>
-            <div class="chengfang-sandbox-head"><strong>三档经营沙盘</strong><span>测算而非平台预测，不会生成或提交写操作</span></div>
-            <div id="chengfang-scenarios" class="chengfang-scenarios empty-state">完成有效测算后显示保守、基准和进取三档假设。</div>
+            <div class="chengfang-evidence-inputs">
+              <strong>只读经营证据</strong><span>手工数据仅保存在本机；数据时间和完整度会影响结论等级。</span>
+              <div class="chengfang-calculator-grid">
+                <label>库存覆盖（天）<input data-chengfang-evidence="inventory_days" type="number" min="0" step="0.1" placeholder="待填写"></label>
+                <label>履约率（%）<input data-chengfang-evidence="fulfillment_rate" type="number" min="0" max="100" step="0.01" placeholder="待填写"></label>
+                <label>可用素材数<input data-chengfang-evidence="creative_count" type="number" min="0" step="1" placeholder="待填写"></label>
+                <label>数据完整度（%）<input data-chengfang-evidence="data_completeness" type="number" min="0" max="100" step="1" placeholder="待填写"></label>
+                <label>数据距今（分钟）<input data-chengfang-evidence="data_freshness_minutes" type="number" min="0" step="1" placeholder="待填写"></label>
+              </div>
+            </div>
+            <section class="chengfang-readonly-foundation">
+              <article><strong>商品乘方资格</strong><div id="chengfang-eligibility-empty">先补齐利润、库存、退款、履约、素材与数据质量。</div></article>
+              <article><strong>主要增长瓶颈</strong><div id="chengfang-bottleneck-empty">缺少真实经营数据，当前不判断增长瓶颈。</div></article>
+            </section>
+            <details class="inner-fold">
+              <summary>三档经营沙盘 <span>测算，不是平台预测</span></summary>
+              <div id="chengfang-scenarios" class="chengfang-scenarios empty-state">完成有效测算后显示保守、基准和进取三档假设。</div>
+            </details>
           </section>
-          <section class="chengfang-readonly-foundation">
-            <article><strong>商品乘方资格</strong><div id="chengfang-eligibility-empty">先补齐利润、库存、退款、履约、素材与数据质量。</div></article>
-            <article><strong>增长瓶颈</strong><div id="chengfang-bottleneck-empty">缺少真实经营数据，当前不判断增长瓶颈。</div></article>
-            <article><strong>影子建议与观察</strong><div id="chengfang-shadow-empty">只保存建议和回读槽位，不执行任何投放动作。</div></article>
+          <section class="chengfang-shadow-program" aria-labelledby="chengfang-shadow-heading">
+            <div class="chengfang-planner-heading"><div><h4 id="chengfang-shadow-heading">7 天影子观察</h4><p>每天只生成一条本地建议，并预留 2h / 24h / 3d / 7d 回读；不会打开页面、填写或提交。</p></div><span id="chengfang-shadow-state">未开启</span></div>
+            <div id="chengfang-shadow-empty">先完成经营建档和可信诊断，再开启 7 天影子观察。</div>
+            <div id="chengfang-shadow-readbacks" class="chengfang-shadow-readbacks"></div>
+            <button id="chengfang-shadow-toggle" type="button">开启 7 天影子观察</button>
           </section>
-          <section class="chengfang-evidence-inputs">
-            <strong>只读经营证据</strong><span>手工数据仅保存在本机；空值不会按 0 处理。</span>
-            <div class="chengfang-calculator-grid">
-              <label>库存覆盖（天）<input data-chengfang-evidence="inventory_days" type="number" min="0" step="0.1" placeholder="待填写"></label>
-              <label>履约率（%）<input data-chengfang-evidence="fulfillment_rate" type="number" min="0" max="100" step="0.01" placeholder="待填写"></label>
-              <label>可用素材数<input data-chengfang-evidence="creative_count" type="number" min="0" step="1" placeholder="待填写"></label>
-              <label>数据完整度（%）<input data-chengfang-evidence="data_completeness" type="number" min="0" max="100" step="1" placeholder="待填写"></label>
-              <label>数据距今（分钟）<input data-chengfang-evidence="data_freshness_minutes" type="number" min="0" step="1" placeholder="待填写"></label>
+          <section class="chengfang-permissions" aria-labelledby="chengfang-permission-heading">
+            <div><h4 id="chengfang-permission-heading">自动化权限</h4><p>当前最终安全版只启用 L0。更高等级必须取得真实字段合同、稳定回读与明确授权后另行开放。</p></div>
+            <div class="chengfang-permission-grid">
+              <article class="active"><b>L0 · 只读诊断</b><span>已启用：同步、测算、建议、影子观察</span></article>
+              <article><b>L1 · 自动导航</b><span>未启用：真实页面指纹尚未完成验真</span></article>
+              <article><b>L2 · 辅助填写</b><span>未启用：无已验证字段与提交回读合同</span></article>
+              <article><b>L3 · 受控执行</b><span>未启用：无官方写接口与生产授权体系</span></article>
             </div>
           </section>
+          <details class="inner-fold chengfang-tutorial">
+            <summary>3 分钟使用教程 <span>第一次使用建议阅读</span></summary>
+            <ol><li>打开正确的抖店与千川账户，点击“同步当前千川页”核验身份。</li><li>选择经营目标，按本店真实账本填写成本与经营边界；不知道的平台费率保持空白。</li><li>补齐库存、履约、素材和数据时间，查看今日唯一动作及其证据。</li><li>开启 7 天影子观察；它只记录建议与回读槽，不会替你修改乘方。</li><li>每天回到本页同步数据并复盘；数据不足时先补数据，不按猜测执行。</li></ol>
+          </details>
           <details class="inner-fold chengfang-blockers" open>
             <summary>当前阻塞与数据缺口 <span id="chengfang-blocker-count">正在检查</span></summary>
             <ul id="chengfang-blockers-list"><li>等待本地 Agent 返回准备度。</li></ul>

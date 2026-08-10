@@ -74,7 +74,7 @@ RAW_SHOP_FIELD_NAMES = {
 }
 _VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _EXTENSION_ID = re.compile(r"^[a-p]{32}$")
-TARGET_RELEASE_VERSION = "4.0.0"
+TARGET_RELEASE_VERSION = "4.1.0"
 REQUIRED_AUTHENTICODE_ARTIFACTS = {
     "agent",
     "updater",
