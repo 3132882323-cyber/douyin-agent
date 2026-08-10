@@ -46,7 +46,7 @@ class PromotionReadinessTests(unittest.TestCase):
             {
                 "source": "release_bundle",
                 "browser": "chrome",
-                "version": "4.0.0",
+                "version": "4.1.0",
                 "extension_id": "a" * 32,
             },
         )
@@ -57,7 +57,7 @@ class PromotionReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported fields"):
             save_extension_install_state(
                 self.temp.name,
-                {"source": "unpacked", "browser": "chrome", "version": "4.0.0", "token": "secret"},
+                {"source": "unpacked", "browser": "chrome", "version": "4.1.0", "token": "secret"},
             )
 
     def test_anonymous_feedback_is_off_by_default_and_never_uploads(self) -> None:
@@ -116,7 +116,7 @@ class PromotionReadinessTests(unittest.TestCase):
             {
                 "source": "chrome_web_store",
                 "browser": "chrome",
-                "version": "4.0.0",
+                "version": "4.1.0",
                 "extension_id": "a" * 32,
             },
             origin_extension_id="a" * 32,
@@ -149,7 +149,7 @@ class PromotionReadinessTests(unittest.TestCase):
             "upgrade_entry": True,
             "maintenance_scripts": True,
         }
-        for source, version in (("unpacked", "4.0.0"), ("chrome_web_store", "3.9.0")):
+        for source, version in (("unpacked", "4.1.0"), ("chrome_web_store", "3.9.0")):
             with self.subTest(source=source, version=version):
                 save_extension_install_state(
                     self.temp.name,
@@ -170,7 +170,7 @@ class PromotionReadinessTests(unittest.TestCase):
     def test_authenticode_requires_every_release_artifact(self) -> None:
         save_extension_install_state(
             self.temp.name,
-            {"source": "chrome_web_store", "browser": "chrome", "version": "4.0.0", "extension_id": "a" * 32},
+            {"source": "chrome_web_store", "browser": "chrome", "version": "4.1.0", "extension_id": "a" * 32},
             origin_extension_id="a" * 32,
         )
         with patch.dict(OFFICIAL_EXTENSION_IDS_BY_STORE, {"chrome_web_store": frozenset({"a" * 32})}):
@@ -252,7 +252,7 @@ class PromotionHttpApiTests(unittest.TestCase):
     def test_extension_source_and_release_readiness_apis(self) -> None:
         status, body = self._post(
             "/distribution/extension-source",
-            {"source": "unpacked", "browser": "edge", "version": "4.0.0", "extension_id": "a" * 32},
+            {"source": "unpacked", "browser": "edge", "version": "4.1.0", "extension_id": "a" * 32},
         )
         self.assertEqual(200, status)
         self.assertEqual("unpacked", body["extension"]["source"])

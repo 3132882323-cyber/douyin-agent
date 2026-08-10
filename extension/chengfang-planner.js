@@ -14,6 +14,10 @@
     "merchant_discount", "fulfillment_cost", "refund_rate", "advertising_cost",
   ]);
   const LIMITS = Object.freeze({ money: 100000000, rate: 100 });
+  const BOUNDARY_FIELDS = Object.freeze([
+    "minimum_contribution_margin", "daily_budget_cap", "daily_loss_cap",
+    "refund_rate_ceiling", "inventory_days_floor", "single_adjustment_cap",
+  ]);
 
   function parseField(raw, kind) {
     if (raw === "" || raw === null || raw === undefined) return { status: "missing", value: null };
@@ -56,6 +60,28 @@
       advertising_cost: parsed.advertising_cost.value, contribution_margin: contributionMargin,
       max_ad_spend: maxAdSpend, break_even_roi: breakEvenRoi,
       assumptions: "单件测算；退款商品不保留收入；佣金与平台费用按退款后预计收入计提；未计入的费用会令结果偏乐观。",
+    };
+  }
+
+  function validateBoundaries(input = {}) {
+    const parsed = {
+      minimum_contribution_margin: parseField(input.minimum_contribution_margin, "money"),
+      daily_budget_cap: parseField(input.daily_budget_cap, "money"),
+      daily_loss_cap: parseField(input.daily_loss_cap, "money"),
+      refund_rate_ceiling: parseField(input.refund_rate_ceiling, "rate"),
+      inventory_days_floor: parseField(input.inventory_days_floor, "money"),
+      single_adjustment_cap: parseField(input.single_adjustment_cap, "rate"),
+    };
+    const missing = BOUNDARY_FIELDS.filter((key) => parsed[key].status === "missing");
+    const invalid = BOUNDARY_FIELDS.filter((key) => parsed[key].status === "invalid");
+    if (parsed.daily_budget_cap.status === "present" && parsed.daily_budget_cap.value <= 0) invalid.push("daily_budget_cap");
+    return {
+      status: invalid.length ? "invalid" : missing.length ? "incomplete" : "ready",
+      parsed,
+      missing,
+      invalid: [...new Set(invalid)],
+      local_only: true,
+      execution_allowed: false,
     };
   }
 
@@ -123,6 +149,62 @@
     return { status: "ready", record: { schema_version: 1, id: `cf-shadow-${created}`, local_only: true, execution_allowed: false, goal, recommendation: String(recommendation).trim(), evidence, created_at: created, readbacks: { "2h": null, "24h": null, "3d": null, "7d": null } } };
   }
 
+  function buildShadowProgram({ enabled, started_at, days } = {}, now = Date.now()) {
+    const cleanDays = Array.isArray(days) ? days.slice(-7).map((day) => ({
+      date: String(day?.date || "").slice(0, 10),
+      recommendation: String(day?.recommendation || "").slice(0, 500),
+      evidence: Array.isArray(day?.evidence) ? day.evidence.map((item) => String(item).slice(0, 300)).slice(0, 8) : [],
+      created_at: Number(day?.created_at) || now,
+      readbacks: { "2h": day?.readbacks?.["2h"] || null, "24h": day?.readbacks?.["24h"] || null, "3d": day?.readbacks?.["3d"] || null, "7d": day?.readbacks?.["7d"] || null },
+    })) : [];
+    if (!enabled) return { enabled: false, status: "inactive", started_at: null, ends_at: null, days: cleanDays, execution_allowed: false, local_only: true };
+    const startedAt = Number(started_at) || now;
+    const endsAt = startedAt + 7 * 24 * 60 * 60 * 1000;
+    return { enabled: now < endsAt, status: now < endsAt ? "active" : "completed", started_at: startedAt, ends_at: endsAt, days: cleanDays, execution_allowed: false, local_only: true };
+  }
+
+  function appendDailyShadow(program, { date, goal, recommendation, evidence } = {}, now = Date.now()) {
+    const normalized = buildShadowProgram(program, now);
+    if (normalized.status !== "active") return normalized;
+    const dayKey = String(date || new Date(now).toISOString().slice(0, 10));
+    if (!GOALS[goal] || !String(recommendation || "").trim() || !Array.isArray(evidence) || !evidence.length) return normalized;
+    if (normalized.days.some((item) => item.date === dayKey)) return normalized;
+    normalized.days.push({ date: dayKey, recommendation: String(recommendation).trim().slice(0, 500), evidence: evidence.map((item) => String(item).slice(0, 300)).slice(0, 8), created_at: now, readbacks: { "2h": null, "24h": null, "3d": null, "7d": null } });
+    normalized.days = normalized.days.slice(-7);
+    return normalized;
+  }
+
+  function buildDecisionBrief({ goal, calculation, boundaries, qualification, bottlenecks, readiness = {} } = {}) {
+    const missing = [];
+    if (!GOALS[goal]) missing.push("经营目标");
+    if (!calculation || calculation.status !== "ready") missing.push("成本口径");
+    if (!boundaries || boundaries.status !== "ready") missing.push("经营边界");
+    if (!qualification || qualification.status !== "ready") missing.push("经营证据");
+    if (readiness.identity_ready === false) missing.push("店铺与账户身份");
+    if (readiness.metric_ready === false) missing.push("综合 ROI 口径");
+    if (readiness.data_ready === false) missing.push("真实乘方数据");
+    if (missing.length) return {
+      level: "warning",
+      conclusion: "数据尚未达到可信诊断条件",
+      action: `先补齐${missing[0]}`,
+      why: `仍缺：${[...new Set(missing)].join("、")}。证据不足时不生成预算或投放动作。`,
+      next_step: readiness.next_step || "按经营建档顺序补齐数据，然后重新同步。",
+      evidence: [...new Set(missing)],
+      execution_allowed: false,
+    };
+    const value = (field) => boundaries.parsed[field].value;
+    if (calculation.contribution_margin < value("minimum_contribution_margin")) return {
+      level: "danger", conclusion: "当前贡献毛利低于本店安全边界", action: "先复核成本与售价，保持只读，不扩量", why: `单件贡献毛利 ${calculation.contribution_margin.toFixed(2)} 元，低于边界 ${value("minimum_contribution_margin").toFixed(2)} 元。`, next_step: "核对商品成本、佣金、平台费用、优惠和退款口径。", evidence: ["利润边界已触发"], execution_allowed: false,
+    };
+    const refund = calculation.parsed.refund_rate.value;
+    if (refund > value("refund_rate_ceiling")) return {
+      level: "danger", conclusion: "退款率超过本店预警线", action: "先定位退款原因，保持只读，不扩量", why: `当前填写退款率 ${refund}%，高于边界 ${value("refund_rate_ceiling")}% 。`, next_step: "检查高退款商品、素材表达和履约问题。", evidence: ["退款边界已触发"], execution_allowed: false,
+    };
+    const primary = bottlenecks?.primary;
+    if (primary) return { level: primary.severity >= 90 ? "danger" : "warning", conclusion: `当前主要瓶颈：${primary.title}`, action: primary.action, why: `${primary.evidence}；证据等级：${primary.evidence_level}。`, next_step: "完成该动作后重新同步，按 2h / 24h / 3d / 7d 复盘。", evidence: [primary.evidence], execution_allowed: false };
+    return { level: "safe", conclusion: "当前未发现已确认的高风险瓶颈", action: "保持当前策略并继续观察，不自动调整", why: "成本、边界和经营证据已补齐，但只读规则没有发现明确瓶颈。", next_step: "开启 7 天影子观察，每天同步一次并核对长期结果。", evidence: ["只读规则检查完成"], execution_allowed: false };
+  }
+
   function buildScenarios(result) {
     if (!result || result.status !== "ready") return [];
     return [
@@ -141,5 +223,5 @@
     };
   }
 
-  return { GOALS, REQUIRED_FIELDS, QUALIFICATION_DIMENSIONS, parseField, calculate, buildScenarios, assessQualification, identifyBottlenecks, buildShadowRecord, emptyDiagnostics };
+  return { GOALS, REQUIRED_FIELDS, BOUNDARY_FIELDS, QUALIFICATION_DIMENSIONS, parseField, calculate, validateBoundaries, buildScenarios, assessQualification, identifyBottlenecks, buildShadowRecord, buildShadowProgram, appendDailyShadow, buildDecisionBrief, emptyDiagnostics };
 });

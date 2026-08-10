@@ -1228,6 +1228,16 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .chengfang-summary-head strong { font-size: 18px; }
 .chengfang-summary-head p { margin: 4px 0 0; color: #596579; }
 .chengfang-summary-head button { border: 1px solid #2b63e8; color: #1752d0; background: #fff; border-radius: 9px; font-weight: 700; }
+.chengfang-decision { display: grid; grid-template-columns: 1.1fr 1.3fr; gap: 12px; border: 1px solid #e1b454; border-left: 5px solid #e4a11b; border-radius: 13px; padding: 16px; background: #fffaf0; }
+.chengfang-decision.safe { border-color: #86d9ae; border-left-color: #22a566; background: #f1fbf6; }
+.chengfang-decision.danger { border-color: #f0a0aa; border-left-color: #d52c3b; background: #fff4f5; }
+.chengfang-decision > div, .chengfang-decision details { min-width: 0; }
+.chengfang-decision span, .chengfang-decision summary { display: block; color: #6a7282; font-size: 13px; font-weight: 800; }
+.chengfang-decision strong { display: block; margin-top: 5px; color: #19243b; font-size: 18px; line-height: 1.45; }
+.chengfang-decision.danger strong { color: #a31827; }
+.chengfang-decision details p { margin: 8px 0 0; color: #4e5a70; font-size: 14px; line-height: 1.6; }
+.chengfang-status-fold { border-color: #d7dfed; background: #fafbfe; }
+.chengfang-status-fold .chengfang-status-grid { margin-top: 12px; }
 .chengfang-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .chengfang-status-card { min-width: 0; border: 1px solid #dce2ed; border-top-width: 4px; border-radius: 11px; padding: 12px; background: #fff; }
 .chengfang-status-card.safe { border-top-color: #22a566; }
@@ -1239,6 +1249,16 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .chengfang-next-step { border: 1px solid #b9cbff; border-radius: 11px; padding: 12px 14px; background: #eef3ff; }
 .chengfang-next-step span { display: block; color: #3f5c9a; font-size: 12px; font-weight: 700; }
 .chengfang-next-step strong { display: block; margin-top: 3px; color: #143f9e; font-size: 15px; }
+.chengfang-profile, .chengfang-shadow-program, .chengfang-permissions { display: grid; gap: 14px; border: 1px solid #cbd8fa; border-radius: 13px; padding: 16px; background: #fbfcff; }
+.chengfang-binding-summary { display: flex; justify-content: space-between; gap: 16px; border: 1px solid #dbe3f2; border-radius: 10px; padding: 11px 13px; background: #fff; }
+.chengfang-binding-summary span { color: #5e6b81; font-size: 13px; text-align: right; }
+.chengfang-field-help { margin: 5px 0 0; color: #69758a; font-size: 13px; line-height: 1.55; }
+.chengfang-profile-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid #e5e9f1; padding-top: 12px; }
+.chengfang-profile-actions span { font-size: 13px; font-weight: 700; }
+.chengfang-profile-actions span.safe { color: #167348; }
+.chengfang-profile-actions span.warning { color: #8a5b0c; }
+.chengfang-profile-actions span.danger { color: #b21625; }
+.chengfang-profile-actions button { border: 1px solid #cad2e1; border-radius: 8px; padding: 7px 10px; color: #525f74; background: #fff; }
 .chengfang-blockers { border-color: #f1c46a; background: #fffaf0; }
 .chengfang-blockers ul { margin: 10px 0 0; padding-left: 22px; color: #734713; }
 .chengfang-planner { display: grid; gap: 14px; border: 1px solid #cbd8fa; border-radius: 13px; padding: 16px; background: #fbfcff; }
@@ -1271,6 +1291,7 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .chengfang-scenario b { display: block; margin: 7px 0; color: #18243c; font-size: 16px; }
 .chengfang-scenario p { margin: 0; color: #68748a; font-size: 12px; }
 .chengfang-readonly-foundation { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.chengfang-planner .chengfang-readonly-foundation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .chengfang-readonly-foundation article { border: 1px dashed #c7cfdd; border-radius: 10px; padding: 12px; background: #fafbfc; }
 .chengfang-readonly-foundation p { margin: 6px 0 0; color: #69758a; font-size: 12px; }
 .chengfang-readonly-foundation article > div { margin-top: 8px; color: #455268; font-size: 13px; line-height: 1.55; }
@@ -1280,8 +1301,27 @@ a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .chengfang-dimension { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid #eef1f6; }
 .chengfang-dimension:last-child { border-bottom: 0; }
 .chengfang-dimension b { color: #174dbb; }
+.chengfang-shadow-program { border-color: #b9d5c7; background: #f7fcf9; }
+.chengfang-shadow-program > button { justify-self: start; border: 1px solid #1f8b5c; border-radius: 9px; padding: 9px 14px; color: #126640; background: #fff; font-weight: 800; }
+.chengfang-shadow-program > button:disabled { border-color: #d7dce5; color: #8a93a3; background: #f2f4f7; cursor: not-allowed; }
+.chengfang-shadow-readbacks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.chengfang-shadow-readbacks > div { border: 1px solid #d9e6df; border-radius: 9px; padding: 9px; background: #fff; }
+.chengfang-shadow-readbacks strong, .chengfang-shadow-readbacks span { display: block; }
+.chengfang-shadow-readbacks span { margin-top: 3px; color: #6b7585; font-size: 12px; }
+.chengfang-permission-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.chengfang-permission-grid article { border: 1px solid #d9dfe9; border-radius: 10px; padding: 11px; background: #f5f6f8; }
+.chengfang-permission-grid article.active { border-color: #68c692; background: #effaf4; }
+.chengfang-permission-grid b, .chengfang-permission-grid span { display: block; }
+.chengfang-permission-grid b { color: #1d2a42; font-size: 15px; }
+.chengfang-permission-grid span { margin-top: 6px; color: #667186; font-size: 12px; line-height: 1.5; }
+.chengfang-tutorial ol { margin: 10px 0 0; padding-left: 22px; color: #435067; font-size: 14px; line-height: 1.7; }
 @media (max-width: 760px) {
-  .promotion-mode-nav, .chengfang-status-grid, .chengfang-calculator-grid, .chengfang-goals > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .promotion-mode-nav, .chengfang-status-grid, .chengfang-calculator-grid, .chengfang-goals > div, .chengfang-permission-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chengfang-scenarios, .chengfang-readonly-foundation { grid-template-columns: 1fr; }
   .chengfang-summary-head { align-items: stretch; flex-direction: column; }
+  .chengfang-binding-summary { align-items: flex-start; flex-direction: column; }
+  .chengfang-binding-summary span { text-align: left; }
+}
+@media (max-width: 520px) {
+  .chengfang-decision, .chengfang-shadow-readbacks, .chengfang-permission-grid { grid-template-columns: 1fr; }
 }

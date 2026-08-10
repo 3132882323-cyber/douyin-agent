@@ -30,6 +30,9 @@ let currentOnboarding = null;
 let currentConnectionGuide = null;
 let qianchuanFeatureDeferred = false;
 let currentPromotionView = "chengfang";
+let currentChengfangLocalPlan = { schema_version: 3, goal: "", inputs: {}, boundaries: {}, evidence: {}, shadow: { enabled: false } };
+let currentChengfangGate = { identity_ready: false, metric_ready: false, data_ready: false, next_step: "先同步真实乘方页面。" };
+let chengfangShadowSetupReady = false;
 const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DOUDIAN_SCAN_PAGE_IDS = ["overview", "orders", "refunds", "products", "inventory", "reviews", "shelf", "live", "short_video", "image_text", "recommend_card"];
 
@@ -1372,6 +1375,14 @@ function renderChengfangReadiness(report = {}) {
   const contract = report.field_contract || {};
   const activeMode = mode.value || summary.promotion_mode || "unknown";
   const isChengfang = activeMode === "chengfang";
+  const metricReady = Boolean(metric.definition && metric.definition !== "unknown" && metric.version);
+  const dataReady = Boolean(quality.deterministic_advice_allowed);
+  currentChengfangGate = {
+    identity_ready: Boolean(scope.complete && !scope.conflict),
+    metric_ready: metricReady,
+    data_ready: dataReady,
+    next_step: report.next_step || dashboard.next_step || "同步真实乘方页面并完成字段验真。",
+  };
   const tag = document.getElementById("promotion-mode-readonly-tag");
   tag.textContent = isChengfang ? "乘方 · 只读" : activeMode === "unknown" ? "模式待确认 · 禁止写入" : `${PROMOTION_MODE_LABELS[activeMode] || "投放"} · 只读核验`;
   tag.className = `promotion-status ${isChengfang ? "danger" : activeMode === "unknown" ? "warning" : "safe"}`;
@@ -1408,10 +1419,17 @@ function renderChengfangReadiness(report = {}) {
   if (!contract.verified) blockers.push(...(contract.blockers || []));
   const uniqueBlockers = [...new Set(blockers.filter(Boolean))];
   document.getElementById("chengfang-blocker-count").textContent = `${uniqueBlockers.length} 项`;
+  document.getElementById("chengfang-status-summary").textContent = currentChengfangGate.identity_ready && metricReady && dataReady ? "数据可用于只读诊断" : "仍有数据缺口";
+  document.getElementById("chengfang-binding-guide").textContent = scope.conflict
+    ? "检测到店铺或千川账户冲突，所有写能力均已阻止。"
+    : scope.complete
+      ? "店铺与千川账户作用域已确认；当前仍只允许 L0 只读诊断。"
+      : "请先打开正确的抖店与千川账户并同步；身份不完整时保持只读。";
   const blockerList = document.getElementById("chengfang-blockers-list");
   blockerList.replaceChildren(...(uniqueBlockers.length ? uniqueBlockers : ["只读数据已就绪；乘方写操作仍保持关闭。"])
     .map((message) => { const li = document.createElement("li"); li.textContent = message; return li; }));
   document.getElementById("chengfang-next-step").textContent = report.next_step || dashboard.next_step || "同步真实乘方页面并完成字段验真。";
+  renderChengfangPlanner();
 }
 
 function renderChengfangUnavailable(message) {
@@ -1434,6 +1452,54 @@ function readChengfangEvidenceInputs() {
     .map((input) => [input.dataset.chengfangEvidence, input.value]));
 }
 
+function readChengfangBoundaryInputs() {
+  return Object.fromEntries([...document.querySelectorAll("[data-chengfang-boundary]")]
+    .map((input) => [input.dataset.chengfangBoundary, input.value]));
+}
+
+function renderChengfangDecision(decision) {
+  const node = document.getElementById("chengfang-decision");
+  node.className = `chengfang-decision ${decision.level || "warning"}`;
+  document.getElementById("chengfang-today-conclusion").textContent = decision.conclusion;
+  document.getElementById("chengfang-today-action").textContent = decision.action;
+  document.getElementById("chengfang-today-why").textContent = decision.why;
+  document.getElementById("chengfang-next-step").textContent = decision.next_step || currentChengfangGate.next_step;
+}
+
+function renderChengfangShadow(planner, decision) {
+  const now = Date.now();
+  const shadow = planner.buildShadowProgram(currentChengfangLocalPlan.shadow || {}, now);
+  currentChengfangLocalPlan.shadow = shadow;
+  const stateNode = document.getElementById("chengfang-shadow-state");
+  const summaryNode = document.getElementById("chengfang-shadow-empty");
+  const readbackNode = document.getElementById("chengfang-shadow-readbacks");
+  const toggle = document.getElementById("chengfang-shadow-toggle");
+  toggle.disabled = !shadow.enabled && !chengfangShadowSetupReady;
+  if (shadow.status === "active") {
+    const day = Math.min(7, Math.max(1, Math.floor((now - shadow.started_at) / 86400000) + 1));
+    stateNode.textContent = `第 ${day} / 7 天 · 只读`;
+    toggle.textContent = "停止影子观察";
+    const latest = shadow.days.at(-1);
+    summaryNode.textContent = latest
+      ? `今日建议：${latest.recommendation}。共保存 ${shadow.days.length} 天记录；不会执行。`
+      : `今日结论尚不足以生成建议：${decision.action}。不会执行。`;
+    const slots = latest?.readbacks || { "2h": null, "24h": null, "3d": null, "7d": null };
+    readbackNode.replaceChildren(...Object.entries(slots).map(([label, value]) => {
+      const item = document.createElement("div");
+      const strong = document.createElement("strong"); strong.textContent = label;
+      const span = document.createElement("span"); span.textContent = value ? "已记录" : "待回读";
+      item.append(strong, span); return item;
+    }));
+  } else {
+    stateNode.textContent = shadow.status === "completed" ? "7 天已完成" : "未开启";
+    toggle.textContent = shadow.status === "completed" ? "重新开启 7 天观察" : "开启 7 天影子观察";
+    summaryNode.textContent = chengfangShadowSetupReady
+      ? "开启后每天访问或同步本页时保存一条只读建议，并预留多时窗回读。"
+      : "先选择经营目标并补齐成本口径和经营边界，再开启观察。";
+    readbackNode.replaceChildren();
+  }
+}
+
 function renderChengfangFoundation(planner, calculation) {
   const evidence = readChengfangEvidenceInputs();
   const diagnosticInput = {
@@ -1442,6 +1508,15 @@ function renderChengfangFoundation(planner, calculation) {
     refund_rate: calculation.parsed?.refund_rate?.status === "present" ? calculation.parsed.refund_rate.value : "",
   };
   const qualification = planner.assessQualification(diagnosticInput);
+  const boundaries = planner.validateBoundaries(readChengfangBoundaryInputs());
+  const goal = document.querySelector('input[name="chengfang-goal"]:checked')?.value || "";
+  const profileSteps = [currentChengfangGate.identity_ready, Boolean(goal), calculation.status === "ready", boundaries.status === "ready"];
+  document.getElementById("chengfang-profile-progress").textContent = `${profileSteps.filter(Boolean).length} / 4 完成`;
+  document.querySelectorAll("[data-chengfang-boundary]").forEach((input) => input.classList.toggle("invalid", boundaries.invalid.includes(input.dataset.chengfangBoundary)));
+  const boundaryStatus = document.getElementById("chengfang-boundary-status");
+  boundaryStatus.textContent = boundaries.status === "ready" ? "经营边界已保存，仅用于本地判断。" : boundaries.status === "invalid" ? `存在 ${boundaries.invalid.length} 项无效边界，请检查红色字段。` : `还缺 ${boundaries.missing.length} 项经营边界。`;
+  boundaryStatus.className = boundaries.status === "ready" ? "safe" : boundaries.status === "invalid" ? "danger" : "warning";
+  chengfangShadowSetupReady = Boolean(goal) && calculation.status === "ready" && boundaries.status === "ready";
   const eligibilityNode = document.getElementById("chengfang-eligibility-empty");
   eligibilityNode.replaceChildren(...qualification.dimensions.map((dimension) => {
     const row = document.createElement("div"); row.className = "chengfang-dimension";
@@ -1464,13 +1539,10 @@ function renderChengfangFoundation(planner, calculation) {
       const row = document.createElement("p"); row.textContent = `${index ? "次要" : "主要"}：${item.title}（${item.evidence_level}）— ${item.evidence}；${item.action}`; return row;
     }));
   }
-  const shadowNode = document.getElementById("chengfang-shadow-empty");
-  const goal = document.querySelector('input[name="chengfang-goal"]:checked')?.value || "";
-  const primary = bottlenecks.primary;
-  const shadow = planner.buildShadowRecord({ goal, recommendation: primary?.action || "", evidence: primary ? [primary.evidence] : [] });
-  shadowNode.textContent = shadow.status === "ready"
-    ? `影子记录已具备：${shadow.record.recommendation}；等待 2h / 24h / 3d / 7d 回读。不会执行。`
-    : `尚不能生成影子记录：缺少 ${shadow.missing.join("、")}。`;
+  const decision = planner.buildDecisionBrief({ goal, calculation, boundaries, qualification, bottlenecks, readiness: currentChengfangGate });
+  renderChengfangDecision(decision);
+  renderChengfangShadow(planner, decision);
+  return { qualification, bottlenecks, boundaries, decision };
 }
 
 function money(value) {
@@ -1518,20 +1590,29 @@ function renderChengfangPlanner() {
       card.append(title, value, spend); return card;
     }));
   }
-  renderChengfangFoundation(planner, result);
-  return result;
+  const foundation = renderChengfangFoundation(planner, result);
+  return { calculation: result, ...foundation };
 }
 
 async function saveChengfangLocalPlan() {
   const goal = document.querySelector('input[name="chengfang-goal"]:checked')?.value || "";
   const inputs = readChengfangCalculatorInputs();
   const evidence = readChengfangEvidenceInputs();
-  await chrome.storage.local.set({ [CHENGFANG_LOCAL_PLAN_KEY]: { schema_version: 2, goal, inputs, evidence, saved_at: Date.now(), local_only: true } });
-  renderChengfangPlanner();
+  const boundaries = readChengfangBoundaryInputs();
+  currentChengfangLocalPlan = { ...currentChengfangLocalPlan, schema_version: 3, goal, inputs, evidence, boundaries, saved_at: Date.now(), local_only: true, execution_allowed: false };
+  const rendered = renderChengfangPlanner();
+  if (currentChengfangLocalPlan.shadow?.enabled) {
+    currentChengfangLocalPlan.shadow = globalThis.DianChengfangPlanner.appendDailyShadow(currentChengfangLocalPlan.shadow, {
+      date: localDateKey(), goal, recommendation: rendered.decision.action, evidence: rendered.decision.evidence,
+    });
+    renderChengfangShadow(globalThis.DianChengfangPlanner, rendered.decision);
+  }
+  await chrome.storage.local.set({ [CHENGFANG_LOCAL_PLAN_KEY]: currentChengfangLocalPlan });
 }
 
-function restoreChengfangLocalPlan(saved = {}) {
+async function restoreChengfangLocalPlan(saved = {}) {
   const planner = globalThis.DianChengfangPlanner;
+  currentChengfangLocalPlan = { schema_version: 3, goal: "", inputs: {}, boundaries: {}, evidence: {}, shadow: { enabled: false }, ...saved, local_only: true, execution_allowed: false };
   const goal = planner.GOALS[saved.goal] ? saved.goal : "";
   if (goal) document.querySelector(`input[name="chengfang-goal"][value="${goal}"]`).checked = true;
   document.getElementById("chengfang-goal-status").textContent = goal ? `已选择“${planner.GOALS[goal]}”；偏好仅保存在本机。` : "请选择目标；这里只保存偏好，不会修改乘方策略。";
@@ -1543,7 +1624,16 @@ function restoreChengfangLocalPlan(saved = {}) {
     const value = saved.evidence?.[input.dataset.chengfangEvidence];
     input.value = value === 0 || value ? String(value) : "";
   });
-  renderChengfangPlanner();
+  document.querySelectorAll("[data-chengfang-boundary]").forEach((input) => {
+    const value = saved.boundaries?.[input.dataset.chengfangBoundary];
+    input.value = value === 0 || value ? String(value) : "";
+  });
+  const rendered = renderChengfangPlanner();
+  if (currentChengfangLocalPlan.shadow?.enabled) {
+    currentChengfangLocalPlan.shadow = planner.appendDailyShadow(currentChengfangLocalPlan.shadow, { date: localDateKey(), goal, recommendation: rendered.decision.action, evidence: rendered.decision.evidence });
+    renderChengfangShadow(planner, rendered.decision);
+    await chrome.storage.local.set({ [CHENGFANG_LOCAL_PLAN_KEY]: currentChengfangLocalPlan });
+  }
 }
 
 function renderOperationContext(payload = {}) {
@@ -2469,7 +2559,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll("#role-nav button").forEach((item) => item.classList.toggle("active", item.dataset.role === currentRole));
   await chrome.storage.local.set({ preferredRole: currentRole });
   restoreQianchuanSyncUi(stored.lastQianchuanManualSync || {});
-  restoreChengfangLocalPlan(stored[CHENGFANG_LOCAL_PLAN_KEY] || {});
+  await restoreChengfangLocalPlan(stored[CHENGFANG_LOCAL_PLAN_KEY] || {});
   renderWorkbench();
   applyModuleVisibility();
   await reportExtensionInstallSource().catch(() => undefined);
@@ -2481,6 +2571,22 @@ document.querySelectorAll('input[name="chengfang-goal"]').forEach((input) => inp
 }));
 document.querySelectorAll("[data-chengfang-input]").forEach((input) => input.addEventListener("input", () => saveChengfangLocalPlan()));
 document.querySelectorAll("[data-chengfang-evidence]").forEach((input) => input.addEventListener("input", () => saveChengfangLocalPlan()));
+document.querySelectorAll("[data-chengfang-boundary]").forEach((input) => input.addEventListener("input", () => saveChengfangLocalPlan()));
+document.getElementById("chengfang-profile-reset").addEventListener("click", async () => {
+  if (!confirm("确认重置本机乘方经营建档和影子观察记录？此操作不会影响千川平台数据。")) return;
+  await chrome.storage.local.remove(CHENGFANG_LOCAL_PLAN_KEY);
+  document.querySelectorAll('input[name="chengfang-goal"]').forEach((input) => { input.checked = false; });
+  document.querySelectorAll("[data-chengfang-input], [data-chengfang-evidence], [data-chengfang-boundary]").forEach((input) => { input.value = ""; input.classList.remove("invalid"); });
+  await restoreChengfangLocalPlan({});
+});
+document.getElementById("chengfang-shadow-toggle").addEventListener("click", async () => {
+  const planner = globalThis.DianChengfangPlanner;
+  const active = planner.buildShadowProgram(currentChengfangLocalPlan.shadow || {}).status === "active";
+  currentChengfangLocalPlan.shadow = active
+    ? { enabled: false, status: "inactive", stopped_at: Date.now(), days: currentChengfangLocalPlan.shadow?.days || [], execution_allowed: false, local_only: true }
+    : planner.buildShadowProgram({ enabled: true, started_at: Date.now(), days: [] });
+  await saveChengfangLocalPlan();
+});
 document.getElementById("refresh-button").addEventListener("click", () => refreshAll(false));
 document.getElementById("sync-diagnose").addEventListener("click", () => refreshAll(true));
 document.getElementById("chengfang-sync").addEventListener("click", async (event) => {
