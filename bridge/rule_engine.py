@@ -407,6 +407,23 @@ def _guard_action(raw_action: Any) -> tuple[dict[str, Any], list[str]]:
     return result, ignored
 
 
+def _guard_acceptance(raw_acceptance: Any) -> dict[str, Any]:
+    """Keep only bounded, display-only acceptance fields from data packs."""
+
+    value = raw_acceptance if isinstance(raw_acceptance, dict) else {}
+    result: dict[str, Any] = {}
+    metric = _clean_text(value.get("metric"), 80)
+    if metric and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", metric):
+        result["metric"] = metric
+    target = _clean_text(value.get("target"), 240)
+    if target:
+        result["target"] = target
+    observation = _safe_number(value.get("observation_minutes"))
+    if observation is not None:
+        result["observation_minutes"] = max(0, min(int(observation), 30 * 24 * 60))
+    return result
+
+
 def validate_rules(pack: dict[str, Any]) -> list[dict[str, str]]:
     """Return per-rule structural errors without executing any rule."""
     errors: list[dict[str, str]] = []
@@ -431,11 +448,18 @@ def validate_rules(pack: dict[str, Any]) -> list[dict[str, str]]:
             if rule_id in seen:
                 raise RulePackError("rule_id is duplicated")
             seen.add(rule_id)
+            priority = rule.get("priority", 100)
+            if isinstance(priority, bool) or not isinstance(priority, int) or not 0 <= priority <= 10000:
+                raise RulePackError("priority must be an integer between 0 and 10000")
             if "conditions" not in rule:
                 raise RulePackError("conditions are required")
             _validate_condition_shape(rule["conditions"])
             if not isinstance(rule.get("result"), dict):
                 raise RulePackError("result must be an object")
+            if "dedupe_key" in rule["result"]:
+                dedupe_key = rule["result"].get("dedupe_key")
+                if not isinstance(dedupe_key, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,99}", dedupe_key):
+                    raise RulePackError("result dedupe_key must be a canonical ASCII key")
             severity = str(rule["result"].get("level") or "medium").lower()
             if severity not in SEVERITIES:
                 raise RulePackError("result level is invalid")
@@ -480,15 +504,19 @@ class RuleEngine:
                 item = {
                     "rule_id": rule_id,
                     "rule_version": int(rule.get("version") or 1),
-                    "priority": max(0, min(int(rule.get("priority") or 100), 10000)),
+                    "priority": int(rule.get("priority", 100)),
                     "level": level,
                     "title": _clean_text(raw_result.get("title"), 160),
                     "message": _clean_text(raw_result.get("message"), 500),
                     "dedupe_key": _clean_text(raw_result.get("dedupe_key") or rule_id, 100),
                     "action": action,
-                    "acceptance": copy.deepcopy(raw_result.get("acceptance"))
-                    if isinstance(raw_result.get("acceptance"), dict)
-                    else {},
+                    "acceptance": _guard_acceptance(raw_result.get("acceptance")),
+                    "knowledge_layer": _clean_text(rule.get("knowledge_layer") or "general", 20),
+                    "knowledge_pack_id": _clean_text(rule.get("knowledge_pack_id") or "general", 64),
+                    "knowledge_pack_version": _clean_text(
+                        rule.get("knowledge_pack_version") or self.pack_version,
+                        80,
+                    ),
                     "guardrail_overrides_ignored": sorted(set(ignored)),
                 }
                 diagnostics.append(item)

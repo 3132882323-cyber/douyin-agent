@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "pack_id": "industry.apparel",
+  "industry": "apparel",
+  "display_name": "服饰鞋包经营知识包",
+  "publisher": "店策官方",
+  "channel": "stable",
+  "min_agent_version": "4.6.0",
+  "pack_version": "2026.08.22.1",
+  "published_at": "2026-08-22T00:00:00+08:00",
+  "expires_at": "2031-08-22T00:00:00+08:00",
+  "capabilities": ["尺码库存", "季节库存", "素材衰减", "投放止损"],
+  "required_metrics": ["inventory.available", "sales.last_24h", "spend", "roi", "data_age_minutes"],
+  "rules": [
+    {
+      "rule_id": "apparel.inventory.size_break_risk",
+      "version": 1,
+      "priority": 15,
+      "enabled": true,
+      "conditions": {
+        "all": [
+          {"field": "inventory.available", "operator": "<=", "formula": "inventory_warning_line * 2"},
+          {"field": "sales.last_24h", "operator": ">", "value": 0}
+        ]
+      },
+      "result": {
+        "level": "high",
+        "title": "服饰库存需按款色尺码核对",
+        "message": "全店仍有出单且库存汇总值触及预警线；当前数据不足以确认具体断码，请进入商品页按同一 SKU、颜色和尺码复核。",
+        "action": {"type": "check_inventory", "label": "按颜色和尺码核对库存与补货时间"},
+        "acceptance": {"metric": "inventory.available", "target": "完成同一 SKU 的款色尺码核对，并确认补货或降量方案"}
+      }
+    },
+    {
+      "rule_id": "apparel.qianchuan.material_fatigue",
+      "version": 1,
+      "priority": 25,
+      "enabled": true,
+      "conditions": {
+        "all": [
+          {"field": "spend", "operator": ">=", "value_from": "min_spend"},
+          {"field": "roi", "operator": "<", "formula": "roi_target * 0.9"},
+          {"field": "data_age_minutes", "operator": "<=", "value": 30}
+        ]
+      },
+      "result": {
+        "level": "medium",
+        "title": "服饰投放表现需联动货盘复核",
+        "message": "账户汇总消耗达到判断门槛且 ROI 低于目标；当前不能直接归因，请按同一计划复核素材衰减、主推款库存和季节需求。",
+        "action": {"type": "manual_review", "label": "复核近 3 天素材、尺码库存和主推款承接"},
+        "acceptance": {"metric": "roi", "observation_minutes": 60, "target": "ROI 停止下滑或恢复到目标的 90%"}
+      }
+    }
+  ],
+  "sha256": "77e6bd866381a3f7651b4244d1b521290cbf1b2f76e1634e45566a271f56552b",
+  "trusted_builtin": true
+}

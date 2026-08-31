@@ -4,6 +4,7 @@ set "INSTALL_ROOT=%LOCALAPPDATA%\DianAgent"
 set "UPDATER=%~dp0tools\DianAgentUpdater.exe"
 set "STARTER=%~dp0tools\start_agent.ps1"
 set "SYNC_TOOLS=%~dp0tools\sync_release_tools.ps1"
+set "INSTALLED_STARTER=%INSTALL_ROOT%\tools\start_agent.ps1"
 set "BUNDLE=%~1"
 
 if not exist "%UPDATER%" (
@@ -68,12 +69,28 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-"%UPDATER%" confirm --install-root "%INSTALL_ROOT%"
+start "" explorer.exe "%INSTALL_ROOT%\extension-current"
+echo.
+echo [ACTION REQUIRED] Open chrome://extensions, find Dian Agent, and click Reload.
+echo Rollback evidence will be kept until the reloaded target extension authenticates.
+pause
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%INSTALLED_STARTER%" -InstallRoot "%INSTALL_ROOT%" -UpdaterPath "%UPDATER%"
 if errorlevel 1 (
-  echo [WARNING] New version is healthy, but rollback state cleanup failed. Do not apply another upgrade yet.
+  if exist "%INSTALL_ROOT%\.offline-upgrade-rollback" (
+    echo [CRITICAL] Final verification failed and recovery evidence was preserved. Run Repair Dian Agent.
+  ) else (
+    echo [FAILED] Final verification failed and the starter restored the previous healthy Agent.
+  )
   pause
   exit /b 1
 )
-start "" explorer.exe "%INSTALL_ROOT%\extension-current"
-echo [DONE] Upgrade activated. Open chrome://extensions and click Reload once.
+if exist "%INSTALL_ROOT%\.offline-upgrade-rollback" (
+  echo [PENDING] Agent health passed, but no fresh authenticated target-extension report was received.
+  echo Click Reload in chrome://extensions and run this upgrade command again only after Repair Dian Agent reports connected.
+  echo Rollback evidence was intentionally preserved.
+  pause
+  exit /b 2
+)
+echo [DONE] Upgrade activated and verified by the exact Agent process plus the reloaded extension.
 pause

@@ -11,6 +11,7 @@ import ctypes
 import hashlib
 import html
 import json
+import math
 import os
 import secrets
 import sys
@@ -20,8 +21,9 @@ import time
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from version import AGENT_VERSION
 
@@ -40,8 +42,100 @@ AUTHORIZED_ACCOUNTS_URL = (
 )
 AUTH_SESSION_SECONDS = 15 * 60
 HTTP_TIMEOUT_SECONDS = 15
+MAX_OAUTH_RESPONSE_BYTES = 512 * 1024
+MAX_TOKEN_CHARS = 8192
+MAX_TOKEN_LIFETIME_SECONDS = 10 * 365 * 24 * 60 * 60
+MACOS_KEYCHAIN_ACCOUNT = "DianAgent"
+MACOS_APP_SECRET_SERVICE = "com.dianagent.oceanengine.app-secret"
+MACOS_TOKEN_SERVICE = "com.dianagent.oceanengine.tokens"
 
 _oauth_lock = threading.Lock()
+
+
+class _RejectOceanEngineRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        # OAuth requests carry the App Secret, authorization code or refresh
+        # token. Never let urllib forward them to a redirected destination.
+        try:
+            if fp is not None:
+                fp.close()
+        finally:
+            raise URLError("巨量引擎认证接口返回了重定向，已拒绝转发凭证。")
+
+
+_OCEANENGINE_OPENER = build_opener(_RejectOceanEngineRedirects())
+
+
+def urlopen(request: Request, timeout: float):
+    """Patchable network seam that refuses credential-bearing redirects."""
+
+    return _OCEANENGINE_OPENER.open(request, timeout=timeout)
+
+
+def _reject_nonfinite_json_constant(value: str) -> None:
+    raise ValueError(f"OAuth JSON number {value} is not finite")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"OAuth JSON number {value} is not finite")
+    return parsed
+
+
+def _required_token(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"OceanEngine {field_name} must be a string")
+    token = value.strip()
+    if not 8 <= len(token) <= MAX_TOKEN_CHARS:
+        raise ValueError(f"OceanEngine {field_name} length is invalid")
+    if any(ord(char) < 33 or ord(char) > 126 for char in token):
+        raise ValueError(f"OceanEngine {field_name} contains invalid characters")
+    return token
+
+
+def _required_lifetime(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"OceanEngine {field_name} must be a positive integer")
+    if isinstance(value, int):
+        seconds = value
+    elif isinstance(value, str) and value.isascii() and value.isdigit():
+        seconds = int(value)
+    else:
+        raise ValueError(f"OceanEngine {field_name} must be a positive integer")
+    if not 1 <= seconds <= MAX_TOKEN_LIFETIME_SECONDS:
+        raise ValueError(f"OceanEngine {field_name} is outside the accepted range")
+    return seconds
+
+
+def _stored_expiry(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return 0
+    return value
+
+
+def _stored_token(value: Any, field_name: str) -> str:
+    try:
+        return _required_token(value, field_name)
+    except ValueError:
+        return ""
+
+
+def _normalize_advertiser_ids(value: Any, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 100:
+        raise ValueError(f"OceanEngine {field_name} must be a bounded list")
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (str, int)):
+            raise ValueError(f"OceanEngine {field_name} contains an invalid account ID")
+        account_id = str(item).strip()
+        if not account_id.isascii() or not account_id.isdigit() or len(account_id) > 32:
+            raise ValueError(f"OceanEngine {field_name} contains an invalid account ID")
+        if account_id not in result:
+            result.append(account_id)
+    return result
 
 
 class _DataBlob(ctypes.Structure):
@@ -147,12 +241,17 @@ def _atomic_write_bytes(path: Path, value: bytes) -> None:
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     _atomic_write_bytes(
         path,
-        json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"),
+        json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8"),
     )
 
 
 def _store_encrypted(path: Path, value: dict[str, Any], description: str) -> None:
-    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
     protected = _windows_protect(raw, description)
     _atomic_write_bytes(path, base64.b64encode(protected))
 
@@ -163,6 +262,165 @@ def _load_encrypted(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("本机授权文件格式错误")
     return value
+
+
+def _macos_keychain_store(
+    service: str,
+    value: dict[str, Any],
+    *,
+    account: str = MACOS_KEYCHAIN_ACCOUNT,
+) -> None:
+    """Store one JSON record through macOS Keychain Services."""
+
+    if sys.platform != "darwin":
+        raise RuntimeError("当前系统不支持 macOS 钥匙串")
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    try:
+        security = ctypes.CDLL(
+            "/System/Library/Frameworks/Security.framework/Security"
+        )
+        core_foundation = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+    except OSError as error:
+        raise RuntimeError("无法访问 macOS 钥匙串，请确认当前用户已解锁登录钥匙串。") from error
+
+    service_bytes = service.encode("utf-8")
+    account_bytes = str(account or "").encode("utf-8")
+    if not account_bytes:
+        raise RuntimeError("macOS 钥匙串账户标识不能为空。")
+    value_bytes = raw.encode("utf-8")
+    value_buffer = ctypes.create_string_buffer(value_bytes)
+    item_ref = ctypes.c_void_p()
+    security.SecKeychainFindGenericPassword.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    security.SecKeychainFindGenericPassword.restype = ctypes.c_int32
+    status = security.SecKeychainFindGenericPassword(
+        None,
+        len(service_bytes),
+        service_bytes,
+        len(account_bytes),
+        account_bytes,
+        None,
+        None,
+        ctypes.byref(item_ref),
+    )
+    if status == 0:
+        security.SecKeychainItemModifyAttributesAndData.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        security.SecKeychainItemModifyAttributesAndData.restype = ctypes.c_int32
+        status = security.SecKeychainItemModifyAttributesAndData(
+            item_ref,
+            None,
+            len(value_bytes),
+            ctypes.cast(value_buffer, ctypes.c_void_p),
+        )
+        core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+        core_foundation.CFRelease(item_ref)
+    elif status == -25300:  # errSecItemNotFound
+        security.SecKeychainAddGenericPassword.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        security.SecKeychainAddGenericPassword.restype = ctypes.c_int32
+        status = security.SecKeychainAddGenericPassword(
+            None,
+            len(service_bytes),
+            service_bytes,
+            len(account_bytes),
+            account_bytes,
+            len(value_bytes),
+            ctypes.cast(value_buffer, ctypes.c_void_p),
+            None,
+        )
+    if status != 0:
+        raise RuntimeError("macOS 钥匙串拒绝保存凭证，请解锁登录钥匙串后重试。")
+
+
+def _macos_keychain_load(
+    service: str,
+    *,
+    account: str = MACOS_KEYCHAIN_ACCOUNT,
+) -> dict[str, Any]:
+    if sys.platform != "darwin":
+        return {}
+    try:
+        security = ctypes.CDLL(
+            "/System/Library/Frameworks/Security.framework/Security"
+        )
+        core_foundation = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+    except OSError:
+        return {}
+
+    service_bytes = service.encode("utf-8")
+    account_bytes = str(account or "").encode("utf-8")
+    if not account_bytes:
+        return {}
+    value_length = ctypes.c_uint32()
+    value_pointer = ctypes.c_void_p()
+    item_ref = ctypes.c_void_p()
+    security.SecKeychainFindGenericPassword.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    security.SecKeychainFindGenericPassword.restype = ctypes.c_int32
+    status = security.SecKeychainFindGenericPassword(
+        None,
+        len(service_bytes),
+        service_bytes,
+        len(account_bytes),
+        account_bytes,
+        ctypes.byref(value_length),
+        ctypes.byref(value_pointer),
+        ctypes.byref(item_ref),
+    )
+    if status != 0:
+        return {}
+    try:
+        raw = ctypes.string_at(value_pointer, value_length.value).decode("utf-8")
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        value = {}
+    finally:
+        security.SecKeychainItemFreeContent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        security.SecKeychainItemFreeContent(None, value_pointer)
+        core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+        core_foundation.CFRelease(item_ref)
+    return value if isinstance(value, dict) else {}
+
+
+def _secure_storage_label() -> str:
+    if sys.platform == "win32":
+        return "windows_dpapi"
+    if sys.platform == "darwin":
+        return "macos_keychain"
+    return "environment"
 
 
 def _request_json(
@@ -179,13 +437,28 @@ def _request_json(
     data = None
     method = "GET"
     if payload is not None:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        data = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
         request_headers["Content-Type"] = "application/json; charset=utf-8"
         method = "POST"
     request = Request(url, data=data, headers=request_headers, method=method)
-    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:  # noqa: S310
-        raw = response.read(512 * 1024).decode("utf-8", errors="replace")
-    value = json.loads(raw)
+    try:
+        with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:  # noqa: S310
+            raw_bytes = response.read(MAX_OAUTH_RESPONSE_BYTES + 1)
+            if len(raw_bytes) > MAX_OAUTH_RESPONSE_BYTES:
+                raise ValueError("OceanEngine OAuth response is too large")
+            try:
+                raw = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError("OceanEngine OAuth response is not valid UTF-8") from error
+    except HTTPError as error:
+        # Keep the established HTTPError contract while releasing its response.
+        error.close()
+        raise
+    value = json.loads(
+        raw,
+        parse_float=_parse_finite_json_float,
+        parse_constant=_reject_nonfinite_json_constant,
+    )
     if not isinstance(value, dict):
         raise ValueError("巨量千川接口返回格式异常")
     return value
@@ -270,18 +543,50 @@ class OceanEngineOAuth:
         environment_secret = os.environ.get("OCEANENGINE_APP_SECRET", "").strip()
         if environment_secret:
             return environment_secret
-        if not self.secret_path.exists() or sys.platform != "win32":
+        if sys.platform == "darwin":
+            value = _macos_keychain_load(MACOS_APP_SECRET_SERVICE)
+            return str(value.get("app_secret") or "")
+        if sys.platform != "win32" or not self.secret_path.exists():
             return ""
         value = _load_encrypted(self.secret_path)
         return str(value.get("app_secret") or "")
 
     def _load_tokens(self) -> dict[str, Any]:
-        if not self.token_path.exists() or sys.platform != "win32":
+        if sys.platform == "darwin":
+            return _macos_keychain_load(MACOS_TOKEN_SERVICE)
+        if sys.platform != "win32" or not self.token_path.exists():
             return {}
         try:
             return _load_encrypted(self.token_path)
         except (OSError, ValueError, json.JSONDecodeError):
             return {}
+
+    def _store_secret(self, app_secret: str) -> None:
+        value = {"app_secret": app_secret}
+        if sys.platform == "darwin":
+            _macos_keychain_store(MACOS_APP_SECRET_SERVICE, value)
+            return
+        if sys.platform == "win32":
+            _store_encrypted(
+                self.secret_path,
+                value,
+                "店策 Agent 巨量千川 App Secret",
+            )
+            return
+        raise ValueError("当前系统不会把 App Secret 写入磁盘，请通过 OCEANENGINE_APP_SECRET 环境变量提供。")
+
+    def _store_tokens(self, tokens: dict[str, Any]) -> None:
+        if sys.platform == "darwin":
+            _macos_keychain_store(MACOS_TOKEN_SERVICE, tokens)
+            return
+        if sys.platform == "win32":
+            _store_encrypted(
+                self.token_path,
+                tokens,
+                "店策 Agent 巨量千川 OAuth Token",
+            )
+            return
+        raise ValueError("当前系统不支持安全保存 Token，请改用 Windows 或 macOS 本机 Agent。")
 
     def save_credentials(self, app_id: str, app_secret: str = "") -> None:
         app_id = str(app_id or "").strip()
@@ -290,7 +595,7 @@ class OceanEngineOAuth:
             raise ValueError("App ID 格式不正确，请填写开放平台显示的数字 App ID。")
         if app_secret and not 8 <= len(app_secret) <= 256:
             raise ValueError("App Secret 格式不正确，请重新复制完整密钥。")
-        if app_secret and sys.platform != "win32":
+        if app_secret and sys.platform not in {"win32", "darwin"}:
             raise ValueError(
                 "当前系统不会把 App Secret 写入磁盘，请通过 OCEANENGINE_APP_SECRET 环境变量提供。"
             )
@@ -300,15 +605,11 @@ class OceanEngineOAuth:
             {
                 "app_id": app_id,
                 "updated_at": int(time.time()),
-                "secret_storage": "windows_dpapi" if sys.platform == "win32" else "environment",
+                "secret_storage": _secure_storage_label(),
             },
         )
         if app_secret:
-            _store_encrypted(
-                self.secret_path,
-                {"app_secret": app_secret},
-                "店策 Agent 巨量千川 App Secret",
-            )
+            self._store_secret(app_secret)
         if not self._load_secret():
             raise ValueError("请先填写 App Secret；它只会加密保存在这台电脑。")
 
@@ -321,29 +622,36 @@ class OceanEngineOAuth:
             accounts = []
         public_accounts = [
             {
-                "account_id": str(account.get("account_id") or ""),
                 "account_name": str(account.get("account_name") or ""),
                 "account_role": str(account.get("account_role") or ""),
                 "valid": bool(account.get("valid", True)),
                 "advertiser_count": len(account.get("advertiser_ids") or []),
+                "account_hint": f"•••• {str(account.get('account_id') or '')[-4:]}"
+                if account.get("account_id") else "",
             }
             for account in accounts
             if isinstance(account, dict)
         ]
-        expires_at = int(tokens.get("expires_at") or 0)
-        connected = bool(tokens.get("access_token")) and (
-            not expires_at or expires_at > int(time.time())
-        )
+        access_token = _stored_token(tokens.get("access_token"), "access_token")
+        expires_at = _stored_expiry(tokens.get("expires_at"))
+        refresh_token = _stored_token(tokens.get("refresh_token"), "refresh_token")
+        refresh_expires_at = _stored_expiry(tokens.get("refresh_token_expires_at"))
+        now = int(time.time())
+        secret_saved = bool(self._load_secret())
+        connected = bool(access_token) and expires_at > now
+        refresh_available = bool(refresh_token) and refresh_expires_at > now and secret_saved
         return {
             "app_id": config["app_id"],
             "callback_url": PUBLIC_CALLBACK_URL,
-            "secret_saved": bool(self._load_secret()),
-            "secret_storage": "windows_dpapi" if sys.platform == "win32" else "environment",
+            "secret_saved": secret_saved,
+            "secret_storage": _secure_storage_label(),
             "connected": connected,
-            "needs_refresh": bool(tokens.get("access_token")) and not connected,
+            "needs_refresh": bool(access_token) and not connected,
+            "refresh_available": refresh_available,
             "account_count": len(public_accounts),
             "accounts": public_accounts,
             "expires_at": expires_at or None,
+            "refresh_token_expires_at": refresh_expires_at or None,
             "authorization_in_progress": bool(session) and not connected,
             "authorized_at": tokens.get("authorized_at"),
             "last_error": str(tokens.get("last_error") or ""),
@@ -357,13 +665,18 @@ class OceanEngineOAuth:
         """
         with _oauth_lock:
             tokens = self._load_tokens()
-            access_token = str(tokens.get("access_token") or "")
-            expires_at = int(tokens.get("expires_at") or 0)
-            if access_token and (not expires_at or expires_at > int(time.time()) + 300):
+            access_token = _stored_token(tokens.get("access_token"), "access_token")
+            expires_at = _stored_expiry(tokens.get("expires_at"))
+            if access_token and expires_at > int(time.time()) + 300:
                 return access_token
-            refresh_token = str(tokens.get("refresh_token") or "")
+            refresh_token = _stored_token(tokens.get("refresh_token"), "refresh_token")
+            refresh_expires_at = _stored_expiry(tokens.get("refresh_token_expires_at"))
             app_secret = self._load_secret()
-            if not refresh_token or not app_secret:
+            if (
+                not refresh_token
+                or refresh_expires_at <= int(time.time())
+                or not app_secret
+            ):
                 raise ValueError("千川授权已过期，请重新授权账号。")
             config = self._load_config()
             response = _request_json(
@@ -376,26 +689,30 @@ class OceanEngineOAuth:
                 },
             )
             data = _platform_data(response, "刷新 Access Token")
-            next_access_token = str(data.get("access_token") or "")
-            next_refresh_token = str(data.get("refresh_token") or refresh_token)
+            next_access_token = _required_token(data.get("access_token"), "access_token")
+            raw_refresh_token = data.get("refresh_token")
+            next_refresh_token = (
+                _required_token(raw_refresh_token, "refresh_token")
+                if raw_refresh_token is not None
+                else refresh_token
+            )
             if not next_access_token:
                 raise ValueError("平台未返回新的 Access Token，请重新授权账号。")
             now = int(time.time())
+            expires_in = _required_lifetime(data.get("expires_in"), "expires_in")
+            refresh_expires_in = _required_lifetime(
+                data.get("refresh_token_expires_in"), "refresh_token_expires_in"
+            )
             tokens.update(
                 {
                     "access_token": next_access_token,
                     "refresh_token": next_refresh_token,
-                    "expires_at": now + max(0, int(data.get("expires_in") or 0)),
-                    "refresh_token_expires_at": now
-                    + max(0, int(data.get("refresh_token_expires_in") or 0)),
+                    "expires_at": now + expires_in,
+                    "refresh_token_expires_at": now + refresh_expires_in,
                     "last_error": "",
                 }
             )
-            _store_encrypted(
-                self.token_path,
-                tokens,
-                "店策 Agent 巨量千川 OAuth Token",
-            )
+            self._store_tokens(tokens)
             return next_access_token
 
     def authorized_accounts_private(self) -> list[dict[str, Any]]:
@@ -420,11 +737,7 @@ class OceanEngineOAuth:
                     dict.fromkeys(advertisers_by_account.get(account_id, []))
                 )[:100]
             tokens["accounts"] = accounts
-            _store_encrypted(
-                self.token_path,
-                tokens,
-                "店策 Agent 巨量千川 OAuth Token",
-            )
+            self._store_tokens(tokens)
 
     def _load_session(self) -> dict[str, Any]:
         if not self.session_path.exists():
@@ -518,17 +831,17 @@ class OceanEngineOAuth:
                 },
             )
             data = _platform_data(response, "换取 Access Token")
-            access_token = str(data.get("access_token") or "")
-            refresh_token = str(data.get("refresh_token") or "")
+            access_token = _required_token(data.get("access_token"), "access_token")
+            refresh_token = _required_token(data.get("refresh_token"), "refresh_token")
             if not access_token or not refresh_token:
                 raise ValueError("平台未返回完整 Token，请重新授权。")
-            fallback_ids = [
-                str(value)
-                for value in (data.get("advertiser_ids") or [])
-                if str(value).strip()
-            ]
+            fallback_ids = _normalize_advertiser_ids(
+                data.get("advertiser_ids"), "advertiser_ids"
+            )
             if not fallback_ids and data.get("advertiser_id"):
-                fallback_ids = [str(data["advertiser_id"])]
+                fallback_ids = _normalize_advertiser_ids(
+                    [data["advertiser_id"]], "advertiser_id"
+                )
             try:
                 accounts = self._fetch_accounts(
                     config["app_id"],
@@ -541,22 +854,20 @@ class OceanEngineOAuth:
                 accounts = _normalize_accounts([], fallback_ids)
                 account_warning = "Token 已保存，账号名称将在首次同步 API 数据后补齐。"
             now = int(time.time())
-            expires_in = max(0, int(data.get("expires_in") or 0))
+            expires_in = _required_lifetime(data.get("expires_in"), "expires_in")
+            refresh_expires_in = _required_lifetime(
+                data.get("refresh_token_expires_in"), "refresh_token_expires_in"
+            )
             token_record = {
                 "access_token": access_token,
                 "refresh_token": refresh_token,
-                "expires_at": now + expires_in if expires_in else 0,
-                "refresh_token_expires_at": now
-                + max(0, int(data.get("refresh_token_expires_in") or 0)),
+                "expires_at": now + expires_in,
+                "refresh_token_expires_at": now + refresh_expires_in,
                 "authorized_at": now,
                 "accounts": accounts,
                 "last_error": account_warning,
             }
-            _store_encrypted(
-                self.token_path,
-                token_record,
-                "店策 Agent 巨量千川 OAuth Token",
-            )
+            self._store_tokens(token_record)
             return {
                 "ok": True,
                 "account_count": len(accounts),

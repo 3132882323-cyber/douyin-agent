@@ -15,7 +15,8 @@ $watchdogScript = Join-Path $bridgeDir "watchdog.ps1"
 $watchdogLauncher = Join-Path $bridgeDir "watchdog.vbs"
 $watchdogTaskName = "DianAgentDevKeepAlive"
 $manifestPath = Join-Path (Split-Path -Parent $bridgeDir) "extension\manifest.json"
-$expectedVersion = (Get-Content -Raw -Encoding UTF8 $manifestPath | ConvertFrom-Json).version
+$manifest = Get-Content -Raw -Encoding UTF8 $manifestPath | ConvertFrom-Json
+$expectedVersion = $manifest.version
 
 function Resolve-Python {
   if ($PythonPath -and (Test-Path -LiteralPath $PythonPath)) {
@@ -50,6 +51,71 @@ if (-not (Test-Path -LiteralPath $packagedAgent)) {
   Write-Host "Using the packaged Dian Agent runtime (Python is not required)."
 }
 
+# Use the Agent's installer-only command as the single source of truth for the
+# local signing secret and trusted extension registry. It validates existing
+# state before changing either file, writes UTF-8 without a BOM, and preserves
+# the installation secret across source updates.
+$trustExitCode = 0
+$trustOutput = ""
+$trustError = ""
+if (Test-Path -LiteralPath $packagedAgent -PathType Leaf) {
+  $trustProcess = $null
+  try {
+    $trustStartInfo = New-Object Diagnostics.ProcessStartInfo
+    $trustStartInfo.FileName = $packagedAgent
+    $trustStartInfo.Arguments = '--initialize-local-api-trust "{0}" "{1}"' -f $manifestPath, $bridgeDir
+    $trustStartInfo.UseShellExecute = $false
+    $trustStartInfo.CreateNoWindow = $true
+    $trustStartInfo.RedirectStandardOutput = $true
+    $trustStartInfo.RedirectStandardError = $true
+    $trustProcess = New-Object Diagnostics.Process
+    $trustProcess.StartInfo = $trustStartInfo
+    if (-not $trustProcess.Start()) { throw "The packaged Agent trust process could not be started." }
+    $trustStdoutTask = $trustProcess.StandardOutput.ReadToEndAsync()
+    $trustStderrTask = $trustProcess.StandardError.ReadToEndAsync()
+    if (-not $trustProcess.WaitForExit(30000)) {
+      $expectedPackagedPath = [IO.Path]::GetFullPath($packagedAgent)
+      Get-CimInstance Win32_Process -Filter "Name='DianAgent.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath([string]$_.ExecutablePath) -eq $expectedPackagedPath } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+      throw "The packaged Agent does not support bounded local trust initialization."
+    }
+    [void]$trustProcess.WaitForExit()
+    $trustExitCode = [int]$trustProcess.ExitCode
+    $trustOutput = [string]$trustStdoutTask.Result
+    $trustError = [string]$trustStderrTask.Result
+  } finally {
+    if ($trustProcess) { $trustProcess.Dispose() }
+  }
+} else {
+  $trustOutput = & $venvPython (Join-Path $bridgeDir "http_receiver.py") --initialize-local-api-trust $manifestPath $bridgeDir
+  $trustExitCode = $LASTEXITCODE
+}
+if ($trustExitCode -ne 0) {
+  $trustDetail = if ($trustError) { $trustError.Trim() } else { "exit_code:$trustExitCode" }
+  throw "Local API trust initialization failed. Repair config under $bridgeDir before retrying setup. $trustDetail"
+}
+try {
+  $trustResult = ($trustOutput -join "`n") | ConvertFrom-Json
+} catch {
+  throw "The Agent returned an invalid local API trust initialization receipt."
+}
+if ($trustResult.ok -ne $true -or [string]$trustResult.install_id -notmatch '^[a-f0-9]{32}$' -or
+    [string]$trustResult.extension_id -notmatch '^[a-p]{32}$') {
+  throw "The Agent did not return a valid local API trust initialization receipt."
+}
+foreach ($trustFile in @(
+  (Join-Path $bridgeDir "config\local_api_auth.json"),
+  (Join-Path $bridgeDir "config\trusted_extension_ids.json")
+)) {
+  if (-not (Test-Path -LiteralPath $trustFile -PathType Leaf)) {
+    throw "The Agent did not create the required local trust file: $trustFile"
+  }
+  $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  & icacls.exe $trustFile /inheritance:r /grant:r "${currentIdentity}:(F)" "SYSTEM:(F)" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Could not protect the local trust file ACL: $trustFile" }
+}
+
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = (Join-Path $env:WINDIR "System32\wscript.exe")
@@ -81,9 +147,12 @@ if ($legacyTask) {
 $taskAction = New-ScheduledTaskAction `
   -Execute (Join-Path $env:WINDIR "System32\wscript.exe") `
   -Argument ('"' + $watchdogLauncher + '"')
-$taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-  -RepetitionInterval (New-TimeSpan -Minutes 5) `
-  -RepetitionDuration (New-TimeSpan -Days 3650)
+$taskTrigger = @(
+  (New-ScheduledTaskTrigger -AtLogOn),
+  (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5) `
+    -RepetitionDuration (New-TimeSpan -Days 3650))
+)
 $taskSettings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
   -DontStopIfGoingOnBatteries `
@@ -111,7 +180,7 @@ New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtimeDir "startup-state.json") -Encoding UTF8
 
 try {
-  $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2
+  $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health/live" -TimeoutSec 2
   if ([string]$health.version -ne [string]$expectedVersion) {
     $listeners = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
     foreach ($listener in $listeners) {
@@ -128,7 +197,7 @@ try {
   & (Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe") `
     -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $watchdogScript
   Start-Sleep -Milliseconds 500
-  $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 5
+  $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health/live" -TimeoutSec 5
 }
 
 if ($health.status -ne "ok") { throw "The local Agent did not return a healthy status." }

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from typing import Any
 
@@ -19,6 +20,7 @@ except ImportError:
 
 ACTION_SCHEMA_VERSION = 1
 ACTION_DRAFT_TTL_SECONDS = 10 * 60
+MAX_CAPTURE_FUTURE_SKEW_MS = 5 * 60 * 1000
 EXECUTABLE_OPERATIONS = {"adjust_budget", "restore_budget", "pause_plan", "adjust_bid", "set_schedule"}
 ACTION_STATES = {
     "draft",
@@ -68,12 +70,10 @@ def _identity_payload(action: dict[str, Any]) -> dict[str, Any]:
         "field": change.get("field"),
         "current_value": change.get("current_value"),
         "target_value": change.get("target_value"),
-        "source": evidence.get("source"),
-        "page_type": evidence.get("page_type"),
-        "captured_at_ms": evidence.get("captured_at_ms"),
-        "quality_score": evidence.get("quality_score"),
-        "confidence": evidence.get("confidence"),
-        "rollback_of_action_id": evidence.get("rollback_of_action_id"),
+        # Bind the complete evidence snapshot to the action identity.  The
+        # previous subset left ROI, spend and order evidence mutable after a
+        # user had reviewed the draft.
+        "evidence_ref": evidence,
         "policy": action.get("policy"),
         "blocked_reasons": action.get("blocked_reasons"),
         "can_confirm": action.get("can_confirm"),
@@ -90,6 +90,25 @@ def action_integrity_hash(action: dict[str, Any]) -> str:
 
 def _block(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
+
+
+def _normalized_account_identity(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _positive_finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _action_context_account_mismatch(action: dict[str, Any]) -> bool:
+    target = action.get("target_ref") if isinstance(action.get("target_ref"), dict) else {}
+    target_account = _normalized_account_identity(target.get("account_key"))
+    context = build_promotion_context(action.get("promotion_context"))
+    context_account = _normalized_account_identity(context.get("account_scope", {}).get("account_id"))
+    return bool(target_account and context_account and target_account != context_account)
 
 
 def build_action_draft(
@@ -127,18 +146,27 @@ def build_action_draft(
     target_id = str(target_id or "").strip()
     target_name = str(target_name or "").strip()[:120]
     operation_type = str(operation_type or "").strip()
+    normalized_promotion_context = build_promotion_context(promotion_context)
     blocked: list[dict[str, str]] = []
 
     if operation_type not in EXECUTABLE_OPERATIONS:
         blocked.append(_block("NON_EXECUTABLE_ACTION", "该建议属于运营任务，当前不是可执行的千川资金动作。"))
     if not account_key:
         blocked.append(_block("ACCOUNT_NOT_LOCKED", "未锁定千川账号，不能生成可确认的投放动作。"))
+    context_account = _normalized_account_identity(normalized_promotion_context.get("account_scope", {}).get("account_id"))
+    if account_key and context_account and account_key != context_account:
+        blocked.append(_block(
+            "ACTION_CONTEXT_ACCOUNT_MISMATCH",
+            "Action target account does not match the promotion context account.",
+        ))
     if not target_id:
         blocked.append(_block("TARGET_ID_MISSING", "缺少计划唯一 ID，仅凭计划名称不能安全执行。"))
     if not target_name:
         blocked.append(_block("TARGET_NAME_MISSING", "缺少计划名称，无法向投手展示明确目标。"))
     if captured_at_ms <= 0:
         blocked.append(_block("CAPTURE_TIME_MISSING", "缺少数据采集时间，请重新同步千川计划。"))
+    elif captured_at_ms - now_ms > MAX_CAPTURE_FUTURE_SKEW_MS:
+        blocked.append(_block("CAPTURE_TIME_IN_FUTURE", "计划采集时间明显晚于本机时间，请校准时间并重新同步。"))
     elif now_ms - captured_at_ms > ACTION_DRAFT_TTL_SECONDS * 1000:
         blocked.append(_block("DATA_STALE", "计划数据已超过 10 分钟，请重新同步后再确认。"))
     if int(quality_score or 0) < 70:
@@ -148,12 +176,14 @@ def build_action_draft(
 
     change_percent: float | None = None
     if operation_type in {"adjust_budget", "adjust_bid", "restore_budget"}:
-        if not isinstance(current_value, (int, float)) or float(current_value) <= 0:
+        current_number = _positive_finite_number(current_value)
+        target_number = _positive_finite_number(target_value)
+        if current_number is None:
             blocked.append(_block("CURRENT_VALUE_MISSING", "缺少可回读的当前数值，禁止生成调价动作。"))
-        if not isinstance(target_value, (int, float)) or float(target_value) <= 0:
+        if target_number is None:
             blocked.append(_block("TARGET_VALUE_INVALID", "目标数值无效，禁止生成调价动作。"))
-        if isinstance(current_value, (int, float)) and float(current_value) > 0 and isinstance(target_value, (int, float)):
-            change_percent = round((float(target_value) - float(current_value)) / float(current_value) * 100, 2)
+        if current_number is not None and target_number is not None:
+            change_percent = round((target_number - current_number) / current_number * 100, 2)
             if operation_type == "restore_budget":
                 rollback_id = str((evidence or {}).get("rollback_of_action_id") or "")
                 if not rollback_id:
@@ -214,7 +244,7 @@ def build_action_draft(
         "created_at_ms": now_ms,
         "expires_at_ms": captured_at_ms + ACTION_DRAFT_TTL_SECONDS * 1000 if captured_at_ms else now_ms,
         "copy_text": str(copy_text or "")[:500],
-        "promotion_context": build_promotion_context(promotion_context),
+        "promotion_context": normalized_promotion_context,
         # Backward-compatible fields for the existing side-panel renderer.
         "target": target_name,
         "field": field,
@@ -242,8 +272,16 @@ def validate_action_draft(action: dict[str, Any], *, now_ms: int | None = None) 
         errors.append(_block("INTEGRITY_CHECK_FAILED", "动作参数已变化，请重新生成方案。"))
     if action.get("action_id") != expected_hash[:24] or action.get("idempotency_key") != f"dian-action-{expected_hash[:32]}":
         errors.append(_block("ACTION_ID_MISMATCH", "动作编号与参数不一致，请重新生成方案。"))
+    if _action_context_account_mismatch(action):
+        errors.append(_block(
+            "ACTION_CONTEXT_ACCOUNT_MISMATCH",
+            "Action target account does not match the promotion context account.",
+        ))
     if int(action.get("expires_at_ms") or 0) <= now_ms:
         errors.append(_block("ACTION_EXPIRED", "动作草稿已过期，请重新同步并生成方案。"))
+    captured_at_ms = int((action.get("evidence_ref") or {}).get("captured_at_ms") or 0)
+    if captured_at_ms - now_ms > MAX_CAPTURE_FUTURE_SKEW_MS:
+        errors.append(_block("CAPTURE_TIME_IN_FUTURE", "计划采集时间明显晚于本机时间，请校准时间并重新同步。"))
     if action.get("blocked_reasons"):
         errors.extend(action["blocked_reasons"])
     if not action.get("can_confirm"):
@@ -283,7 +321,7 @@ def assess_automation_readiness(action: dict[str, Any]) -> dict[str, Any]:
         status = "blocked"
         label = "暂时阻止"
         stage = "qualification"
-        if codes & {"DATA_STALE", "CAPTURE_TIME_MISSING", "DATA_QUALITY_LOW", "CONFIDENCE_NOT_HIGH"}:
+        if codes & {"DATA_STALE", "CAPTURE_TIME_MISSING", "CAPTURE_TIME_IN_FUTURE", "DATA_QUALITY_LOW", "CONFIDENCE_NOT_HIGH"}:
             next_step = "重新读取当前千川页面，并补齐高质量消耗、成交和 ROI 数据。"
         elif codes & {"ACCOUNT_NOT_LOCKED", "TARGET_ID_MISSING", "TARGET_NAME_MISSING"}:
             next_step = "锁定正确千川账号，并补齐计划唯一 ID。"

@@ -8,6 +8,7 @@ stored in a bounded local queue only after explicit consent.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
@@ -22,8 +23,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .local_api_auth import read_trusted_extension_ids
     from .update_center import TELEMETRY_FIELDS, create_opt_in_telemetry
 except ImportError:  # Direct bridge script/test execution.
+    from local_api_auth import read_trusted_extension_ids
     from update_center import TELEMETRY_FIELDS, create_opt_in_telemetry
 
 
@@ -74,7 +77,7 @@ RAW_SHOP_FIELD_NAMES = {
 }
 _VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _EXTENSION_ID = re.compile(r"^[a-p]{32}$")
-TARGET_RELEASE_VERSION = "4.1.0"
+TARGET_RELEASE_VERSION = "4.14.9"
 REQUIRED_AUTHENTICODE_ARTIFACTS = {
     "agent",
     "updater",
@@ -139,11 +142,47 @@ def load_extension_install_state(store_root: str | Path) -> dict[str, Any]:
     return defaults
 
 
+def configured_trusted_extension_ids(store_root: str | Path) -> frozenset[str]:
+    """Load installer/store provisioned extension IDs; never self-report them."""
+
+    values: set[str] = set()
+    for ids in OFFICIAL_EXTENSION_IDS_BY_STORE.values():
+        values.update(ids)
+    # The shared loader validates schema, every ID, regular-file type and
+    # symlink safety. A damaged registry contributes no local trust.
+    values.update(read_trusted_extension_ids(store_root))
+    return frozenset(values)
+
+
+def extension_origin_trusted(store_root: str | Path, extension_id: str) -> bool:
+    """Trust an origin only from a compiled store ID or strict local registry."""
+
+    normalized = str(extension_id or "").strip().lower()
+    if not _EXTENSION_ID.fullmatch(normalized):
+        return False
+    # A previous extension self-report is distribution evidence, never a trust
+    # anchor. This also makes registry corruption revoke local pairing until an
+    # explicit repair succeeds.
+    return normalized in configured_trusted_extension_ids(store_root)
+
+
+def extension_pairing_allowed(store_root: str | Path, extension_id: str) -> bool:
+    """Require installer/store authorization before accepting a pairing report.
+
+    Development builds use the same manifest-derived trust provisioning as the
+    release installer.  An environment toggle must never turn an arbitrary
+    extension's self-reported ID into a durable local trust relationship.
+    """
+
+    return extension_origin_trusted(store_root, extension_id)
+
+
 def save_extension_install_state(
     store_root: str | Path,
     payload: dict[str, Any],
     *,
     origin_extension_id: str | None = None,
+    pairing_authorized: bool = False,
 ) -> dict[str, Any]:
     """Persist only a small self-reported extension provenance record."""
 
@@ -167,6 +206,10 @@ def save_extension_install_state(
         raise ValueError("extension id is invalid")
     normalized_origin_id = str(origin_extension_id or "").strip().lower()
     origin_verified = bool(extension_id and normalized_origin_id == extension_id)
+    current = load_extension_install_state(store_root)
+    current_id = str(current.get("extension_id") or "").lower()
+    if current.get("origin_verified") is True and current_id and current_id != extension_id and not pairing_authorized:
+        raise ValueError("local Agent is already paired with a different extension id; reset pairing explicitly first")
     value = {
         "source": source,
         "browser": browser,
@@ -317,10 +360,10 @@ def build_release_readiness(
     """Return evidence-backed v4.0 readiness; missing proof remains blocking."""
 
     distribution = build_distribution_status(store_root)
-    authenticode = (
+    code_signature = (
         _injected_authenticode_status(authenticode_artifacts)
         if authenticode_artifacts is not None
-        else _verify_release_authenticode()
+        else _verify_platform_code_signature()
     )
     extension = distribution["extension"]
     publication = distribution["browser_store_publication"]
@@ -340,11 +383,12 @@ def build_release_readiness(
             "evidence": "embedded_production_public_key" if production_ed25519_trust else "missing",
         },
         {
-            "id": "windows_authenticode",
-            "ready": authenticode["ready"],
+            "id": "platform_code_signature",
+            "ready": code_signature["ready"],
             "blocking": True,
-            "evidence": "all_release_artifacts_verified" if authenticode["ready"] else "missing_or_unverifiable",
-            "artifact_checks": authenticode["artifact_checks"],
+            "evidence": "all_release_artifacts_verified" if code_signature["ready"] else "missing_or_unverifiable",
+            "platform": "macos" if sys.platform == "darwin" else "windows" if os.name == "nt" else "unsupported",
+            "artifact_checks": code_signature["artifact_checks"],
         },
         {
             "id": "browser_store_publication",
@@ -402,6 +446,12 @@ def _release_root_from_executable() -> Path | None:
         return executable.parent.parent
     if executable.parent.parent.name.lower() == "app":
         return executable.parents[2]
+    if (
+        executable.name.lower() == "dianagent.exe"
+        and executable.parent.name.lower() == "program"
+        and executable.parents[2].name.lower() == "versions"
+    ):
+        return executable.parents[3]
     return None
 
 
@@ -412,6 +462,16 @@ def _authenticode_file_valid(path_text: str, modified_ns: int) -> bool:
     del modified_ns
     if os.name != "nt":
         return False
+    system_directory = ctypes.create_unicode_buffer(32_768)
+    length = ctypes.windll.kernel32.GetSystemDirectoryW(  # type: ignore[attr-defined]
+        system_directory,
+        len(system_directory),
+    )
+    if length <= 0 or length >= len(system_directory):
+        return False
+    powershell = Path(system_directory.value) / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if not powershell.is_file():
+        return False
     command = (
         "& { param([string]$Target) "
         "(Get-AuthenticodeSignature -LiteralPath $Target).Status.ToString() }"
@@ -419,7 +479,7 @@ def _authenticode_file_valid(path_text: str, modified_ns: int) -> bool:
     try:
         result = subprocess.run(
             [
-                "powershell.exe",
+                str(powershell),
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
@@ -487,6 +547,7 @@ def _verify_release_authenticode() -> dict[str, Any]:
             "uninstall_release.ps1",
             "start_agent.ps1",
             "watchdog_release.ps1",
+            "recovery_bootstrap.ps1",
             "sync_release_tools.ps1",
         )
     ]
@@ -501,10 +562,77 @@ def _verify_release_authenticode() -> dict[str, Any]:
     return {"ready": all(item["ready"] for item in checks), "artifact_checks": checks}
 
 
+@lru_cache(maxsize=32)
+def _macos_signature_valid(path_text: str, modified_ns: int) -> tuple[bool, bool]:
+    """Validate Developer ID signing and Gatekeeper assessment on macOS."""
+
+    del modified_ns
+    if sys.platform != "darwin":
+        return False, False
+    try:
+        signature = subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--deep", "--strict", path_text],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        gatekeeper = subprocess.run(
+            ["/usr/sbin/spctl", "--assess", "--type", "execute", path_text],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, False
+    return signature.returncode == 0, gatekeeper.returncode == 0
+
+
+def _verify_macos_code_signature() -> dict[str, Any]:
+    release_root = _release_root_from_executable()
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False) or release_root is None:
+        checks = [
+            {"id": "agent", "ready": False, "evidence": "packaged_release_not_detected"},
+            {"id": "notarization", "ready": False, "evidence": "packaged_release_not_detected"},
+        ]
+        return {"ready": False, "artifact_checks": checks}
+    executable = Path(sys.executable).resolve()
+    try:
+        modified_ns = executable.stat().st_mtime_ns
+    except OSError:
+        modified_ns = 0
+    signed, accepted = _macos_signature_valid(str(executable), modified_ns)
+    checks = [
+        {
+            "id": "agent",
+            "ready": signed,
+            "evidence": "macos_developer_id_valid" if signed else "macos_code_signature_invalid",
+            "filename": executable.name,
+        },
+        {
+            "id": "notarization",
+            "ready": accepted,
+            "evidence": "gatekeeper_assessment_accepted" if accepted else "gatekeeper_assessment_rejected",
+            "filename": executable.name,
+        },
+    ]
+    return {"ready": all(item["ready"] for item in checks), "artifact_checks": checks}
+
+
+def _verify_platform_code_signature() -> dict[str, Any]:
+    if sys.platform == "darwin":
+        return _verify_macos_code_signature()
+    return _verify_release_authenticode()
+
+
 __all__ = [
     "LocalAnonymousFeedbackQueue",
     "build_distribution_status",
     "build_release_readiness",
+    "configured_trusted_extension_ids",
+    "extension_origin_trusted",
+    "extension_pairing_allowed",
     "load_extension_install_state",
     "save_extension_install_state",
 ]

@@ -11,6 +11,19 @@ class ChengfangContractTests(unittest.TestCase):
         self.assertEqual([], registry["fields"])
         self.assertEqual([], registry["selectors"])
         self.assertEqual([], registry["write_capabilities"])
+        self.assertTrue(registry["official_capability_discovery"])
+        self.assertFalse(registry["official_control_task_contract"]["production_adapter_enabled"])
+        self.assertTrue(all(item["status"].startswith("documented_not_verified") for item in registry["official_capability_discovery"]))
+        capabilities = {item["capability"]: item for item in registry["official_capability_discovery"]}
+        self.assertEqual(
+            "/open_api/v1.0/qianchuan/uni_promotion/ad/control_task/create/",
+            capabilities["create_full_domain_control_task"]["endpoint"],
+        )
+        self.assertEqual(
+            "/open_api/v1.0/qianchuan/uni_promotion/ad/budget/update/",
+            capabilities["update_chengfang_budget"]["endpoint"],
+        )
+        self.assertFalse(registry["verified"])
 
     def test_visible_labels_cannot_match_without_verified_fingerprint(self):
         result = assess_page_fingerprint({"visible_labels": ["乘方", "综合 ROI"]})

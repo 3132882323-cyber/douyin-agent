@@ -17,10 +17,105 @@ class PromotionModeTests(unittest.TestCase):
             self.assertFalse(guard["allowed"])
             self.assertEqual("UNSUPPORTED_FOR_CHENGFANG", guard["code"])
 
+    def test_suixintui_aliases_are_read_only_and_never_reuse_other_executors(self):
+        aliases = ("suixintui", "sui-xin-tui", "随心推", "随心推推广", "小店随心推", "千川随心推", "巨量千川随心推")
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                self.assertEqual("suixintui", build_promotion_context(alias)["promotion_mode"])
+
+        complete_context = {
+            "promotion_mode": "随心推",
+            "account_scope": {"store_id": "shop-1", "account_id": "ad-1", "binding_status": "verified"},
+            "strategy_id": "strategy-1",
+            "metric_contract": {"definition": "pay_roi", "version": "v1"},
+        }
+        for operation in ("adjust_budget", "pause_plan", "restore_budget"):
+            with self.subTest(operation=operation):
+                guard = legacy_execution_guard(operation, complete_context)
+                self.assertFalse(guard["allowed"])
+                self.assertEqual("UNSUPPORTED_FOR_SUIXINTUI", guard["code"])
+                self.assertIn("独立的执行、回读和回滚合同", guard["reason"])
+                self.assertIn("禁止复用标准、全域或乘方执行器", guard["reason"])
+
+    def test_suixintui_can_pass_read_only_data_gate_when_contract_is_complete(self):
+        report = assess_deterministic_data_gate({
+            "promotion_mode": "小店随心推",
+            "account_scope": {"store_id": "shop-1", "account_id": "ad-1", "binding_status": "verified"},
+            "strategy_id": "strategy-1",
+            "metric_contract": {"definition": "pay_roi", "version": "v1"},
+            "data_quality": {"confidence": "high", "freshness_seconds": 30, "completeness": 0.9},
+        })
+        self.assertTrue(report["read_only"])
+        self.assertTrue(report["deterministic_advice_allowed"])
+
     def test_standard_and_full_domain_keep_legacy_path_available(self):
         for mode in ("standard", "full_domain"):
-            context = {"promotion_mode": mode, "account_scope": {"store_id": "shop-1", "account_id": "ad-1"}, "strategy_id": "strategy-1", "metric_contract": {"definition": "pay_roi", "version": "v1"}}
+            context = {
+                "promotion_mode": mode,
+                "account_scope": {"store_id": "shop-1", "account_id": "ad-1"},
+                "strategy_id": "strategy-1",
+                "metric_contract": {"definition": "pay_roi", "version": "v1"},
+                "data_quality": {"confidence": "high", "freshness_seconds": 30, "completeness": 0.9},
+            }
             self.assertTrue(legacy_execution_guard("adjust_budget", context)["allowed"])
+
+    def test_legacy_guard_binds_expected_account_to_context(self):
+        context = {
+            "promotion_mode": "standard",
+            "account_scope": {"store_id": "shop-1", "account_id": "Ad-1"},
+            "strategy_id": "strategy-1",
+            "metric_contract": {"definition": "pay_roi", "version": "v1"},
+            "data_quality": {"confidence": "high", "freshness_seconds": 30, "completeness": 0.9},
+        }
+        self.assertTrue(legacy_execution_guard(
+            "adjust_budget", context, expected_account_key=" ad-1 "
+        )["allowed"])
+        blocked = legacy_execution_guard(
+            "adjust_budget", context, expected_account_key="ad-2"
+        )
+        self.assertFalse(blocked["allowed"])
+        self.assertEqual("ACTION_CONTEXT_ACCOUNT_MISMATCH", blocked["code"])
+
+    def test_legacy_writes_fail_closed_on_metric_conflict_or_stale_data(self):
+        base = {
+            "promotion_mode": "standard",
+            "account_scope": {"store_id": "shop-1", "account_id": "ad-1"},
+            "strategy_id": "strategy-1",
+            "metric_contract": {"definition": "pay_roi", "version": "v1"},
+            "data_quality": {"confidence": "high", "freshness_seconds": 30, "completeness": 0.9},
+        }
+        conflicted = legacy_execution_guard("adjust_budget", {
+            **base,
+            "data_quality": {**base["data_quality"], "metric_conflict": True},
+        })
+        self.assertFalse(conflicted["allowed"])
+        self.assertEqual("DATA_CONTRACT_CONFLICT", conflicted["code"])
+        stale = legacy_execution_guard("pause_plan", {
+            **base,
+            "data_quality": {**base["data_quality"], "freshness_seconds": 3600},
+        })
+        self.assertFalse(stale["allowed"])
+        self.assertEqual("DATA_STALE_OR_UNTIMED", stale["code"])
+
+    def test_raw_mode_conflict_survives_normalization_and_blocks_writes(self):
+        context = {
+            "promotion_mode": "standard",
+            "account_scope": {"store_id": "shop-1", "account_id": "ad-1"},
+            "strategy_id": "strategy-1",
+            "metric_contract": {"definition": "pay_roi", "version": "v1"},
+            "data_quality": {
+                "confidence": "high",
+                "freshness_seconds": 0,
+                "completeness": 0.9,
+                "mode_conflict": True,
+            },
+        }
+        normalized = build_promotion_context(context)
+        self.assertEqual("unknown", normalized["promotion_mode"])
+        self.assertTrue(normalized["data_quality"]["mode_conflict"])
+        guard = legacy_execution_guard("adjust_budget", context)
+        self.assertFalse(guard["allowed"])
+        self.assertIn(guard["code"], {"PROMOTION_MODE_UNVERIFIED", "DATA_CONTRACT_CONFLICT"})
 
     def test_standard_mode_with_incomplete_or_conflicting_scope_is_read_only(self):
         missing = legacy_execution_guard("adjust_budget", {"promotion_mode": "standard"})
@@ -106,6 +201,59 @@ class PromotionModeTests(unittest.TestCase):
         blocked = assess_deterministic_data_gate({"promotion_mode": "chengfang", "account_scope": {"conflict": True}, "data_quality": {"freshness_seconds": 3600, "completeness": 0.2}})
         self.assertFalse(blocked["deterministic_advice_allowed"])
         self.assertIn("ACCOUNT_SCOPE_CONFLICT", blocked["blocked_reasons"])
+
+    def test_zero_second_freshness_is_valid_only_when_explicit(self):
+        base = {
+            "promotion_mode": "standard",
+            "account_scope": {"store_id": "shop-1", "account_id": "ad-1"},
+            "strategy_id": "strategy-1",
+            "metric_contract": {"definition": "pay_roi", "version": "v1"},
+        }
+        self.assertTrue(assess_deterministic_data_gate({
+            **base,
+            "data_quality": {"confidence": "high", "freshness_seconds": 0, "completeness": 0.9},
+        })["deterministic_advice_allowed"])
+        self.assertIn("DATA_STALE_OR_UNTIMED", assess_deterministic_data_gate({
+            **base,
+            "data_quality": {"confidence": "high", "completeness": 0.9},
+        })["blocked_reasons"])
+
+    def test_nonfinite_context_values_fail_closed_instead_of_looking_complete(self):
+        invalid = {
+            "promotion_mode": "standard",
+            "account_scope": {"store_id": "shop-1", "account_id": "ad-1"},
+            "promotion_mode_evidence": {"source": "official_api", "captured_at_ms": float("nan")},
+            "strategy_id": "strategy-1",
+            "strategy": {"strategy_id": "strategy-1", "total_budget": float("inf")},
+            "metric_contract": {"definition": "net_revenue_roi", "version": "v1", "value": float("nan")},
+            "cost_ledger": {key: float("nan") for key in (
+                "ad_spend", "commission", "platform_fee", "discount",
+                "refund", "product_cost", "fulfillment_cost",
+            )},
+            "result_ledger": {"net_revenue": float("inf")},
+            "data_quality": {
+                "confidence": "high",
+                "freshness_seconds": float("nan"),
+                "completeness": float("nan"),
+            },
+        }
+
+        context = build_promotion_context(invalid)
+        gate = assess_deterministic_data_gate(invalid)
+        dashboard = build_chengfang_dashboard_summary(invalid)
+
+        self.assertFalse(context["data_ready"])
+        self.assertEqual({}, context["cost_ledger"])
+        self.assertEqual({}, context["result_ledger"])
+        self.assertIsNone(context["metric_contract"]["value"])
+        self.assertIsNone(context["strategy"]["total_budget"])
+        self.assertEqual(0, context["promotion_mode_evidence"]["captured_at_ms"])
+        self.assertFalse(context["data_quality"]["freshness_provided"])
+        self.assertEqual(0.0, context["data_quality"]["completeness"])
+        self.assertFalse(gate["deterministic_advice_allowed"])
+        self.assertIn("DATA_STALE_OR_UNTIMED", gate["blocked_reasons"])
+        self.assertIn("DATA_COMPLETENESS_LOW", gate["blocked_reasons"])
+        self.assertFalse(dashboard["profit_safety"]["calculable"])
 
 
 if __name__ == "__main__":

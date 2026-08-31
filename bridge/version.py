@@ -1,3 +1,3 @@
 """Single source of truth for the local Agent release."""
 
-AGENT_VERSION = "4.1.0"
+AGENT_VERSION = "4.14.9"

@@ -7,11 +7,17 @@
 
   function guideView(payload = {}, { qianchuanDeferred = false } = {}) {
     const next = payload.next_upgrade || {};
+    const operational = payload.operational && typeof payload.operational === "object" ? payload.operational : {};
+    const operationalState = String(operational.state || "");
     return {
       collapsed: Boolean(payload.collapsed) || (Boolean(qianchuanDeferred) && next.id === "sync_qianchuan"),
       actionId: String(next.id || "none"),
       optional: Boolean(next.optional),
       deferred: Boolean(qianchuanDeferred) && next.id === "sync_qianchuan",
+      operationalState,
+      operationalLabel: String(operational.state_label || ""),
+      currentlyReady: operational.core_data_fresh === true
+        && ["data_fresh", "execution_ready"].includes(operationalState),
     };
   }
 
@@ -26,5 +32,18 @@
     return "proposal";
   }
 
-  return { guideView, automationSurface, automationStep };
+  function bindingReview({
+    selectedStoreKey = "",
+    unlinkedAccounts = [],
+    qianchuanDeferred = false,
+    currentActionId = "",
+  } = {}) {
+    return Boolean(String(selectedStoreKey))
+      && Array.isArray(unlinkedAccounts)
+      && unlinkedAccounts.length > 0
+      && !Boolean(qianchuanDeferred)
+      && String(currentActionId) === "sync_qianchuan";
+  }
+
+  return { guideView, automationSurface, automationStep, bindingReview };
 });

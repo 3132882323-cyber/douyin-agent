@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "development": {
+    "distribution_mode": "unpacked_development",
+    "extension_id": "obpbbgjamjfkambmhidbjnaoiehfndcj",
+    "update_owner": "developer",
+    "manual_reload_required": true
+  },
+  "consumer_release": {
+    "enabled": false,
+    "distribution_mode": "unpacked_development",
+    "update_owner": "installer_directory",
+    "manual_reload_required": true,
+    "includes_unpacked_extension": true,
+    "required_stores": [
+      "chrome_web_store"
+    ]
+  },
+  "protocol": {
+    "mode": "exact_product_version",
+    "current": 0,
+    "minimum_agent_protocol": 0,
+    "maximum_agent_protocol": 0,
+    "exact_product_version_required": true
+  },
+  "stores": {
+    "chrome_web_store": {
+      "status": "unconfigured",
+      "extension_id": "",
+      "listing_url": "",
+      "update_url": "https://clients2.google.com/service/update2/crx"
+    },
+    "edge_addons": {
+      "status": "unconfigured",
+      "extension_id": "",
+      "listing_url": "",
+      "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx"
+    }
+  },
+  "native_messaging": {
+    "enabled": false,
+    "role": "transport_only",
+    "solves_extension_install_or_update": false
+  }
+}

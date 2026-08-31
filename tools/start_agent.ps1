@@ -19,6 +19,21 @@ if (-not $InstallRoot) {
   $InstallRoot = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "DianAgent"
 }
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$trustPolicyPath = Join-Path $PSScriptRoot "windows_trust_policy.ps1"
+if (-not (Test-Path -LiteralPath $trustPolicyPath -PathType Leaf) -or
+    ((Get-Item -LiteralPath $trustPolicyPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+  throw "The Windows maintenance policy component is missing or unsafe; startup is blocked."
+}
+. $trustPolicyPath
+Assert-DianPathChainNoReparsePoints $InstallRoot "Installation root"
+$transactionRecovery = Invoke-DianRecoverInstallTransaction $InstallRoot 30
+if ($transactionRecovery.Recovered) {
+  Write-Host ("Recovered interrupted install transaction {0} ({1}) before startup." -f $transactionRecovery.TransactionId, $transactionRecovery.Action) -ForegroundColor Yellow
+}
+$toolsTransactionRecovery = Invoke-DianRecoverReleaseToolsTransaction $InstallRoot 30
+if ($toolsTransactionRecovery.Recovered) {
+  Write-Host ("Recovered interrupted maintenance-tools transaction {0} ({1}) before startup." -f $toolsTransactionRecovery.TransactionId, $toolsTransactionRecovery.Action) -ForegroundColor Yellow
+}
 if ($SkipLaunch) {
   Write-Host "Initial launch was skipped."
   exit 0
@@ -48,18 +63,63 @@ if (Test-Path -LiteralPath $currentPointer -PathType Leaf) {
   $agentPath = Join-Path $InstallRoot ("app\{0}\DianAgent.exe" -f $version)
 }
 if ($version -notmatch '^[0-9]+(?:\.[0-9]+){2}(?:[-+][0-9A-Za-z.-]+)?$') { throw "Installed version is invalid." }
+$agentPath = [IO.Path]::GetFullPath($agentPath)
 
 $watchdog = Join-Path $InstallRoot "tools\watchdog_release.ps1"
 if (-not (Test-Path -LiteralPath $watchdog -PathType Leaf)) { throw "The Dian Agent launcher is incomplete." }
-$healthUrl = "http://127.0.0.1:$Port/health"
+$healthUrl = "http://127.0.0.1:$Port/health/live"
+$legacyHealthUrl = "http://127.0.0.1:$Port/health"
+
+function Invoke-AgentHealthProbe([string]$Uri, [int]$TimeoutSeconds) {
+  try {
+    $health = Invoke-RestMethod -Uri $Uri -TimeoutSec $TimeoutSeconds
+    return [pscustomobject]@{
+      Healthy = ($health.status -eq "ok" -and [string]$health.version -eq $version)
+      Unsupported = $false
+    }
+  } catch {
+    $statusCode = 0
+    if ($_.Exception.Response) {
+      try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+    }
+    return [pscustomobject]@{
+      Healthy = $false
+      Unsupported = ($statusCode -eq 404)
+    }
+  }
+}
 
 function Test-AgentHealth {
-  try {
-    $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 2
-    return ($health.status -eq "ok" -and [string]$health.version -eq $version)
-  } catch {
-    return $false
+  $live = Invoke-AgentHealthProbe $healthUrl 2
+  if ($live.Healthy) { return (Test-ExpectedAgentListener) }
+  if (-not $live.Unsupported) { return $false }
+  # Compatibility is intentionally limited to an explicit 404 from a
+  # pre-v4.11 Agent. Timeouts, connection failures and server errors never
+  # fall back to the heavier legacy endpoint.
+  $legacy = Invoke-AgentHealthProbe $legacyHealthUrl 5
+  return ($legacy.Healthy -and (Test-ExpectedAgentListener))
+}
+
+function Test-ExpectedAgentListener {
+  # Version strings are not process identity. Another installation can expose
+  # the same version on the shared port, so health is accepted only when every
+  # listener is owned by this exact active executable.
+  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+  if ($listeners.Count -eq 0) { return $false }
+  foreach ($listener in $listeners) {
+    $ownerPid = [int]$listener.OwningProcess
+    $owner = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $ownerPid) -ErrorAction SilentlyContinue
+    if (-not $owner -or -not $owner.ExecutablePath) { return $false }
+    try {
+      $ownerPath = [IO.Path]::GetFullPath([string]$owner.ExecutablePath)
+    } catch {
+      return $false
+    }
+    if (-not $ownerPath.Equals($agentPath, [StringComparison]::OrdinalIgnoreCase)) {
+      return $false
+    }
   }
+  return $true
 }
 
 function Complete-PendingUpgradeFromHealth {
@@ -68,8 +128,12 @@ function Complete-PendingUpgradeFromHealth {
   if ($LASTEXITCODE -ne 0) {
     throw "The Agent is healthy, but its interrupted upgrade transaction could not be confirmed safely."
   }
+  if (Test-Path -LiteralPath $pendingPath -PathType Container) {
+    Write-Warning "The upgraded Agent is healthy, but rollback evidence is retained until the target browser extension reloads and authenticates."
+    return
+  }
   $script:pendingUpgrade = $false
-  Write-Host "Interrupted offline upgrade was confirmed from exact local health evidence." -ForegroundColor Green
+  Write-Host "Interrupted offline upgrade was confirmed from exact process health and fresh extension evidence." -ForegroundColor Green
 }
 
 function Invoke-ConservativeMaintenance {
@@ -112,6 +176,7 @@ $mutex = New-Object Threading.Mutex($false, "Local\DianAgentStart-$rootHash")
 $ownsMutex = $false
 $launcher = $null
 $startupFailure = $null
+$rollbackBlocked = $false
 try {
   $ownsMutex = $mutex.WaitOne(0)
   if ($ownsMutex) {
@@ -140,6 +205,10 @@ try {
     if ($launcher -and $launcher.HasExited) {
       if ($launcher.ExitCode -eq 2) { throw "The installed Agent files are incomplete." }
       if ($launcher.ExitCode -eq 3) { throw "Port $Port is already in use by another application." }
+      if ($launcher.ExitCode -eq 4) {
+        $rollbackBlocked = $true
+        throw "The Agent startup safety policy or interrupted-install recovery failed; version rollback is blocked until the installation is repaired."
+      }
     }
     Start-Sleep -Seconds 1
   }
@@ -152,12 +221,55 @@ try {
   $mutex.Dispose()
 }
 
+if ($rollbackBlocked) {
+  throw $startupFailure
+}
+
+if ($pendingUpgrade -and $DeferPendingConfirmation) {
+  # The wrapper owns rollback in deferred mode, but this starter still owns the
+  # attempted target process. Retire its watchdog and exact executable before
+  # returning failure so rollback cannot leave two Agent generations alive.
+  if ($launcher -and -not $launcher.HasExited) {
+    if (-not $launcher.WaitForExit(5000)) {
+      Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue
+      [void]$launcher.WaitForExit(2000)
+    }
+  }
+  Get-CimInstance Win32_Process -Filter "Name='DianAgent.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.ExecutablePath -and
+      ([IO.Path]::GetFullPath([string]$_.ExecutablePath)).Equals($agentPath, [StringComparison]::OrdinalIgnoreCase)
+    } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  throw $startupFailure
+}
+
 if ($pendingUpgrade -and -not $DeferPendingConfirmation -and -not $RecoveryAttempted) {
   Write-Warning "The pending new version did not become healthy; restoring the previous version."
+  # The first watchdog may still own the per-install mutex for a few moments
+  # after both startup loops reach their deadline.  Wait for that exact child
+  # instead of launching a recovery watchdog that immediately exits behind the
+  # stale mutex and leaves the restored Agent stopped.
+  if ($launcher -and -not $launcher.HasExited) {
+    if (-not $launcher.WaitForExit(5000)) {
+      Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue
+      [void]$launcher.WaitForExit(2000)
+    }
+  }
   & $UpdaterPath recover --install-root $InstallRoot --health-url $healthUrl --rollback-if-unhealthy
   if ($LASTEXITCODE -ne 0) {
     throw "Pending upgrade recovery failed after startup error: $($startupFailure.Exception.Message)"
   }
+  # A broken executable can stay alive without becoming healthy (for example,
+  # a one-file bootloader stuck before binding). The rollback decision is now
+  # durable, so stop only processes whose executable is the exact failed
+  # version path before starting the restored pointer.
+  Get-CimInstance Win32_Process -Filter "Name='DianAgent.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.ExecutablePath -and
+      ([IO.Path]::GetFullPath([string]$_.ExecutablePath) -eq $agentPath)
+    } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   $powershell = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
   $recoveryArguments = @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath,
