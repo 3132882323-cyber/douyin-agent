@@ -15,8 +15,10 @@ import argparse
 import base64
 import binascii
 import copy
+import ctypes
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -26,13 +28,17 @@ import tempfile
 import time
 import uuid
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from types import MappingProxyType
+
+from platform_paths import default_install_root as platform_default_install_root
 
 MANIFEST_NAME = "offline-manifest.json"
 SUPPORTED_MANIFEST_VERSIONS = {1}
@@ -49,6 +55,23 @@ WINDOWS_RESERVED_NAMES = {
     *(f"com{number}" for number in range(1, 10)),
     *(f"lpt{number}" for number in range(1, 10)),
 }
+EXTENSION_ID_PATTERN = re.compile(r"^[a-p]{32}$")
+MAX_EXTENSION_REPORT_BYTES = 64 * 1024
+
+
+class _RejectLocalHealthRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        # Activation must be proved by the process bound to the local health
+        # endpoint. A redirect could otherwise let another service (including
+        # a remote one) manufacture a successful upgrade health response.
+        try:
+            if fp is not None:
+                fp.close()
+        finally:
+            raise URLError("local upgrade health checks do not allow redirects")
+
+
+_LOCAL_HEALTH_OPENER = build_opener(_RejectLocalHealthRedirects())
 
 # Production releases intentionally have no trust anchor until the release
 # owner provisions an Ed25519 key offline and commits *only* its public key.
@@ -88,6 +111,80 @@ class VerifiedBundle:
 
 
 HealthCheck = Callable[[Path, dict[str, Any]], bool | None]
+
+
+def _windows_maintenance_mutex_name(install_root: str | Path) -> str:
+    """Return the exact mutex name shared with Windows install/repair scripts."""
+    canonical = ntpath.abspath(os.fspath(install_root)).rstrip("\\/").upper()
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest().upper()[:16]
+    return f"Local\\DianAgentMaintenance-{digest}"
+
+
+def _assert_no_primary_install_transaction(install_root: str | Path) -> None:
+    """Fail closed while a Windows installer/tools journal is unresolved.
+
+    The Python updater deliberately does not interpret or repair the PowerShell
+    install protocol.  Its only safe action under the shared mutex is to leave
+    every primary-install artifact untouched until install/repair/start has
+    deterministically finalized or rolled back that journal.
+    """
+    root = Path(install_root)
+    primary_journal = root / ".install-transaction.json"
+    tools_journal = root / ".release-tools-transaction.json"
+    if os.path.lexists(primary_journal) or os.path.lexists(tools_journal):
+        raise ActivationError(
+            "a Dian Agent install or maintenance-tools transaction is pending; run Repair Dian Agent "
+            "or the signed installer before using offline upgrade commands"
+        )
+
+
+@contextmanager
+def _windows_installation_maintenance_lock(
+    install_root: str | Path, *, timeout_seconds: int = 30
+):
+    """Serialize mutating updater commands with install/repair/uninstall on Windows."""
+    if os.name != "nt":
+        yield
+        return
+    if timeout_seconds < 1 or timeout_seconds > 300:
+        raise ActivationError("maintenance lock timeout must be between 1 and 300 seconds")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_mutex = kernel32.CreateMutexW
+    create_mutex.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+    create_mutex.restype = ctypes.c_void_p
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+    wait_for_single_object.restype = ctypes.c_uint32
+    release_mutex = kernel32.ReleaseMutex
+    release_mutex.argtypes = (ctypes.c_void_p,)
+    release_mutex.restype = ctypes.c_bool
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (ctypes.c_void_p,)
+    close_handle.restype = ctypes.c_bool
+
+    handle = create_mutex(None, False, _windows_maintenance_mutex_name(install_root))
+    if not handle:
+        raise ActivationError(
+            f"could not create the installation maintenance lock: {ctypes.get_last_error()}"
+        )
+    acquired = False
+    try:
+        wait_result = wait_for_single_object(handle, timeout_seconds * 1000)
+        if wait_result in (0x00000000, 0x00000080):  # WAIT_OBJECT_0 / WAIT_ABANDONED_0
+            acquired = True
+        elif wait_result == 0x00000102:  # WAIT_TIMEOUT
+            raise ActivationError(
+                "another Dian Agent install, update, repair or removal is already in progress"
+            )
+        else:
+            raise ActivationError(
+                f"installation maintenance lock failed: wait_result={wait_result}"
+            )
+        yield
+    finally:
+        if acquired:
+            release_mutex(handle)
+        close_handle(handle)
 
 
 def canonical_offline_manifest_bytes(manifest: dict[str, Any]) -> bytes:
@@ -187,10 +284,7 @@ def verify_offline_manifest_signature(
 
 
 def default_install_root() -> Path:
-    base = os.environ.get("LOCALAPPDATA")
-    if base:
-        return Path(base) / "DianAgent"
-    return Path.home() / ".dian-agent"
+    return platform_default_install_root()
 
 
 def _version_key(value: Any) -> tuple[tuple[int, ...], int, str]:
@@ -606,26 +700,29 @@ def install_bundle(
 
 
 def packaged_agent_self_test(release_dir: Path, install_root: Path, timeout_seconds: int = 60) -> bool:
-    """Run the newly extracted executable without binding the production port."""
+    """Run the newly extracted executable without touching production state."""
     executable = release_dir / "program" / "DianAgent.exe"
     if not executable.is_file():
         return False
-    environment = os.environ.copy()
-    environment["DIAN_AGENT_SELF_TEST"] = "1"
-    environment["DIAN_AGENT_DATA_DIR"] = str(install_root / "data")
-    environment["DIAN_AGENT_LOG_DIR"] = str(install_root / "logs")
+    del install_root  # Production data must never participate in pre-activation checks.
     try:
-        completed = subprocess.run(
-            [str(executable)],
-            cwd=str(executable.parent),
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout_seconds,
-            check=False,
-        )
-        return completed.returncode == 0
+        with tempfile.TemporaryDirectory(prefix="DianAgent-self-test-") as temporary_root:
+            isolated_root = Path(temporary_root)
+            environment = os.environ.copy()
+            environment["DIAN_AGENT_SELF_TEST"] = "1"
+            environment["DIAN_AGENT_DATA_DIR"] = str(isolated_root / "data")
+            environment["DIAN_AGENT_LOG_DIR"] = str(isolated_root / "logs")
+            completed = subprocess.run(
+                [str(executable)],
+                cwd=str(executable.parent),
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout_seconds,
+                check=False,
+            )
+            return completed.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -634,32 +731,73 @@ def _rollback_dir(install_root: Path) -> Path:
     return install_root / ".offline-upgrade-rollback"
 
 
+_ROLLBACK_PREPARATION_PREFIX = ".offline-prep-"
+
+
+def _discard_abandoned_rollback_preparations(install_root: Path) -> None:
+    """Remove only unpublished rollback snapshots left by a hard interruption.
+
+    A preparation directory is created before the updater publishes the
+    canonical rollback directory.  The active program pointer cannot be
+    switched until that publish succeeds, so these uniquely named siblings are
+    safe to discard on the next preparation attempt.  The canonical rollback
+    directory is deliberately never touched here because it may represent an
+    already switched transaction awaiting confirm or rollback.
+    """
+
+    try:
+        children = tuple(install_root.iterdir())
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ActivationError("offline rollback preparations cannot be inspected") from exc
+    for child in children:
+        if not child.name.startswith(_ROLLBACK_PREPARATION_PREFIX):
+            continue
+        if child.parent != install_root or child.is_symlink() or not child.is_dir():
+            raise ActivationError("an abandoned offline rollback preparation is unsafe to remove")
+        try:
+            shutil.rmtree(child)
+        except OSError as exc:
+            raise ActivationError("an abandoned offline rollback preparation cannot be removed") from exc
+
+
 def prepare_pending_upgrade(install_root: Path) -> Path:
     """Persist the active pointer and stable extension until real health is confirmed."""
+    install_root.mkdir(parents=True, exist_ok=True)
     rollback = _rollback_dir(install_root)
     if rollback.exists():
         raise ActivationError("a previous offline upgrade is awaiting confirm or rollback")
-    rollback.mkdir(parents=True)
+    _discard_abandoned_rollback_preparations(install_root)
+    preparation = install_root / f"{_ROLLBACK_PREPARATION_PREFIX}{uuid.uuid4().hex[:16]}"
+    preparation.mkdir()
     try:
         pointer = _read_current_bytes(install_root)
         previous = read_current(install_root) if pointer is not None else None
         if pointer is not None:
-            _atomic_write(rollback / "previous-current.json", pointer)
+            _atomic_write(preparation / "previous-current.json", pointer)
         stable = install_root / "extension-current"
         had_extension = stable.is_dir()
         if had_extension:
-            shutil.copytree(stable, rollback / "extension-current")
+            shutil.copytree(stable, preparation / "extension-current")
         state = {
             "schema_version": 1,
             "had_current": pointer is not None,
             "had_extension": had_extension,
             "previous_version": previous.get("version") if previous else read_installed_version(install_root),
             "new_version": None,
+            "prepared_at": datetime.now(timezone.utc).isoformat(),
         }
-        _atomic_write(rollback / "state.json", (json.dumps(state, indent=2, sort_keys=True) + "\n").encode())
-    except Exception:
+        _atomic_write(
+            preparation / "state.json",
+            (json.dumps(state, indent=2, sort_keys=True) + "\n").encode(),
+        )
         if rollback.exists():
-            shutil.rmtree(rollback)
+            raise ActivationError("a previous offline upgrade is awaiting confirm or rollback")
+        os.replace(preparation, rollback)
+    except Exception:
+        if preparation.exists():
+            shutil.rmtree(preparation)
         raise
     return rollback
 
@@ -704,6 +842,14 @@ def _read_pending_state(install_root: Path, *, require_new_version: bool = False
             raise ActivationError("offline rollback target version is invalid") from exc
     elif require_new_version:
         raise ActivationError("offline rollback target version is missing")
+    prepared_at = str(state.get("prepared_at") or "")
+    if prepared_at:
+        try:
+            parsed_prepared_at = datetime.fromisoformat(prepared_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ActivationError("offline rollback preparation timestamp is invalid") from exc
+        if parsed_prepared_at.tzinfo is None:
+            raise ActivationError("offline rollback preparation timestamp is invalid")
     if state["had_current"] and not (rollback / "previous-current.json").is_file():
         raise ActivationError("previous active version pointer is missing; refusing destructive rollback")
     if state["had_extension"] and not (rollback / "extension-current").is_dir():
@@ -725,6 +871,71 @@ def _complete_pending_transaction(rollback: Path, label: str) -> None:
         pass
 
 
+def _fresh_authenticated_extension_report(
+    install_root: Path, state: dict[str, Any]
+) -> tuple[bool, str]:
+    """Prove the target extension authenticated after rollback was prepared.
+
+    ``distribution_state.json`` is written only by the protected
+    ``/distribution/extension-source`` route after session, origin, trusted ID
+    and running-extension-version validation. Confirmation additionally binds
+    that receipt to this transaction's target version and start time.
+    """
+
+    target_version = str(state.get("new_version") or "")
+    prepared_text = str(state.get("prepared_at") or "")
+    if not target_version or not prepared_text:
+        return False, "transaction_missing_extension_confirmation_baseline"
+    try:
+        prepared_at = datetime.fromisoformat(prepared_text.replace("Z", "+00:00"))
+    except ValueError:
+        return False, "transaction_extension_confirmation_baseline_invalid"
+    if prepared_at.tzinfo is None:
+        return False, "transaction_extension_confirmation_baseline_invalid"
+
+    config_path = install_root / "config"
+    report_path = config_path / "distribution_state.json"
+    try:
+        root = install_root.resolve(strict=True)
+        if (
+            install_root.is_symlink()
+            or config_path.is_symlink()
+            or not config_path.is_dir()
+            or report_path.is_symlink()
+            or not report_path.is_file()
+        ):
+            return False, "authenticated_extension_report_missing"
+        resolved_report = report_path.resolve(strict=True)
+        resolved_report.relative_to(root)
+        metadata = resolved_report.stat(follow_symlinks=False)
+        if metadata.st_size <= 0 or metadata.st_size > MAX_EXTENSION_REPORT_BYTES:
+            return False, "authenticated_extension_report_invalid"
+        raw = resolved_report.read_bytes()
+        if len(raw) > MAX_EXTENSION_REPORT_BYTES:
+            return False, "authenticated_extension_report_invalid"
+        report = json.loads(raw.decode("utf-8-sig"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return False, "authenticated_extension_report_invalid"
+    if not isinstance(report, dict) or report.get("origin_verified") is not True:
+        return False, "authenticated_extension_report_not_origin_verified"
+    extension_id = str(report.get("extension_id") or "").strip().lower()
+    if not EXTENSION_ID_PATTERN.fullmatch(extension_id):
+        return False, "authenticated_extension_report_id_invalid"
+    if str(report.get("version") or "").strip() != target_version:
+        return False, "authenticated_extension_report_version_mismatch"
+    try:
+        reported_at = datetime.fromisoformat(
+            str(report.get("reported_at") or "").replace("Z", "+00:00")
+        )
+    except ValueError:
+        return False, "authenticated_extension_report_timestamp_invalid"
+    if reported_at.tzinfo is None:
+        return False, "authenticated_extension_report_timestamp_invalid"
+    if reported_at < prepared_at:
+        return False, "authenticated_extension_report_stale"
+    return True, "authenticated_extension_report_verified"
+
+
 def confirm_pending_upgrade(install_root: str | Path) -> dict[str, Any]:
     root = Path(install_root)
     rollback = _rollback_dir(root)
@@ -734,8 +945,19 @@ def confirm_pending_upgrade(install_root: str | Path) -> dict[str, Any]:
     current = read_current(root)
     if current is None or str(current.get("version") or "") != str(state["new_version"]):
         raise ActivationError("active version does not match the pending upgrade; refusing confirmation")
+    extension_ready, extension_reason = _fresh_authenticated_extension_report(root, state)
+    if not extension_ready:
+        raise ActivationError(
+            "fresh authenticated target extension report is required before confirmation: "
+            + extension_reason
+        )
     _complete_pending_transaction(rollback, "confirmed")
-    return {"ok": True, "status": "confirmed", "version": state.get("new_version")}
+    return {
+        "ok": True,
+        "status": "confirmed",
+        "version": state.get("new_version"),
+        "extension_confirmation": extension_reason,
+    }
 
 
 def rollback_pending_upgrade(install_root: str | Path) -> dict[str, Any]:
@@ -841,13 +1063,19 @@ def _read_local_health(health_url: str, timeout_seconds: float = 3.0) -> dict[st
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.username or parsed.password:
         raise ActivationError("recovery health URL must use local HTTP")
     try:
-        with urlopen(Request(health_url, headers={"Accept": "application/json"}), timeout=timeout_seconds) as response:
+        with _LOCAL_HEALTH_OPENER.open(
+            Request(health_url, headers={"Accept": "application/json"}),
+            timeout=timeout_seconds,
+        ) as response:
             raw = response.read(65_537)
         if len(raw) > 65_536:
             raise ActivationError("local health response is too large")
         value = json.loads(raw.decode("utf-8"))
     except ActivationError:
         raise
+    except HTTPError as error:
+        error.close()
+        return None
     except Exception:
         return None
     return value if isinstance(value, dict) else None
@@ -863,7 +1091,7 @@ def recover_pending_upgrade(
 
     A healthy active version is confirmed.  If power was lost before the
     target version was written to state, the target can only be repaired and
-    confirmed when ``/health`` reports that exact active pointer.  An
+    confirmed when ``/health/live`` reports that exact active pointer.  An
     unhealthy version is rolled back only when the caller explicitly states
     that a real startup attempt has already failed.
     """
@@ -890,8 +1118,18 @@ def recover_pending_upgrade(
                 return result
             mark_pending_upgrade(root, active_version)
             pending_version = active_version
+            state["new_version"] = active_version
         if current is None or pending_version != active_version:
             raise ActivationError("healthy service does not match the pending upgrade pointer")
+        extension_ready, extension_reason = _fresh_authenticated_extension_report(root, state)
+        if not extension_ready:
+            return {
+                "ok": True,
+                "status": "pending_extension_confirmation",
+                "active_version": active_version,
+                "extension_confirmation": extension_reason,
+                "rollback_performed": False,
+            }
         result = confirm_pending_upgrade(root)
         result["status"] = "healthy_upgrade_confirmed"
         return result
@@ -1067,23 +1305,28 @@ def _build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--install-root", default=str(default_install_root()))
     install_parser.add_argument("--current-version")
     install_parser.add_argument("--allow-test-keys", action="store_true", help="development tests only")
+    install_parser.add_argument("--maintenance-lock-timeout-seconds", type=int, default=30)
     current_parser = subparsers.add_parser("current", help="show the active version pointer")
     current_parser.add_argument("--install-root", default=str(default_install_root()))
     confirm_parser = subparsers.add_parser("confirm", help="confirm real service health and remove rollback state")
     confirm_parser.add_argument("--install-root", default=str(default_install_root()))
+    confirm_parser.add_argument("--maintenance-lock-timeout-seconds", type=int, default=30)
     rollback_parser = subparsers.add_parser("rollback", help="restore the previous program pointer and extension")
     rollback_parser.add_argument("--install-root", default=str(default_install_root()))
+    rollback_parser.add_argument("--maintenance-lock-timeout-seconds", type=int, default=30)
     status_parser = subparsers.add_parser("transaction-status", help="show an interrupted upgrade transaction")
     status_parser.add_argument("--install-root", default=str(default_install_root()))
     recover_parser = subparsers.add_parser("recover", help="resolve an interrupted upgrade from local health evidence")
     recover_parser.add_argument("--install-root", default=str(default_install_root()))
     recover_parser.add_argument("--health-url", required=True)
     recover_parser.add_argument("--rollback-if-unhealthy", action="store_true")
+    recover_parser.add_argument("--maintenance-lock-timeout-seconds", type=int, default=30)
     cleanup_parser = subparsers.add_parser("cleanup", help="conservatively inspect or remove stale upgrade files")
     cleanup_parser.add_argument("--install-root", default=str(default_install_root()))
     cleanup_parser.add_argument("--keep-recent", type=int, default=2)
     cleanup_parser.add_argument("--min-age-hours", type=float, default=168.0)
     cleanup_parser.add_argument("--apply", action="store_true", help="delete eligible directories; default is dry-run")
+    cleanup_parser.add_argument("--maintenance-lock-timeout-seconds", type=int, default=30)
     return parser
 
 
@@ -1098,46 +1341,74 @@ def main(argv: list[str] | None = None) -> int:
             ).manifest
         elif args.command == "install":
             install_root = Path(args.install_root)
-            prepare_pending_upgrade(install_root)
-            try:
-                result = install_bundle(
-                    args.bundle,
-                    install_root,
-                    current_version=args.current_version,
-                    health_check=lambda release, _manifest: packaged_agent_self_test(release, install_root),
-                    allow_test_keys=args.allow_test_keys,
-                )
-                mark_pending_upgrade(install_root, str(result["version"]))
-                result["status"] = "awaiting_real_health_confirmation"
-            except Exception:
-                rollback = _rollback_dir(install_root)
-                if rollback.exists():
-                    try:
-                        rollback_pending_upgrade(install_root)
-                    except Exception as rollback_exc:
-                        raise ActivationError(
-                            f"offline upgrade failed and persisted rollback also failed: {rollback_exc}"
-                        ) from rollback_exc
-                raise
+            with _windows_installation_maintenance_lock(
+                install_root, timeout_seconds=args.maintenance_lock_timeout_seconds
+            ):
+                _assert_no_primary_install_transaction(install_root)
+                prepare_pending_upgrade(install_root)
+                try:
+                    result = install_bundle(
+                        args.bundle,
+                        install_root,
+                        current_version=args.current_version,
+                        health_check=lambda release, _manifest: packaged_agent_self_test(release, install_root),
+                        allow_test_keys=args.allow_test_keys,
+                    )
+                    mark_pending_upgrade(install_root, str(result["version"]))
+                    result["status"] = "awaiting_real_health_confirmation"
+                except Exception:
+                    rollback = _rollback_dir(install_root)
+                    if rollback.exists():
+                        try:
+                            rollback_pending_upgrade(install_root)
+                        except Exception as rollback_exc:
+                            raise ActivationError(
+                                f"offline upgrade failed and persisted rollback also failed: {rollback_exc}"
+                            ) from rollback_exc
+                    raise
         elif args.command == "confirm":
-            result = confirm_pending_upgrade(args.install_root)
+            with _windows_installation_maintenance_lock(
+                args.install_root, timeout_seconds=args.maintenance_lock_timeout_seconds
+            ):
+                _assert_no_primary_install_transaction(args.install_root)
+                result = confirm_pending_upgrade(args.install_root)
         elif args.command == "rollback":
-            result = rollback_pending_upgrade(args.install_root)
+            with _windows_installation_maintenance_lock(
+                args.install_root, timeout_seconds=args.maintenance_lock_timeout_seconds
+            ):
+                _assert_no_primary_install_transaction(args.install_root)
+                result = rollback_pending_upgrade(args.install_root)
         elif args.command == "transaction-status":
             result = transaction_status(args.install_root)
         elif args.command == "recover":
-            result = recover_pending_upgrade(
-                args.install_root,
-                health_url=args.health_url,
-                rollback_if_unhealthy=args.rollback_if_unhealthy,
-            )
+            with _windows_installation_maintenance_lock(
+                args.install_root, timeout_seconds=args.maintenance_lock_timeout_seconds
+            ):
+                _assert_no_primary_install_transaction(args.install_root)
+                result = recover_pending_upgrade(
+                    args.install_root,
+                    health_url=args.health_url,
+                    rollback_if_unhealthy=args.rollback_if_unhealthy,
+                )
         elif args.command == "cleanup":
-            result = cleanup_install_root(
-                args.install_root,
-                dry_run=not args.apply,
-                keep_recent_versions=args.keep_recent,
-                min_age_hours=args.min_age_hours,
-            )
+            if args.apply:
+                with _windows_installation_maintenance_lock(
+                    args.install_root, timeout_seconds=args.maintenance_lock_timeout_seconds
+                ):
+                    _assert_no_primary_install_transaction(args.install_root)
+                    result = cleanup_install_root(
+                        args.install_root,
+                        dry_run=False,
+                        keep_recent_versions=args.keep_recent,
+                        min_age_hours=args.min_age_hours,
+                    )
+            else:
+                result = cleanup_install_root(
+                    args.install_root,
+                    dry_run=True,
+                    keep_recent_versions=args.keep_recent,
+                    min_age_hours=args.min_age_hours,
+                )
         else:
             result = read_current(args.install_root)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

@@ -6,23 +6,176 @@
     <title>店策 Agent 经营工作台</title>
     <link rel="stylesheet" href="sidepanel.css">
   </head>
-  <body>
+  <body data-experience-mode="simple">
     <aside id="qianchuan-sync-dock" class="qianchuan-sync-dock" aria-label="千川快速同步">
-      <button id="qianchuan-sync-dock-button" type="button" title="同步最近访问的千川页面">
+      <button id="qianchuan-sync-dock-button" class="qianchuan-sync-dock-main" type="button" title="同步最近访问的千川页面">
         <span class="qianchuan-sync-dock-icon" aria-hidden="true">川</span>
         <span class="qianchuan-sync-dock-copy">
           <strong id="qianchuan-sync-dock-label">同步千川</strong>
           <small id="qianchuan-sync-dock-status" aria-live="polite">读取最近页面</small>
         </span>
       </button>
+      <button id="qianchuan-sync-dock-collapse" class="qianchuan-sync-dock-control qianchuan-sync-dock-collapse" type="button" aria-label="收起千川快速同步悬浮窗" aria-expanded="true" title="收起悬浮窗">−</button>
+      <button id="qianchuan-sync-dock-close" class="qianchuan-sync-dock-control qianchuan-sync-dock-close" type="button" aria-label="关闭千川快速同步悬浮窗" title="关闭悬浮窗">×</button>
     </aside>
-    <main class="panel-shell">
-      <header>
-        <div class="brand-mark">策</div>
-        <div><h1>店策 Agent</h1><p>货架商品 · 直播投放 · 内容</p></div>
-        <span class="page-mode">独立经营工作台</span>
-        <button id="refresh-button" class="icon-button" title="刷新" aria-label="刷新数据">↻</button>
-      </header>
+    <p id="qianchuan-sync-dock-announcer" class="qianchuan-sync-dock-announcer" role="status" aria-live="polite" aria-atomic="true"></p>
+    <div class="workspace-shell">
+      <aside id="workspace-sidebar" class="workspace-sidebar">
+        <div class="workspace-brand">
+          <span class="workspace-brand-mark">策</span>
+          <div><strong>店策 Agent</strong><small>抖音电商经营系统</small></div>
+        </div>
+        <nav id="role-nav" class="workspace-nav" aria-label="经营工作台导航">
+          <span class="workspace-nav-group">今天</span>
+          <button type="button" data-simple-nav data-workspace-key="today-tasks" data-workspace-target="today-task-center" data-workspace-title="今日任务" data-workspace-subtitle="系统已经按风险、收益和数据可信度排序；从第一件事开始处理。"><span aria-hidden="true">⌂</span><strong>今日任务</strong></button>
+          <span class="workspace-nav-group">经营</span>
+          <button class="active" type="button" data-simple-nav data-role="货架商品" data-workspace-key="product-business" data-workspace-target="product-operating-graph" data-workspace-title="商品经营" data-workspace-subtitle="只看商品卡：商品状态、核心指标、风险和下一步集中在一张卡里。"><span aria-hidden="true">▦</span><strong>商品经营</strong></button>
+          <button type="button" data-simple-nav data-role="直播投放" data-workspace-key="live-business" data-workspace-target="live-plan-management-section" data-workspace-title="直播与投放" data-workspace-subtitle="先判断直播风险，再进入全部投放计划、自动投放策略和结果回读。"><span aria-hidden="true">◉</span><strong>直播与投放</strong></button>
+          <div class="workspace-nav-children live-workspace-children" aria-label="直播与投放功能">
+            <button type="button" data-workspace-key="live-overview" data-workspace-role="直播投放" data-workspace-target="live-plan-management-section" data-workspace-title="直播风险" data-workspace-subtitle="查看本场进房、商品点击、成交和实时节奏风险。"><strong>直播风险</strong></button>
+            <button type="button" data-workspace-key="promotion-overview" data-workspace-role="直播投放" data-workspace-view="overview" data-plan-filter-mode="all" data-plan-filter-type="all" data-workspace-target="promotion-plan-center" data-workspace-title="全部投放计划" data-workspace-subtitle="统一筛选和管理直播、商品、全域、乘方与随心推计划。"><strong>全部投放计划</strong></button>
+            <button type="button" data-workspace-key="production-budget-decrease" data-workspace-role="直播投放" data-workspace-view="chengfang" data-workspace-target="chengfang-production-write" data-workspace-title="真实降预算" data-workspace-subtitle="按店铺、账户、官方授权、可信计划和人工确认五步完成一次受控降预算。"><strong>真实降预算</strong></button>
+            <button type="button" data-workspace-key="autopilot-strategy" data-workspace-role="直播投放" data-workspace-view="chengfang" data-workspace-target="autopilot-center" data-workspace-title="影子托管" data-workspace-subtitle="配置守钱、稳投和放量策略；当前只进行本机影子评估，尚不写入千川。"><strong>影子托管</strong></button>
+            <button type="button" data-workspace-key="controlled-execution" data-workspace-role="直播投放" data-workspace-target="automation-section" data-workspace-title="执行准备" data-workspace-subtitle="查看动作依据、执行前检查、人工授权和执行后复查；未开放能力不会写入平台。"><strong>执行准备</strong></button>
+            <button type="button" data-workspace-key="promotion-operation-log" data-workspace-role="直播投放" data-workspace-target="promotion-operation-log" data-workspace-title="操作记录" data-workspace-subtitle="查看投放动作的确认、执行、撤销和结果回读。"><strong>操作记录</strong></button>
+          </div>
+          <button type="button" data-simple-nav data-role="内容" data-workspace-key="content-business" data-workspace-target="content-workbench" data-workspace-title="内容素材" data-workspace-subtitle="这里只展示素材及其核心表现，不再混入策略、记忆和投放设置。"><span aria-hidden="true">✦</span><strong>内容素材</strong></button>
+          <button type="button" data-simple-nav data-workspace-key="business-report" data-workspace-target="report-center-card" data-workspace-title="日报与复盘" data-workspace-subtitle="生成早巡、下播和日终复盘，先预览再发送到钉钉或飞书。"><span aria-hidden="true">▤</span><strong>日报与复盘</strong></button>
+          <span class="workspace-nav-group">系统与数据</span>
+          <div class="workspace-nav-tree" data-nav-tree="system">
+            <button class="workspace-nav-parent" type="button" data-nav-toggle="system" aria-expanded="false"><span aria-hidden="true">⚙</span><strong>设置与数据</strong><i aria-hidden="true">⌃</i></button>
+            <div class="workspace-nav-children">
+              <button type="button" data-workspace-key="data-scan" data-workspace-target="scan-card" data-workspace-title="数据巡检" data-workspace-subtitle="同步关键经营页面，并检查失败页、数据新鲜度和质量。"><strong>数据巡检</strong></button>
+              <button type="button" data-workspace-key="industry-knowledge" data-workspace-target="industry-pack-center" data-workspace-title="行业知识" data-workspace-subtitle="为当前店铺选择行业知识包；不同店铺严格隔离。"><strong>行业知识</strong></button>
+              <button type="button" data-workspace-key="ai-connection" data-workspace-target="ai-connection-center" data-workspace-title="AI 分析连接" data-workspace-subtitle="连接 GPT、DeepSeek、千问、GLM、混元、豆包或本地模型，只生成分析与影子建议，不授予投放执行权限。"><strong>AI 分析连接</strong></button>
+              <button type="button" data-workspace-key="strategy-settings" data-workspace-target="strategy-settings-card" data-workspace-title="经营设置" data-workspace-subtitle="设置 ROI、库存、预算影响和执行冷却边界。"><strong>经营设置</strong></button>
+              <button type="button" data-workspace-key="version-update" data-workspace-target="data-version-center" data-workspace-title="版本与更新" data-workspace-subtitle="检查本地 Agent、扩展、知识包和数据库版本。"><strong>版本与更新</strong></button>
+            </div>
+          </div>
+        </nav>
+        <div class="workspace-sidebar-footer">
+          <span>本地经营版</span>
+          <strong>生产写入按账户受控开放</strong>
+          <small>目前仅支持乘方单计划降预算</small>
+        </div>
+      </aside>
+
+      <section class="workspace-stage">
+        <header class="workspace-topbar">
+          <button id="workspace-nav-toggle" class="workspace-nav-toggle" type="button" aria-label="展开或收起导航">☰</button>
+          <div class="workspace-breadcrumb"><span>经营工作台</span><b>/</b><strong id="workspace-current-title">商品经营</strong></div>
+          <div class="workspace-topbar-actions">
+            <span class="workspace-agent-state"><i id="workspace-agent-dot"></i><span id="workspace-agent-label">正在连接 Agent</span></span>
+            <span class="workspace-automation-state" title="真实写入默认关闭"><small>安全模式</small><strong id="workspace-automation-level">仅查看</strong></span>
+            <details id="workspace-more-settings" class="workspace-more-settings">
+              <summary aria-label="更多设置" title="更多设置">更多设置</summary>
+              <div>
+                <div class="experience-mode-switch" role="group" aria-label="界面信息量">
+                  <button type="button" data-experience-mode-value="professional">完整</button>
+                  <button type="button" data-experience-mode-value="simple" class="active">专注</button>
+                </div>
+                <button type="button" data-workspace-target="scan-card" data-workspace-title="数据巡检">数据巡检</button>
+                <button type="button" data-workspace-target="industry-pack-center" data-workspace-title="行业知识">行业知识</button>
+                <button type="button" data-workspace-target="ai-connection-center" data-workspace-title="AI 分析连接">AI 连接</button>
+                <button type="button" data-workspace-target="strategy-settings-card" data-workspace-title="经营设置">经营设置</button>
+                <button type="button" data-workspace-target="data-version-center" data-workspace-title="版本与更新">版本与更新</button>
+                <button id="qianchuan-sync-dock-restore" type="button" hidden>显示千川悬浮同步</button>
+              </div>
+            </details>
+            <button id="refresh-button" class="workspace-refresh-button" type="button" title="刷新" aria-label="刷新数据">↻</button>
+          </div>
+        </header>
+
+        <main class="panel-shell">
+          <section class="workspace-page-heading" aria-labelledby="workspace-page-title">
+            <div>
+              <span>抖音电商经营闭环</span>
+              <h1 id="workspace-page-title">商品经营</h1>
+              <p id="workspace-page-subtitle">一件商品一张卡，只看状态、核心指标、风险和下一步。</p>
+            </div>
+            <div class="workspace-page-actions">
+              <button type="button" data-workspace-target="today-task-center" data-workspace-title="今日任务" data-workspace-subtitle="系统已经按风险、收益和数据可信度排序；从第一件事开始处理。">查看今日任务</button>
+              <button id="workspace-primary-action" type="button" disabled>正在检查</button>
+            </div>
+          </section>
+
+          <section id="workspace-user-path" class="workspace-user-path" aria-label="当前任务路径">
+            <div class="workspace-user-path-copy">
+              <span>当前任务路径</span>
+              <strong id="workspace-user-path-title">先找问题，再处理动作</strong>
+              <small id="workspace-user-path-detail">系统会保留数据准备、问题判断、执行和结果回读四个阶段。</small>
+            </div>
+            <ol id="workspace-user-path-steps">
+              <li data-workspace-path-stage="prepare"><b>1</b><span>准备数据</span></li>
+              <li class="current" data-workspace-path-stage="diagnose"><b>2</b><span>发现问题</span></li>
+              <li data-workspace-path-stage="act"><b>3</b><span>处理任务</span></li>
+              <li data-workspace-path-stage="verify"><b>4</b><span>验证结果</span></li>
+            </ol>
+            <button id="workspace-user-path-next" type="button" data-workspace-target="next-best-action">查看优先动作</button>
+          </section>
+
+          <section id="agent-offline-banner" class="agent-offline-banner" role="alert" hidden>
+            <div>
+              <span>安全保护已开启</span>
+              <strong>本地 Agent 已断开，写入与执行已冻结</strong>
+              <p id="agent-offline-detail">先修复本地 Agent，再重新检测连接；已展示的数据只供查看。</p>
+            </div>
+            <div class="agent-offline-actions">
+              <button id="sidepanel-repair-agent" type="button">修复本地 Agent</button>
+              <button id="sidepanel-retry-agent" type="button" class="secondary">重新检测</button>
+            </div>
+          </section>
+
+          <section id="dashboard-load-warning" class="dashboard-load-warning" role="status" hidden>
+            <div>
+              <strong>部分数据没有加载成功</strong>
+              <p id="dashboard-load-warning-detail">失败模块会明确列出，不会再用“0 项”掩盖读取失败。</p>
+            </div>
+            <button id="dashboard-load-retry" type="button">只需重试加载</button>
+          </section>
+
+          <section id="journey-command-center" class="journey-command-center checking" aria-labelledby="journey-command-title" aria-live="polite">
+            <header class="journey-command-header">
+              <div>
+                <span>经营指挥台</span>
+                <strong id="journey-scope-summary">正在准备本次经营数据</strong>
+              </div>
+              <div id="journey-lane-switch" class="journey-lane-switch" role="group" aria-label="选择当前经营目标">
+                <button type="button" data-journey-lane="store" class="active">店铺经营</button>
+                <button type="button" data-journey-lane="ads">投放经营</button>
+              </div>
+            </header>
+            <ol id="journey-stage-list" class="journey-stage-list" aria-label="当前经营路径"></ol>
+            <article class="journey-primary-card">
+              <div class="journey-primary-copy">
+                <span id="journey-state-label">正在判断唯一下一步</span>
+                <h2 id="journey-command-title">正在读取本地经营状态</h2>
+                <p id="journey-command-detail">系统会自动准备数据和任务，只保留当前最需要完成的一步。</p>
+              </div>
+              <button id="journey-primary-action" type="button" data-action-kind="none" disabled>正在检查</button>
+            </article>
+            <details id="journey-evidence" class="journey-evidence">
+              <summary>查看阻断依据、数据时间与后续条件</summary>
+              <ul id="journey-evidence-list"></ul>
+            </details>
+          </section>
+
+      <section id="simple-start" class="simple-start-card simple-experience-only" aria-labelledby="simple-start-title">
+        <header>
+          <div>
+            <span>第一次使用也不用学</span>
+            <h2 id="simple-start-title">打开抖店，直接开始</h2>
+            <p>打开抖店后自动确认并巡店，不需要识别、绑定或填写账号。</p>
+          </div>
+          <b id="simple-start-progress">0 / 3</b>
+        </header>
+        <div id="simple-start-steps" class="simple-start-steps" aria-label="三步开始经营"></div>
+        <footer>
+          <div><strong id="simple-start-next-title">正在检查当前进度</strong><p id="simple-start-next-detail">只显示现在需要完成的一步。</p></div>
+          <button id="simple-start-action" type="button" data-action="none">正在检查</button>
+        </footer>
+        <small id="simple-start-note">先完成店铺巡检；需要投放时，再进入“直播与投放”。</small>
+      </section>
 
       <section id="connection" class="connection pending" aria-live="polite">
         <span aria-hidden="true"></span><div><strong>正在连接本地 Agent</strong><p>读取抖店与千川脱敏快照</p></div>
@@ -38,9 +191,9 @@
         <button id="priority-reminder-action" type="button">立即处理</button>
       </section>
 
-      <section id="connection-guide" class="connection-guide expanded" aria-labelledby="connection-guide-title" aria-live="polite">
+      <section id="connection-guide" class="connection-guide expanded technical-compatibility-only" aria-labelledby="connection-guide-title" aria-live="polite" hidden aria-hidden="true">
         <header class="connection-guide-heading">
-          <div><span>经营连接向导</span><h2 id="connection-guide-title">先完成一件事，再开始经营诊断</h2></div>
+          <div><span>经营连接中心</span><h2 id="connection-guide-title">先确认经营对象，再开始诊断和投放</h2></div>
           <b id="connection-level">L0 · 尚未连接店铺</b>
         </header>
         <div id="connection-status-strip" class="connection-status-strip" hidden>
@@ -51,6 +204,21 @@
         </div>
         <div id="connection-guide-expanded">
           <div id="connection-levels" class="connection-levels" aria-label="经营连接能力等级"></div>
+          <div class="connection-relationship" aria-label="当前经营连接关系">
+            <article><small>抖店店铺</small><strong id="connection-center-store">等待识别</strong><span>经营数据严格隔离</span></article>
+            <i aria-hidden="true">→</i>
+            <article><small>千川账户</small><strong id="connection-center-account">按需连接</strong><span>一次只使用一个账户</span></article>
+            <i aria-hidden="true">→</i>
+            <article><small>授权方式</small><strong id="connection-center-auth">浏览器只读</strong><span>官方 API 可选</span></article>
+            <i aria-hidden="true">→</i>
+            <article><small>数据范围</small><strong id="connection-center-scope">等待店铺</strong><span>不会跨店混合</span></article>
+            <i aria-hidden="true">→</i>
+            <article><small>最近同步</small><strong id="connection-center-freshness">暂无数据</strong><span>过期数据不用于执行</span></article>
+          </div>
+          <div class="connection-center-actions">
+            <p>网页采集可以独立使用；获得开放平台资质后，再通过官方授权提高多账户同步稳定性。</p>
+            <button type="button" class="secondary" data-workspace-target="oceanengine-oauth-card" data-workspace-title="官方 API 授权" data-workspace-subtitle="管理开放平台应用、授权账户与只读数据同步。">管理官方授权</button>
+          </div>
           <article class="connection-next">
             <div class="connection-next-copy">
               <span>现在只做这一步</span>
@@ -74,10 +242,21 @@
                 <option value="">正在读取店铺列表</option>
               </select>
             </label>
+            <div id="store-linked-account" class="store-linked-account" hidden>
+              <strong>已关联的千川账户</strong>
+              <small id="store-linked-account-summary">请选择本次巡检使用的账户；匿名关联记录只保存在本机。</small>
+              <select id="linked-account-select" aria-label="已关联千川账户"></select>
+              <div>
+                <button id="select-linked-account-button" type="button">用于本次巡检</button>
+                <button id="unlink-account-button" class="secondary" type="button">解除关联</button>
+              </div>
+              <small id="store-linked-account-result" aria-live="polite"></small>
+            </div>
             <div id="store-link-review" class="store-link-review" hidden>
               <strong>千川账户无法自动确认归属</strong>
               <small>系统不会按同名店铺猜测，请核对证据后人工确认；冲突时会停止关联。</small>
               <select id="unlinked-account-select" aria-label="待关联千川账户"></select>
+              <small id="unlinked-account-evidence" class="account-evidence-summary" aria-live="polite">请选择一个账户查看匿名尾号、证据来源、置信度和最后发现时间。</small>
               <button id="link-account-button" type="button">确认关联到当前店铺</button>
             </div>
           </div>
@@ -90,7 +269,7 @@
         </div>
       </section>
 
-      <details id="data-version-center" class="fold-card version-center">
+      <details id="data-version-center" class="fold-card version-center professional-experience-only">
         <summary>
           <span class="version-center-title">数据与版本中心 <b id="system-readiness">正在检查</b></span>
           <span id="system-update-state">本地运行 · AI 可选</span>
@@ -114,39 +293,191 @@
             </label>
           </div>
           <div id="update-message" class="update-message">经营判断在本机完成；不连接 AI 也可正常诊断。</div>
-          <section class="release-readiness-card" aria-label="4.1 发布就绪度">
-            <div class="release-readiness-heading">
-              <div><small>推广前必须看</small><strong>4.1 发布就绪度</strong></div>
-              <b id="release-readiness-state" class="blocked">正在核对</b>
+          <div class="version-section-heading">
+            <div><small>本店经营判断</small><strong>选择行业，让诊断更贴近实际经营</strong></div>
+            <span>一店一包 · 本机保存</span>
+          </div>
+          <section id="industry-pack-center" class="industry-pack-center" aria-label="当前店铺行业知识包">
+            <div class="industry-pack-heading">
+              <div>
+                <small>不同店铺严格隔离</small>
+                <strong>当前店铺行业判断</strong>
+                <span id="industry-pack-store-name">等待打开抖店</span>
+              </div>
+              <b id="industry-pack-trust-state">内置包可用</b>
             </div>
-            <p id="release-readiness-summary">正在检查签名、安装来源和浏览器商店状态，不会把内测包误报为正式版。</p>
-            <div id="release-blocker-list" class="release-blocker-list">
-              <div><span id="release-ed25519-state" class="status-dot"></span><strong>生产离线签名</strong><small id="release-ed25519-note">正在检查生产公钥</small></div>
-              <div><span id="release-authenticode-state" class="status-dot"></span><strong>Windows 数字签名</strong><small id="release-authenticode-note">正在检查安装包签名</small></div>
-              <div><span id="release-store-state" class="status-dot"></span><strong>浏览器商店发布</strong><small id="release-store-note">正在检查发布渠道</small></div>
+            <label class="industry-pack-selector">主营行业知识包
+              <select id="industry-pack-select" disabled>
+                <option value="general|">通用电商经营知识包</option>
+              </select>
+            </label>
+            <div id="industry-pack-preview" class="industry-pack-preview">
+              <strong>通用电商经营知识包</strong>
+              <span id="industry-pack-rule-summary">正在读取规则范围</span>
+              <small id="industry-pack-capabilities">数据时效 · 投放止损 · 库存预警</small>
             </div>
-            <div class="promotion-state-grid">
-              <div><small>当前扩展来源</small><strong id="extension-install-source">正在识别</strong></div>
-              <div><small>匿名反馈队列</small><strong id="feedback-queue-state">默认关闭</strong></div>
-              <div><small>行业知识包</small><strong id="industry-pack-state">正在读取</strong></div>
+            <div id="industry-pack-message" class="industry-pack-message">选择当前店铺后，可为每家店分别应用服饰、美妆或食品知识包；未设置时继续使用通用电商规则。</div>
+            <div class="industry-pack-actions">
+              <button id="activate-industry-pack" type="button" disabled>应用到当前店铺</button>
+              <button id="import-industry-pack" class="secondary" type="button">导入已签名知识包</button>
+              <input id="industry-pack-file" type="file" accept="application/json,.json" hidden>
             </div>
+            <p>知识包只改变本店的诊断和建议，不会自动修改计划；预算调整仍需独立授权和执行前检查。知识包与经营数据均保存在本机。</p>
           </section>
           <div class="version-actions">
             <button id="check-updates" type="button">检查更新</button>
             <button id="apply-knowledge-update" type="button" disabled>更新知识包</button>
             <button id="rollback-knowledge" class="secondary" type="button" disabled>回滚知识包</button>
-            <button id="import-industry-pack" class="secondary" type="button">导入行业知识包</button>
-            <input id="industry-pack-file" type="file" accept="application/json,.json" hidden>
           </div>
-          <label class="telemetry-consent">
-            <input id="telemetry-opt-in" type="checkbox">
-            <span><strong>匿名改进计划（默认关闭）</strong><small>只上传行业、规则编号、指标区间与效果方向；不上传店名、订单、素材、截图、Cookie 或 Token。</small></span>
-          </label>
-          <div class="feedback-queue-row"><span id="feedback-queue-note">未同意时不会入队，也不会发送。</span><button id="clear-feedback-queue" type="button">清空本地队列</button></div>
+          <details class="version-advanced">
+            <summary>
+              <span><strong>发行与反馈设置</strong><small>签名、浏览器商店状态与匿名改进计划</small></span>
+              <b>高级</b>
+            </summary>
+            <div class="version-advanced-panel">
+              <section class="release-readiness-card" aria-label="公开发行就绪度">
+                <div class="release-readiness-heading">
+                  <div><small>推广前必须看</small><strong>公开发行就绪度</strong></div>
+                  <b id="release-readiness-state" class="blocked">正在核对</b>
+                </div>
+                <p id="release-readiness-summary">正在检查签名、安装来源和浏览器商店状态，不会把内测包误报为正式版。</p>
+                <div id="release-blocker-list" class="release-blocker-list">
+                  <div><span id="release-ed25519-state" class="status-dot"></span><strong>生产离线签名</strong><small id="release-ed25519-note">正在检查生产公钥</small></div>
+                  <div><span id="release-authenticode-state" class="status-dot"></span><strong id="release-code-signature-label">当前平台数字签名</strong><small id="release-authenticode-note">正在检查安装包签名</small></div>
+                  <div><span id="release-store-state" class="status-dot"></span><strong>浏览器商店发布</strong><small id="release-store-note">正在检查发布渠道</small></div>
+                </div>
+                <div class="promotion-state-grid">
+                  <div><small>当前扩展来源</small><strong id="extension-install-source">正在识别</strong></div>
+                  <div><small>匿名反馈队列</small><strong id="feedback-queue-state">默认关闭</strong></div>
+                  <div><small>行业知识包</small><strong id="industry-pack-state">正在读取</strong></div>
+                </div>
+              </section>
+              <label class="telemetry-consent">
+                <input id="telemetry-opt-in" type="checkbox">
+                <span><strong>匿名改进计划（默认关闭）</strong><small>只上传行业、规则编号、指标区间与效果方向；不上传店名、订单、素材、截图、Cookie 或 Token。</small></span>
+              </label>
+              <div class="feedback-queue-row"><span id="feedback-queue-note">未同意时不会入队，也不会发送。</span><button id="clear-feedback-queue" type="button">清空本地队列</button></div>
+            </div>
+          </details>
         </section>
       </details>
 
-      <details id="oceanengine-oauth-card" class="fold-card oauth-card">
+      <details id="ai-connection-center" class="fold-card ai-connection-center" aria-labelledby="ai-connection-title">
+        <summary>
+          <span class="ai-connection-title"><strong id="ai-connection-title">AI 分析连接</strong><small>可选能力 · 不影响本地巡店</small></span>
+          <b id="ai-connection-state" class="disconnected">AI未连接</b>
+        </summary>
+        <section class="ai-connection-panel">
+          <header class="ai-connection-heading">
+            <div>
+              <small>经营分析助手</small>
+              <h2>让 AI 看懂经营数据，不把投放控制权交给 AI</h2>
+              <p>连接后可生成诊断与影子建议；本地 Agent 仍负责数据脱敏、确定性校验、授权边界和审计。</p>
+            </div>
+            <span id="ai-provider-summary">尚未配置模型</span>
+          </header>
+
+          <div class="ai-capability-boundary" aria-label="AI 能力与投放权限边界">
+            <article class="available">
+              <span>AI 可以</span>
+              <strong>分析与提出建议</strong>
+              <small>读取脱敏经营上下文、解释异常、生成结构化影子提案。</small>
+            </article>
+            <article class="blocked">
+              <span>AI 不可以</span>
+              <strong>授权或执行投放</strong>
+              <small>不能调整预算、暂停计划、新建计划，也不能代替人工确认。</small>
+            </article>
+          </div>
+
+          <div class="ai-connection-layout">
+            <form id="ai-provider-form" class="ai-provider-form" autocomplete="off">
+              <div class="ai-section-heading">
+                <div><small>第 1 步</small><strong>选择并连接模型</strong></div>
+                <span>密钥加密保存在本机</span>
+              </div>
+              <label>AI 服务
+                <select id="ai-provider-select" name="provider">
+                  <option value="openai">GPT（OpenAI）</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="qwen_bailian">千问 / 阿里云百炼</option>
+                  <option value="glm_zhipu">智谱 GLM</option>
+                  <option value="hunyuan_tencent">腾讯混元</option>
+                  <option value="doubao_ark">豆包 / 火山引擎方舟</option>
+                  <option value="openai_compatible">OpenAI 兼容服务</option>
+                  <option value="local">本地模型</option>
+                </select>
+                <small id="ai-provider-note">选择服务后会显示对应的模型与地址提示；云端服务必须单独确认脱敏数据授权。</small>
+              </label>
+              <label>模型
+                <input id="ai-model-input" name="model" type="text" autocomplete="off" placeholder="例如：gpt-5-mini 或 deepseek-chat">
+              </label>
+              <label id="ai-base-url-field">服务地址
+                <input id="ai-base-url-input" name="base_url" type="url" autocomplete="off" placeholder="留空使用服务默认地址">
+                <small id="ai-base-url-note">留空将使用所选服务的默认地址。</small>
+              </label>
+              <label>API Key
+                <input id="ai-api-key-input" name="api_key" type="password" autocomplete="new-password" placeholder="输入后仅发送给本地 Agent；保存后不回显">
+                <small id="ai-api-key-note">页面不会读取或显示已经保存的密钥。</small>
+              </label>
+              <label id="ai-remote-consent-field" class="ai-remote-consent">
+                <input id="ai-remote-consent" name="remote_access_approved" type="checkbox">
+                <span><strong>同意把上方预览中的脱敏聚合数据发送给所选 AI</strong><small>不会发送登录凭证、订单明细、网页全文或真实店铺/账户标识；可随时停用连接。</small></span>
+              </label>
+              <div class="ai-provider-actions">
+                <button id="ai-test-connection" class="secondary" type="button">测试连接</button>
+                <button id="ai-save-connection" type="submit">保存连接</button>
+                <button id="ai-disable-connections" class="danger" type="button">停用全部 AI</button>
+              </div>
+              <p id="ai-connection-message" class="ai-inline-message" role="status" aria-live="polite">不连接 AI 也能继续使用本地巡店和规则诊断。</p>
+            </form>
+
+            <section class="ai-context-preview" aria-labelledby="ai-context-preview-title">
+              <div class="ai-section-heading">
+                <div><small>第 2 步</small><strong id="ai-context-preview-title">发送数据预览</strong></div>
+                <button id="ai-refresh-context-preview" class="text-button" type="button">刷新预览</button>
+              </div>
+              <div class="ai-preview-column allowed">
+                <strong>会发送</strong>
+                <ul id="ai-context-included">
+                  <li>匿名店铺标识与已选数据范围</li>
+                  <li>计划聚合指标、数据时间和本地规则结论</li>
+                </ul>
+              </div>
+              <div class="ai-preview-column excluded">
+                <strong>始终不发送</strong>
+                <ul id="ai-context-excluded">
+                  <li>Cookie、Token、API Key 和登录凭证</li>
+                  <li>消费者信息、订单明细、截图和网页全文</li>
+                </ul>
+              </div>
+              <small id="ai-context-preview-meta">等待读取本地脱敏策略。</small>
+            </section>
+          </div>
+
+          <section class="ai-shadow-workbench" aria-labelledby="ai-shadow-title">
+            <div>
+              <small>第 3 步 · 安全试运行</small>
+              <strong id="ai-shadow-title">先运行影子分析，再决定建议有没有价值</strong>
+              <p>影子运行只记录“AI 会怎么建议”和判断依据，不会触发千川写入。</p>
+            </div>
+            <div class="ai-shadow-actions">
+              <button id="ai-run-shadow" type="button" disabled>运行影子分析</button>
+              <button id="ai-view-proposals" class="secondary" type="button">查看建议</button>
+            </div>
+          </section>
+          <p id="ai-shadow-message" class="ai-inline-message" role="status" aria-live="polite">连接可用后即可运行影子分析；真实投放权限保持关闭。</p>
+          <div id="ai-proposal-list" class="ai-proposal-list" hidden>
+            <div class="ai-proposal-empty">暂无影子建议。先选择当前店铺并运行一次影子分析。</div>
+          </div>
+          <footer class="ai-safety-footer">
+            <strong>投放安全边界</strong>
+            <span>AI 连接 ≠ 投放授权。预算调整、计划暂停与新建计划仍由独立的资格校验、人工授权和执行前回读控制。</span>
+          </footer>
+        </section>
+      </details>
+
+      <details id="oceanengine-oauth-card" class="fold-card oauth-card professional-experience-only">
         <summary>官方 API 授权 <span id="oceanengine-oauth-state">尚未连接</span></summary>
         <section class="oauth-panel">
           <div class="oauth-intro">
@@ -172,10 +503,41 @@
           <div id="oceanengine-accounts" class="oauth-accounts" hidden></div>
           <small id="oceanengine-oauth-result">第一次填写 App Secret；以后新增账号直接点“授权千川账号”。密钥和 Token 不上传到 GitHub。</small>
           <small id="oceanengine-sync-result">同步会自动读取已授权店铺关联的广告账户、计划、7 日经营报表和视频素材；不会修改投放。</small>
+          <section id="oceanengine-account-center" class="oauth-account-center" aria-labelledby="oauth-center-title">
+            <header class="oauth-center-heading">
+              <div>
+                <span>多账户经营底座</span>
+                <strong id="oauth-center-title">千川账户中心 2.0</strong>
+                <p>统一查看授权有效期、广告账户映射、同步健康度和可用能力；先选账户，再预演影响。</p>
+              </div>
+              <b id="oauth-center-safety">真实投放写入：关闭</b>
+            </header>
+            <div class="oauth-center-metrics" aria-label="账户概览">
+              <article><strong id="oauth-center-total">0</strong><span>授权账户</span></article>
+              <article><strong id="oauth-center-managed">0</strong><span>本地托管</span></article>
+              <article class="attention"><strong id="oauth-center-attention">0</strong><span>需要处理</span></article>
+              <article><strong id="oauth-center-advertisers">0</strong><span>广告账户</span></article>
+            </div>
+            <div class="oauth-center-filters">
+              <label>搜索账户或店铺<input id="oauth-center-search" type="search" autocomplete="off" placeholder="名称、尾号或店铺"></label>
+              <label>账户状态<select id="oauth-center-status-filter"><option value="all">全部状态</option><option value="ready">经营就绪</option><option value="needs_auth">需要授权</option><option value="needs_sync">等待同步</option><option value="degraded">需要处理</option><option value="paused">暂停同步</option></select></label>
+              <label>账户分组<select id="oauth-center-group-filter"><option value="all">全部分组</option></select></label>
+            </div>
+            <div id="oauth-center-list" class="oauth-center-list">
+              <p class="oauth-center-empty">完成官方授权后，这里会出现账户能力与同步状态。</p>
+            </div>
+            <footer class="oauth-center-batch">
+              <div><strong id="oauth-center-selection">尚未选择账户</strong><small>不会默认全选，避免跨账户误操作。</small></div>
+              <label>批量动作<select id="oauth-center-batch-action"><option value="sync">同步官方数据</option><option value="schedule">定时启停预演</option><option value="pause">暂停计划预演</option><option value="budget_decrease">降低预算预演</option></select></label>
+              <button id="oauth-center-preview" type="button" disabled>预演影响</button>
+              <button id="oauth-center-run-sync" type="button" hidden disabled>确认只读同步</button>
+            </footer>
+            <div id="oauth-center-preview-result" class="oauth-center-preview-result" role="status">批量投放动作只生成预演；只读数据同步可在确认后执行。</div>
+          </section>
         </section>
       </details>
 
-      <details class="fold-card integrations-card">
+      <details class="fold-card integrations-card professional-experience-only">
         <summary>飞书 / 钉钉通知 <span id="integration-status">未连接</span></summary>
         <section class="integrations-panel">
           <p class="settings-intro">无需申请开发者 API。在目标群添加“自定义机器人”，复制 Webhook 粘贴到下方即可。建议把安全关键词设为“店策 Agent”。</p>
@@ -214,24 +576,18 @@
         </section>
       </details>
 
-      <section class="hero">
+      <section class="hero professional-experience-only">
         <div class="hero-copy">
           <div class="eyebrow">今日经营简报</div>
           <h2 id="headline">等待首次同步</h2>
-          <p id="summary">打开后台页面后点击“同步并诊断”。</p>
+          <p id="summary">先开始一次巡店，系统会把异常整理成今日任务。</p>
         </div>
         <div class="hero-actions">
-          <button id="sync-diagnose" class="primary">同步并诊断</button>
+          <button id="sync-diagnose" class="primary">刷新当前建议</button>
           <button id="copy-brief" class="secondary">复制简报</button>
           <button id="export-tasks" class="secondary">导出任务</button>
         </div>
       </section>
-
-      <nav id="role-nav" class="role-nav" aria-label="选择业务工作台">
-        <button class="active" data-role="货架商品">货架商品</button>
-        <button data-role="直播投放">直播投放</button>
-        <button data-role="内容">内容</button>
-      </nav>
 
       <section id="next-best-action" class="next-best-action" aria-live="polite">
         <div>
@@ -242,14 +598,14 @@
         <button id="next-best-action-button" type="button">去处理</button>
       </section>
 
-      <section class="today-focus-card" aria-label="今日经营四问">
+      <section class="today-focus-card professional-experience-only" aria-label="今日经营四问">
         <div><small>今日三件事</small><strong id="today-three-summary">等待任务</strong></div>
         <div class="risk"><small>当前最大风险</small><strong id="today-max-risk">正在检查</strong></div>
         <div><small>昨日动作结果</small><strong id="yesterday-action-result">暂无复盘</strong></div>
         <div class="warning"><small>未同步数据</small><strong id="unsynced-data-summary">正在检查</strong></div>
       </section>
 
-      <section class="operator-memory-card" aria-label="本店经营记忆">
+      <section class="operator-memory-card professional-experience-only" aria-label="本店经营记忆">
         <div class="section-heading">
           <div>
             <h3>本店经营记忆</h3>
@@ -258,7 +614,7 @@
           <button id="operator-memory-refresh" class="secondary" type="button">刷新记忆</button>
         </div>
         <p id="operator-memory-note" class="section-intro">只保存当前店铺和千川账号的可复用经验，不保存 Token、Cookie 或原始页面内容。</p>
-        <div id="operator-memory-list" class="operator-memory-list empty-state">选择店铺并完成一次同步后，这里会显示可复用的经营经验。</div>
+        <div id="operator-memory-list" class="operator-memory-list empty-state">完成一次巡店后，这里会显示可复用的经营经验。</div>
         <form id="operator-memory-form" class="operator-memory-form">
           <input id="operator-memory-title" maxlength="120" placeholder="记忆标题，例如：库存红线" aria-label="记忆标题" required>
           <select id="operator-memory-type" aria-label="记忆类型">
@@ -272,7 +628,7 @@
         </form>
       </section>
 
-      <section class="manager-card" aria-label="今日处置队列">
+      <section id="today-task-center" class="manager-card" aria-label="今日处置队列">
         <div class="section-heading manager-heading">
           <div>
             <h3 id="task-heading">今日处置队列</h3>
@@ -285,14 +641,35 @@
         </div>
         <div id="manager-queue-stats" class="queue-stats" aria-label="处置队列状态"></div>
         <div id="manager-tasks" class="stack empty-state">正在汇总各岗位任务</div>
+        <details id="product-capability-card" class="product-capability-card" data-level="setup_required" aria-labelledby="product-capability-level">
+          <summary class="product-capability-heading">
+            <div>
+              <small>系统能力与证据</small>
+              <strong id="product-capability-level">正在核对本机证据</strong>
+              <p id="product-capability-truth">只把已经走通的能力算作可用；需要时展开查看，不阻挡今日任务。</p>
+            </div>
+            <b><span id="product-capability-ready-count">0</span> / 5</b>
+          </summary>
+          <div class="product-capability-body">
+            <div id="product-capability-progress" class="product-capability-progress" role="progressbar" aria-label="经营闭环完成度" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0"><span></span></div>
+            <ol id="product-capability-stages" class="product-capability-stages" aria-label="经营闭环五个阶段"></ol>
+            <footer class="product-capability-next">
+              <div>
+                <small>当前阻断 / 下一步</small>
+                <strong id="product-capability-next-reason">先确认当前店铺与数据范围。</strong>
+              </div>
+              <button id="product-capability-next" type="button" data-workspace-target="scan-card" data-workspace-title="开始巡店" data-workspace-subtitle="打开抖店后自动准备数据，再进入下一步。">去处理</button>
+            </footer>
+          </div>
+        </details>
       </section>
 
-      <section id="growth-section" class="growth-card">
+      <section id="growth-section" class="growth-card professional-experience-only">
         <div class="section-heading"><h3>今日增长机会</h3><span id="growth-count">0 项</span></div>
         <div id="growth-tasks" class="stack empty-state">暂无稳定增长机会</div>
       </section>
 
-      <section class="workbench-switcher" aria-label="岗位工作台设置">
+      <section class="workbench-switcher professional-experience-only" aria-label="岗位工作台设置">
         <div>
           <strong id="workbench-title">货架商品工作台</strong>
           <small id="workbench-description">把商品承接、库存和货架转化放在同一条经营链路中</small>
@@ -307,14 +684,14 @@
         </label>
       </section>
 
-      <section class="scan-card" aria-label="全店自动巡检">
+      <section id="scan-card" class="scan-card" aria-label="全店自动巡检">
         <div class="scan-head">
-          <div><strong>全店自动巡检</strong><p id="scan-detail">按清单自动打开页面并采集，不需要 API</p></div>
+          <div><strong id="scan-title">全店自动巡检</strong><p id="scan-detail">按清单自动打开页面并采集，不需要 API</p></div>
           <span id="scan-state" class="scan-tag idle" aria-live="polite">未运行</span>
         </div>
         <div class="scan-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="scan-progress-bar"></span></div>
         <div class="scan-actions">
-          <button id="full-scan-button">自动获取全店数据</button>
+          <button id="full-scan-button">开始全店巡检</button>
           <button id="retry-scan-button" hidden>按当前千川账号重试</button>
           <button id="cancel-scan-button" hidden>停止巡检</button>
         </div>
@@ -324,7 +701,7 @@
         </div>
       </section>
 
-      <details id="scan-receipt-card" class="fold-card scan-receipt-card">
+      <details id="scan-receipt-card" class="fold-card scan-receipt-card professional-experience-only">
         <summary>数据体检单 <span id="scan-receipt-state">等待巡查</span></summary>
         <section>
           <div id="scan-receipt-summary" class="receipt-metrics"></div>
@@ -333,20 +710,20 @@
         </section>
       </details>
 
-      <section class="progress-card">
+      <section class="progress-card professional-experience-only">
         <div><strong id="progress-rate">0%</strong><small>今日完成</small></div>
         <div><strong id="doing-count">0</strong><small>进行中</small></div>
         <div><strong id="observing-count">0</strong><small>待观察</small></div>
         <div><strong id="data-freshness">--</strong><small>数据状态</small></div>
       </section>
 
-      <section class="value-ledger-card" aria-label="经营价值账本">
+      <section class="value-ledger-card professional-experience-only" aria-label="经营价值账本">
         <div class="section-heading"><h3>经营价值账本</h3><span id="value-ledger-status">等待执行复盘</span></div>
         <div id="value-ledger-metrics" class="metric-strip"></div>
         <p id="value-ledger-note" class="section-intro">完成受监督执行和效果复查后，这里会记录 Agent 参与的预算范围与有效率。</p>
       </section>
 
-      <section class="template-card">
+      <section class="template-card professional-experience-only">
         <div class="section-heading">
           <h3 id="template-heading">本班次标准动作</h3>
           <span id="template-progress">0/0</span>
@@ -355,26 +732,231 @@
         <div id="template-tasks" class="template-tasks"></div>
       </section>
 
-      <section class="trend-card">
+      <section class="trend-card professional-experience-only">
         <div class="section-heading"><h3>近7天经营变化</h3><span id="trend-count">积累中</span></div>
         <div id="trend-list" class="trend-list empty-state">历史数据正在积累，完成两次巡检后开始展示变化</div>
       </section>
 
-      <section class="module-section" data-owner="货架商品">
+      <section id="product-operating-graph" class="module-section wide-module product-operating-graph" data-owner="货架商品" aria-labelledby="product-operating-graph-title">
+        <header class="product-graph-heading">
+          <div>
+            <span>商品经营</span>
+            <h3 id="product-operating-graph-title">商品卡</h3>
+            <p>一件商品一张卡，只保留状态、核心指标、风险和下一步。</p>
+          </div>
+          <div class="product-graph-heading-actions">
+            <b id="product-graph-status">等待商品数据</b>
+            <button id="product-graph-collect" type="button">同步商品</button>
+          </div>
+        </header>
+        <div id="product-graph-metrics" class="metric-strip product-graph-metrics business-support" hidden></div>
+        <div id="product-graph-readiness" class="product-graph-readiness business-support" aria-label="商品数据采集就绪度" hidden></div>
+        <div id="product-graph-list" class="product-graph-list empty-state">同步商品页后，这里会按一件商品一张卡展示。</div>
+        <p id="product-graph-note" class="business-support" hidden>商品关联只使用平台商品 ID、SKU ID 或商家编码；同名商品不会自动合并。</p>
+      </section>
+
+      <section id="shelf-business-center" class="module-section legacy-product-detail" data-owner="">
         <div class="section-heading"><h3>货架转化诊断</h3><span id="shelf-status">等待数据</span></div>
         <p class="section-intro">按“曝光 → 点击 → 成交”查找流失环节，只展示今天需要处理的问题。</p>
         <div id="shelf-metrics" class="metric-strip"></div>
         <div id="shelf-actions" class="stack empty-state">同步商城经营页面后，这里会告诉你先改主图、标题还是商品承接。</div>
       </section>
 
-      <section class="module-section" data-owner="直播投放">
-        <div class="section-heading"><h3>直播转化诊断</h3><span id="live-status">等待数据</span></div>
-        <p class="section-intro">按“进房 → 商品点击 → 下单”定位问题，给出下一场直播的具体调整动作。</p>
+      <section id="live-plan-management-section" class="module-section" data-owner="直播投放">
+        <div class="section-heading"><h3>直播风险判断</h3><span id="live-status">等待数据</span></div>
+        <p class="section-intro">先看红黄绿结论和当前唯一动作，再按“进房 → 商品点击 → 下单”定位漏损。</p>
         <div id="live-metrics" class="metric-strip"></div>
+        <details id="live-pacing-card" class="inner-fold live-pacing-card" open>
+          <summary>直播风险判断 <span id="live-pacing-status">等待本场连续数据</span></summary>
+          <p class="section-intro">用本场连续数据计算消耗与成交速度；场次重置、数据过期或字段缺失时停止判断。</p>
+          <div class="live-pacing-metrics">
+            <article><span>最近消耗速度</span><strong id="live-pacing-spend-rate">待积累</strong></article>
+            <article><span>最近成交速度</span><strong id="live-pacing-order-rate">待积累</strong></article>
+            <article><span>当前 / 窗口 ROI</span><strong id="live-pacing-roi">待积累</strong></article>
+            <article><span>最后更新</span><strong id="live-pacing-age">等待同步</strong></article>
+          </div>
+          <article id="live-pacing-decision" class="live-pacing-decision info">
+            <header><b id="live-pacing-decision-title">先积累直播速度样本</b><span id="live-pacing-pace">速度待积累</span></header>
+            <p id="live-pacing-decision-action">保持当前设置，取得至少两个同场次快照后再判断。</p>
+            <small id="live-pacing-decision-evidence">缺失值不会按 0 处理。</small>
+          </article>
+          <div id="live-pacing-blockers" class="live-pacing-blockers">至少需要两个同场次快照。</div>
+          <div id="live-pacing-intervals" class="live-pacing-intervals empty-state">尚无可比较的增量窗口。</div>
+          <footer>
+            <p id="live-pacing-source">本场开播至当前 · 只读本机快照 · 不自动修改预算、时长或计划状态</p>
+            <small id="live-pacing-sync-result" role="status" aria-live="polite">请打开直播大屏后读取；错误页面不会保存。</small>
+            <div><button id="live-pacing-sync" type="button">读取当前直播大屏</button><button type="button" class="secondary" data-workspace-target="promotion-plan-center" data-workspace-title="全部投放计划" data-workspace-subtitle="统一查看直播、商品、全域、乘方与随心推计划。">查看全部计划</button></div>
+          </footer>
+        </details>
         <div id="live-actions" class="stack empty-state">同步店铺直播或千川直播大屏后，这里会生成直播调整清单。</div>
       </section>
 
-      <section id="promotion-mode-workbench" class="module-section wide-module promotion-mode-workbench" data-owner="直播投放" aria-labelledby="promotion-mode-heading">
+      <section id="promotion-plan-center" class="module-section wide-module promotion-plan-center" data-owner="直播投放" data-empty="true" aria-labelledby="promotion-plan-center-title">
+        <header class="promotion-plan-center-heading">
+          <div>
+            <span>直播与投放 · 计划管理</span>
+            <h3 id="promotion-plan-center-title">全部投放计划</h3>
+            <p>全域、乘方、随心推、直播计划和商品计划统一筛选、创建和管理。</p>
+          </div>
+          <div class="promotion-plan-heading-status">
+            <b id="promotion-plan-center-state">等待本机数据</b>
+            <small id="promotion-plan-center-time">尚未同步</small>
+            <button id="promotion-plan-batch-shortcut" type="button">生成计划草稿</button>
+          </div>
+        </header>
+        <div id="promotion-plan-collection-receipt" class="promotion-plan-collection-receipt unknown" role="status" aria-live="polite">
+          <div class="promotion-plan-receipt-heading">
+            <span id="promotion-plan-coverage-state-label">数据准备</span>
+            <strong id="promotion-plan-coverage-title">覆盖范围待确认</strong>
+          </div>
+          <div class="promotion-plan-coverage-next">
+            <div class="promotion-plan-coverage-blocker">
+              <span id="promotion-plan-coverage-blocker-label">阻塞原因</span>
+              <small id="promotion-plan-coverage-warning">尚未读取到当前范围的完整计划。</small>
+            </div>
+            <div class="promotion-plan-coverage-action-box">
+              <span>唯一下一步</span>
+              <button id="promotion-plan-coverage-action" type="button" data-recovery-kind="sync_page">同步当前计划列表</button>
+            </div>
+          </div>
+          <details class="promotion-plan-coverage-evidence">
+            <summary>查看读取证据</summary>
+            <p id="promotion-plan-coverage-detail">平台总数未确认 · 已读取 0 条 · 计划 ID 与投放模式待核验</p>
+          </details>
+        </div>
+        <div class="promotion-plan-toolbar">
+          <label>广告账户<select id="promotion-plan-account-filter"><option value="all">全部账户</option></select></label>
+          <label>投放模式<select id="promotion-plan-mode-filter"><option value="all">全部模式</option><option value="full_domain">全域推广</option><option value="chengfang">乘方推广</option><option value="suixintui">随心推</option><option value="standard">标准计划</option><option value="unknown">模式待识别</option></select></label>
+          <label>计划类型<select id="promotion-plan-type-filter"><option value="all">全部类型</option><option value="live">直播计划</option><option value="product">商品计划</option><option value="unknown">类型待识别</option></select></label>
+          <label class="promotion-plan-search">搜索计划<input id="promotion-plan-search" type="search" placeholder="计划名称、ID、账户"></label>
+          <button id="promotion-plan-refresh" type="button">同步并刷新</button>
+        </div>
+        <details id="promotion-plan-advanced-filters" class="promotion-plan-advanced-filters">
+          <summary><span>更多筛选</span><small>状态、绑定与托管能力</small></summary>
+          <div class="promotion-plan-advanced-filter-grid">
+            <label>投放状态<select id="promotion-plan-status-filter"><option value="all">全部状态</option><option value="投放中">投放中</option><option value="暂停">暂停</option><option value="状态待识别">状态待识别</option></select></label>
+            <label>绑定状态<select id="promotion-plan-binding-filter"><option value="all">全部绑定</option><option value="bound">已本地绑定</option><option value="unbound">可绑定</option><option value="blocked">暂不可绑定</option></select></label>
+            <div id="promotion-plan-feature-filters" class="promotion-plan-feature-filters" aria-label="按托管功能筛选">
+              <span>托管能力</span>
+              <label><input type="checkbox" value="ai_pricing">AI 托管调价</label>
+              <label><input type="checkbox" value="schedule">定时启停</label>
+              <label><input type="checkbox" value="auto_stop">自动关停</label>
+              <label><input type="checkbox" value="auto_budget">自动补预算</label>
+              <label><input type="checkbox" value="scale">一键起量</label>
+              <label><input type="checkbox" value="ai_follow">AI 托管追投</label>
+              <label><input type="checkbox" value="notify">消息通知</label>
+            </div>
+          </div>
+        </details>
+        <div class="promotion-plan-summary">
+          <article><span>当前计划</span><strong id="promotion-plan-visible">0</strong><small id="promotion-plan-total">共 0 个计划</small></article>
+          <article><span>筛选消耗</span><strong id="promotion-plan-spend">¥0.00</strong><small>缺失值不按 0 补齐</small></article>
+          <article><span>加权 ROI</span><strong id="promotion-plan-roi">--</strong><small>仅计算有消耗的计划</small></article>
+          <article><span>本地绑定</span><strong id="promotion-plan-bound">0</strong><small id="promotion-plan-blocked">0 个待补齐</small></article>
+        </div>
+        <div class="promotion-plan-selection-bar">
+          <div><strong id="promotion-plan-selected-count">已选 0 项</strong><small>最多选择 50 项；跨账户会自动分组复核</small></div>
+          <div>
+            <button id="promotion-plan-open-bulk" type="button" disabled>预演所选计划动作</button>
+            <button id="promotion-plan-clear-selection" type="button" class="secondary" disabled>清空选择</button>
+          </div>
+        </div>
+        <div class="promotion-plan-table-wrap">
+          <table class="promotion-plan-table">
+            <thead><tr><th class="promotion-plan-select-cell"><input id="promotion-plan-select-all" type="checkbox" aria-label="选择当前筛选下全部计划"></th><th>计划</th><th>账户 / 类型</th><th>状态</th><th>消耗 / ROI</th><th>本地托管能力</th><th>下一步</th></tr></thead>
+            <tbody id="promotion-plan-table-body"></tbody>
+          </table>
+          <div id="promotion-plan-empty" class="promotion-plan-empty">请选择账户或同步千川计划后查看。</div>
+        </div>
+        <footer class="promotion-plan-center-footer">
+          <p id="promotion-plan-notice">计划中心只读取本机快照；本地绑定不会修改千川。</p>
+          <label>新绑定默认策略<select id="promotion-plan-binding-profile"><option value="protect">守钱托管</option><option value="stabilize">稳定经营</option><option value="manual">人工复核</option></select></label>
+          <button type="button" data-workspace-target="oceanengine-oauth-card">管理账户授权</button>
+        </footer>
+      </section>
+
+      <section id="promotion-bulk-action-center" class="module-section wide-module promotion-bulk-action-center" data-owner="直播投放" aria-labelledby="promotion-bulk-action-title">
+        <header class="promotion-bulk-action-heading">
+          <div>
+            <span>批量动作预演 · 不写入平台</span>
+            <h3 id="promotion-bulk-action-title">先批量检查，再逐项确认</h3>
+            <p>借鉴成熟投放工具的批量工作流，把“选计划—设动作—查阻塞—逐项复核”收进一个页面。</p>
+          </div>
+          <b id="promotion-bulk-action-state" class="warning">尚未选择计划</b>
+        </header>
+        <div class="promotion-bulk-steps" aria-label="批量动作预演步骤">
+          <div class="current"><b>1</b><span><strong>选择计划</strong><small>最多 50 项</small></span></div>
+          <div><b>2</b><span><strong>动作预演</strong><small>单变量检查</small></span></div>
+          <div><b>3</b><span><strong>逐项复核</strong><small>阻塞项不放行</small></span></div>
+          <div><b>4</b><span><strong>受监督执行</strong><small>当前保持关闭</small></span></div>
+          <div><b>5</b><span><strong>结果回读</strong><small>证据闭环</small></span></div>
+        </div>
+        <div class="promotion-bulk-action-layout">
+          <section class="promotion-bulk-selection-review">
+            <header><div><span>本次作用范围</span><strong id="promotion-bulk-selected-title">尚未选择计划</strong></div><button id="promotion-bulk-back-to-plans" type="button">返回计划总览</button></header>
+            <div id="promotion-bulk-selected-list" class="promotion-bulk-selected-list empty-state">在投放总览勾选计划后，这里会按账户展示本次作用范围。</div>
+          </section>
+          <section class="promotion-bulk-config">
+            <header><span>只改变一个变量</span><strong>选择本次批量动作</strong></header>
+            <label>批量动作
+              <select id="promotion-bulk-action-type">
+                <option value="decrease_budget">批量降预算预演</option>
+                <option value="pause_plan">批量暂停预演</option>
+                <option value="schedule_plan">批量定时启停预演</option>
+              </select>
+            </label>
+            <label id="promotion-bulk-budget-field">统一降低比例
+              <span class="promotion-bulk-input-suffix"><input id="promotion-bulk-decrease-percent" type="number" min="5" max="30" step="5" value="20"><b>%</b></span>
+              <small>安全范围 5%–30%，不会同时调整出价或时长。</small>
+            </label>
+            <div id="promotion-bulk-schedule-fields" class="promotion-bulk-schedule-fields" hidden>
+              <label>每日开始<input id="promotion-bulk-schedule-start" type="time" value="09:00"></label>
+              <label>每日结束<input id="promotion-bulk-schedule-end" type="time" value="23:00"></label>
+            </div>
+            <p id="promotion-bulk-action-description">按统一比例计算目标预算，不改出价、时长或计划状态。</p>
+            <button id="promotion-bulk-generate" type="button" disabled>生成批量动作预演</button>
+          </section>
+        </div>
+        <section class="promotion-bulk-preview" aria-labelledby="promotion-bulk-preview-title">
+          <header><div><span>预演结果</span><strong id="promotion-bulk-preview-title">尚未生成批量草稿</strong></div><button id="promotion-bulk-copy" type="button" disabled>复制复核清单</button></header>
+          <div id="promotion-bulk-preview-summary" class="promotion-bulk-preview-summary"></div>
+          <div id="promotion-bulk-preview-list" class="promotion-bulk-preview-list empty-state">生成后会列出可复核计划、阻塞原因和变更前后值。</div>
+          <p id="promotion-bulk-notice" class="promotion-bulk-notice">只在本机生成草稿；不会自动点击页面，也不会提交千川。</p>
+        </section>
+      </section>
+
+      <section id="promotion-operation-log" class="module-section wide-module promotion-operation-log" data-owner="直播投放" aria-labelledby="promotion-operation-log-title">
+        <header class="promotion-operation-log-heading">
+          <div><span>可追溯经营 · 本机审计</span><h3 id="promotion-operation-log-title">投放操作日志</h3><p>记录动作从生成、确认、撤销、执行到结果回读的完整生命周期。</p></div>
+          <div><b id="promotion-operation-log-state" class="safe">真实写入关闭</b><small id="promotion-operation-log-time">等待读取日志</small></div>
+        </header>
+        <div class="promotion-operation-log-toolbar">
+          <label>动作类型<select id="promotion-log-operation-filter"><option value="all">全部动作</option><option value="adjust_budget">调整预算</option><option value="restore_budget">恢复预算</option><option value="pause_plan">暂停计划</option><option value="adjust_bid">调整出价</option><option value="set_schedule">定时启停</option></select></label>
+          <label>生命周期<select id="promotion-log-state-filter"><option value="all">全部状态</option><option value="draft">待复核</option><option value="confirmed">已确认待执行</option><option value="cancelled">已撤销</option><option value="succeeded">已执行待回读</option><option value="verified">回读已验证</option><option value="failed">执行失败</option><option value="expired">已过期</option></select></label>
+          <label>开始日期<input id="promotion-log-date-from" type="date"></label>
+          <label>结束日期<input id="promotion-log-date-to" type="date"></label>
+          <label class="promotion-operation-log-search">搜索<input id="promotion-log-search" type="search" placeholder="计划、账户、动作编号"></label>
+          <button id="promotion-log-refresh" type="button">刷新日志</button>
+          <button id="promotion-log-export" type="button" class="secondary" disabled>导出 CSV</button>
+        </div>
+        <div class="promotion-operation-log-summary">
+          <article><span>全部记录</span><strong id="promotion-log-total">0</strong></article>
+          <article><span>当前结果</span><strong id="promotion-log-visible">0</strong></article>
+          <article><span>已确认</span><strong id="promotion-log-confirmed">0</strong></article>
+          <article><span>已执行</span><strong id="promotion-log-executed">0</strong></article>
+          <article><span>已撤销</span><strong id="promotion-log-cancelled">0</strong></article>
+        </div>
+        <div class="promotion-operation-log-table-wrap">
+          <table class="promotion-operation-log-table">
+            <thead><tr><th>时间</th><th>动作</th><th>账户 / 计划</th><th>变更</th><th>状态</th><th>证据</th></tr></thead>
+            <tbody id="promotion-operation-log-body"></tbody>
+          </table>
+          <div id="promotion-operation-log-empty" class="promotion-operation-log-empty">暂无操作记录。动作必须进入本机审计后才会出现在这里。</div>
+        </div>
+        <footer><p id="promotion-operation-log-notice">日志只记录本机动作生命周期；没有回读证据的动作不会显示为已验证。</p><button id="promotion-log-clear-filters" type="button">清空筛选</button></footer>
+      </section>
+
+      <section id="promotion-mode-workbench" class="module-section wide-module promotion-mode-workbench professional-experience-only" data-owner="直播投放" aria-labelledby="promotion-mode-heading">
         <div class="section-heading promotion-mode-heading">
           <div>
             <h3 id="promotion-mode-heading">千川投放模式</h3>
@@ -391,8 +973,187 @@
         <div id="chengfang-panel" class="chengfang-panel" aria-live="polite">
           <article id="chengfang-notice" class="chengfang-notice danger">
             <div aria-hidden="true">!</div>
-            <p><strong>千川乘方当前仅提供只读诊断</strong><span>乘方采用总预算与综合 ROI 经营模式，不得使用旧版单计划预算、暂停或恢复功能。</span></p>
+            <p><strong id="chengfang-notice-title">A1 / A2 仍是模拟；单计划降预算可申请受控生产写入</strong><span id="chengfang-notice-detail">生产写入只走官方 API，必须先预检、输入精确确认词、单次授权并完成官方回读；加预算、批量修改和网页点击兜底仍关闭。</span></p>
           </article>
+          <section id="autopilot-center" class="autopilot-center" aria-labelledby="autopilot-center-heading">
+            <header class="autopilot-center-head">
+              <div>
+                <span>经营闭环 · 先定责任，再选自动化</span>
+                <h3 id="autopilot-center-heading">投放托管中心</h3>
+                <p>把账户、策略、批量候选和回读放在一条路径里；第一次使用默认从“守钱”开始。</p>
+              </div>
+              <b id="autopilot-center-status" class="warning">等待准备</b>
+            </header>
+            <div class="autopilot-center-modes" role="group" aria-label="选择托管模式">
+              <button type="button" class="active" data-autopilot-mode="protect" aria-pressed="true">
+                <span>首次托管</span><strong>守钱</strong><small>先止损，减少无效消耗</small><b>默认</b>
+              </button>
+              <button type="button" data-autopilot-mode="stabilize" aria-pressed="false">
+                <span>影子验证后</span><strong>稳投</strong><small>小幅调节，守住利润波动</small><b>待解锁</b>
+              </button>
+              <button type="button" data-autopilot-mode="scale" aria-pressed="false">
+                <span>生产验收后</span><strong>放量</strong><small>受控提量，必须可回读回滚</small><b>未开放</b>
+              </button>
+            </div>
+            <p id="autopilot-center-mode-note" class="autopilot-center-mode-note">守钱模式只整理降预算与高风险暂停候选，不会自动提交。</p>
+            <section class="autopilot-operating-loop" aria-labelledby="autopilot-operating-heading">
+              <header>
+                <div><span>经营阶段策略 · 关停后仍要有下一步</span><strong id="autopilot-operating-heading">经营策略与恢复闭环</strong></div>
+                <b id="autopilot-recovery-status" class="warning">等待经营建档</b>
+              </header>
+              <div class="autopilot-operating-metrics">
+                <article><span>经营阶段</span><strong id="autopilot-business-stage">待确认</strong><small id="autopilot-business-weights">目标权重待计算</small></article>
+                <article><span>保本 / 恢复观察线</span><strong id="autopilot-business-roi">待计算</strong><small>只用于本机候选判断</small></article>
+                <article><span>流量归因</span><strong id="autopilot-business-attribution">待补齐</strong><small>避免把自然成交全算给投放</small></article>
+                <article><span>恢复边界</span><strong id="autopilot-recovery-boundary">待配置</strong><small>冷却、轮数与人工复核</small></article>
+              </div>
+              <div id="autopilot-recovery-blockers" class="autopilot-recovery-blockers">先完成经营目标、成本、归因和技术护栏建档。</div>
+              <div id="autopilot-recovery-steps" class="autopilot-recovery-steps">
+                <div class="current"><strong>1. 样本观察</strong><span>等待可信数据</span></div>
+                <div><strong>2. 暂停候选</strong><span>尚未触发</span></div>
+                <div><strong>3. 冷却复检</strong><span>尚未开始</span></div>
+                <div><strong>4. 恢复或重建</strong><span>必须复核</span></div>
+                <div><strong>5. 结果回读</strong><span>等待验收</span></div>
+              </div>
+              <p id="autopilot-recovery-rule">关键阈值待补齐；不会使用猜测值启动恢复循环。</p>
+            </section>
+            <details class="autopilot-package-preview">
+              <summary>
+                <div><span>托管策略包</span><strong id="autopilot-package-name">守钱 · 待预览</strong></div>
+                <b id="autopilot-package-status">尚未保存</b>
+              </summary>
+              <div class="autopilot-package-metrics">
+                <article><span>证据来源</span><strong id="autopilot-package-evidence">经营建档与人工边界</strong></article>
+                <article><span>影响作用域</span><strong id="autopilot-package-plans">0 个匿名计划</strong></article>
+                <article><span>配置变化</span><strong id="autopilot-package-change-count">0 项</strong></article>
+                <article><span>执行方式</span><strong>只生成草稿</strong></article>
+              </div>
+              <div id="autopilot-package-blockers" class="autopilot-package-blockers">请先补齐店铺、账户和经营边界。</div>
+              <div id="autopilot-package-changes" class="autopilot-package-changes empty-state">完成经营建档后显示新旧配置差异。</div>
+              <footer>
+                <p id="autopilot-package-notice">首次保存只建立本机策略包，不会修改千川。</p>
+                <button id="autopilot-package-apply" type="button" disabled>保存策略包到本机</button>
+              </footer>
+            </details>
+            <div class="autopilot-center-metrics">
+              <article><span>当前抖店</span><strong id="autopilot-center-store">等待打开抖店</strong><small id="autopilot-center-source">打开后自动准备</small></article>
+              <article><span>千川账户</span><strong id="autopilot-center-account">等待选择</strong><small>各账户数据与日志互不混用</small></article>
+              <article><span>影子证据</span><strong id="autopilot-center-shadow">0/7 有效日</strong><small>先验证判断与回读</small></article>
+              <article><span>执行权限</span><strong id="autopilot-center-write">真实写入关闭</strong><small>逐计划短时授权</small></article>
+            </div>
+            <section class="autopilot-center-draft" aria-labelledby="autopilot-center-draft-heading">
+              <header>
+                <div><span>今日托管队列</span><strong id="autopilot-center-draft-heading">批量动作草稿</strong></div>
+                <b id="autopilot-center-draft-count">0 条</b>
+              </header>
+              <div id="autopilot-center-drafts" class="autopilot-center-drafts empty-state">选择千川账户并同步数据后，这里会汇总最多 3 条待复核草稿。</div>
+            </section>
+            <section id="control-task-center" class="control-task-center" aria-labelledby="control-task-center-heading">
+              <header>
+                <div>
+                  <span>控制任务中心 · 一次只改一个变量</span>
+                  <strong id="control-task-center-heading">启停、预算、时长分开授权与回读</strong>
+                  <p>每类动作独立建任务，避免暂停、改预算和改时长在一次操作中互相污染结果。</p>
+                </div>
+                <b id="control-task-center-status" class="warning">等待本机 Agent</b>
+              </header>
+              <div class="control-task-family-tabs" role="tablist" aria-label="选择控制任务类型">
+                <button type="button" role="tab" data-control-task-family="status" aria-selected="false"><span>状态</span><strong>启用 / 暂停 / 结束</strong><b id="control-task-status-count">0</b></button>
+                <button type="button" role="tab" class="active" data-control-task-family="budget" aria-selected="true"><span>预算</span><strong>降低 / 提高预算</strong><b id="control-task-budget-count">0</b></button>
+                <button type="button" role="tab" data-control-task-family="duration" aria-selected="false"><span>时长</span><strong>缩短 / 延长窗口</strong><b id="control-task-duration-count">0</b></button>
+              </div>
+              <p id="control-task-family-note" class="control-task-family-note">预算升降单独建任务；首发生产边界只允许单任务降预算。</p>
+              <div class="control-task-metrics">
+                <article><span>全部任务</span><strong id="control-task-total">0</strong><small>按当前店铺与账户隔离</small></article>
+                <article><span>等待处理</span><strong id="control-task-pending">0</strong><small>复核、模拟或回读</small></article>
+                <article><span>模拟通过</span><strong id="control-task-verified">0</strong><small>不代表千川已修改</small></article>
+                <article><span>真实写入</span><strong id="control-task-write">关闭</strong><small>需官方合同与账户验真</small></article>
+              </div>
+              <details id="control-task-builder" class="control-task-builder" hidden>
+                <summary><span>新建本机演练草稿</span><strong id="control-task-builder-title">状态演练</strong><b>不会提交千川</b></summary>
+                <div data-control-task-builder="status">
+                  <label>当前状态<select id="control-task-current-status"><option value="">请选择已核对的当前状态</option><option value="ACTIVE">投放中</option><option value="PAUSED">已暂停</option></select></label>
+                  <label>目标动作<select id="control-task-target-status"><option value="PAUSE">暂停</option><option value="ENABLE">启用</option><option value="CLOSE">结束（不是删除）</option></select></label>
+                </div>
+                <div data-control-task-builder="duration" hidden>
+                  <label>当前时长（分钟）<input id="control-task-current-duration" type="number" min="1" step="1" placeholder="例如 60"></label>
+                  <label>目标时长（分钟）<input id="control-task-target-duration" type="number" min="1" step="1" placeholder="例如 90"></label>
+                </div>
+                <footer>
+                  <p id="control-task-builder-note">请按当前计划真实状态填写；手工值只能用于本机演练。</p>
+                  <button id="control-task-builder-create" type="button">生成状态演练草稿</button>
+                </footer>
+              </details>
+              <div id="control-task-list" class="control-task-list empty-state">当前没有预算控制任务。先由 A1 影子判断生成候选。</div>
+              <footer>
+                <div><span>当前唯一下一步</span><strong id="control-task-next">先同步并生成降预算候选</strong><small id="control-task-contract">当前仅本机模拟。</small></div>
+                <button id="control-task-primary" type="button" data-action="sync">同步控制任务数据</button>
+              </footer>
+              <p id="control-task-safety" class="control-task-safety">重要：本区域只允许单变量本机演练；不会自动提交千川，也不会把“结束”偷偷映射成“删除”。</p>
+            </section>
+            <details id="automation-policy-center" class="automation-policy-center">
+              <summary>
+                <div><span>自动投放策略编排</span><strong>从定时启停到起量流控的五级能力</strong><small>先验证低风险模块，再逐级开放高风险动作</small></div>
+                <b id="automation-policy-status" class="warning">定时启停可配置</b>
+              </summary>
+              <div class="automation-policy-body">
+                <div id="automation-policy-matrix" class="automation-policy-matrix" aria-label="自动投放策略准备度"></div>
+                <section id="schedule-control-studio" class="schedule-control-studio" aria-labelledby="schedule-control-heading">
+                  <header>
+                    <div><span>第 1 级 · 状态任务编排</span><strong id="schedule-control-heading">定时启停演练</strong><p>按北京时间生成启用/暂停事件；跨天时段必须拆分，重叠时段会被阻止。</p></div>
+                    <b id="schedule-control-state" class="warning">等待绑定计划</b>
+                  </header>
+                  <div class="schedule-control-settings">
+                    <label class="schedule-control-toggle"><input id="schedule-control-enabled" type="checkbox"><span><strong>启用每日时段演练</strong><small>只在本机生成未来事件，不会按时间提交千川</small></span></label>
+                    <div><span>固定时区</span><strong>Asia/Shanghai · UTC+8</strong><small>不跟随浏览器临时时区变化</small></div>
+                    <div><span>时段上限</span><strong>最多 10 段/天</strong><small>跨午夜请拆成两段</small></div>
+                  </div>
+                  <div class="schedule-range-heading"><div><strong>每日投放时段</strong><small>开始时生成启用事件，结束时生成暂停事件</small></div><button id="schedule-range-add" type="button">添加时段</button></div>
+                  <div id="schedule-range-list" class="schedule-range-list"></div>
+                  <p id="schedule-control-validation" class="schedule-control-validation">至少保留一个完整、无重叠的时间段。</p>
+                  <footer class="schedule-control-actions">
+                    <div><span>配置生命周期</span><strong id="schedule-control-next">保存草稿 → 人工复核 → 48 小时模拟 → 模拟回读</strong><small id="schedule-control-notice">真实定时器和平台写入保持关闭。</small></div>
+                    <button id="schedule-control-save" type="button">保存定时启停草稿</button>
+                  </footer>
+                  <div id="schedule-control-revision" class="schedule-control-revision empty-state">尚未保存定时启停草稿。</div>
+                  <div class="schedule-event-preview">
+                    <div class="schedule-event-heading"><strong>未来 48 小时事件</strong><span id="schedule-event-count">0 项</span></div>
+                    <div id="schedule-event-list" class="schedule-event-list empty-state">完成本机模拟并回读后显示未来启用与暂停事件。</div>
+                  </div>
+                  <p class="schedule-control-safety">重要：本机验证通过只代表时间逻辑正确，不代表千川已经定时执行；生产启停仍需官方接口、账户权限和逐项回读。</p>
+                </section>
+              </div>
+            </details>
+            <section class="autopilot-realtime-task" aria-labelledby="autopilot-realtime-heading">
+              <header>
+                <div><span>实时托管任务</span><strong id="autopilot-realtime-heading">候选到回读的完整进度</strong></div>
+                <b id="autopilot-realtime-status">等待候选</b>
+              </header>
+              <div id="autopilot-realtime-steps" class="autopilot-realtime-steps">
+                <div class="current"><strong>1. 生成候选</strong><span>等待首次评估</span></div>
+                <div><strong>2. 人工复核</strong><span>尚未开始</span></div>
+                <div><strong>3. 本机模拟</strong><span>尚未开始</span></div>
+                <div><strong>4. 结果回读</strong><span>尚未开始</span></div>
+              </div>
+              <p id="autopilot-realtime-note">完成首次影子评估后，这里会显示候选到回读的实时进度。</p>
+            </section>
+            <footer class="autopilot-center-actions">
+              <div><span>现在只做这一项</span><strong id="autopilot-center-next">打开抖店并开始巡店</strong></div>
+              <button id="autopilot-center-primary" type="button" data-action="prepare_store">打开抖店</button>
+              <button id="autopilot-center-review" type="button" class="secondary">候选与模拟</button>
+              <button id="autopilot-center-advanced" type="button" class="secondary">高级边界</button>
+            </footer>
+            <details class="autopilot-activity-ledger">
+              <summary>托管操作账本 <span id="autopilot-activity-count">0 条本机记录</span></summary>
+              <div class="autopilot-activity-controls">
+                <label>操作类型<select id="autopilot-activity-filter"><option value="all">全部</option><option value="config">策略配置</option><option value="sync">数据同步</option><option value="shadow">影子托管</option><option value="review">复核导航</option><option value="control">控制任务</option></select></label>
+                <label>关键字<input id="autopilot-activity-search" type="search" placeholder="搜索操作内容"></label>
+              </div>
+              <div id="autopilot-activity-list" class="autopilot-activity-list empty-state">尚无托管操作记录。</div>
+              <p>这里只记录本机扩展中的配置与导航；模拟执行、回读和未来真实动作仍以 Agent 审计账本为准。</p>
+            </details>
+            <p id="autopilot-center-safety" class="autopilot-center-safety">重要：所有批量动作先生成不可执行草稿；真实提交仍须逐计划授权、执行前复核与结果回读。</p>
+          </section>
           <div class="chengfang-summary-head">
             <div><strong>乘方经营驾驶舱</strong><p id="chengfang-summary">正在读取本地 Agent 的乘方准备度。</p></div>
             <button id="chengfang-sync" type="button">同步当前千川页</button>
@@ -401,18 +1162,29 @@
             <div><span>今日结论</span><strong id="chengfang-today-conclusion">数据尚未达到可信诊断条件</strong></div>
             <div><span>今日唯一动作</span><strong id="chengfang-today-action">先补齐经营建档和真实乘方数据</strong></div>
             <details><summary>为什么</summary><p id="chengfang-today-why">缺少经营边界或可验证数据时，不生成预算与投放动作。</p></details>
-            <div><span>下一步</span><strong id="chengfang-next-step">请先同步真实乘方页面并确认店铺、账户、策略和指标口径。</strong></div>
+            <div><span>下一步</span><strong id="chengfang-next-step">请先同步真实乘方页面，并选择千川账户和经营策略。</strong></div>
           </article>
           <details class="inner-fold chengfang-status-fold">
             <summary>数据身份、口径与时间 <span id="chengfang-status-summary">正在核验</span></summary>
             <div id="chengfang-status-grid" class="chengfang-status-grid"></div>
           </details>
-          <section class="chengfang-profile" aria-labelledby="chengfang-profile-heading">
+          <section id="chengfang-candidate-path" class="chengfang-candidate-path" aria-labelledby="chengfang-candidate-path-heading">
+            <header>
+              <div><span>最短上手路径</span><h4 id="chengfang-candidate-path-heading">生成第一条可进入 A2 的候选</h4><p>不需要先开通生产写权限；完成作用域、经营建档和当前证据后，由 A1 生成只读候选。</p></div>
+              <b id="chengfang-candidate-path-progress">0 / 4 完成</b>
+            </header>
+            <div id="chengfang-candidate-path-steps" class="chengfang-candidate-path-steps"></div>
+            <footer>
+              <div><span>现在只做这一项</span><strong id="chengfang-candidate-path-next">正在准备本次投放范围</strong></div>
+              <button id="chengfang-candidate-path-action" type="button" data-action="none">正在检查</button>
+            </footer>
+          </section>
+          <section id="chengfang-profile" class="chengfang-profile" aria-labelledby="chengfang-profile-heading">
             <div class="chengfang-planner-heading">
-              <div><h4 id="chengfang-profile-heading">首次使用 · 经营建档</h4><p>先确认店铺身份、经营目标、成本口径和经营边界。全部资料只保存在本机，可随时修改或重置。</p></div>
+              <div><h4 id="chengfang-profile-heading">首次使用 · 经营建档</h4><p>补齐经营目标、成本口径和风险边界即可。资料只保存在本机，可随时修改或重置。</p></div>
               <span id="chengfang-profile-progress">0 / 4 完成</span>
             </div>
-            <div class="chengfang-binding-summary"><strong>1. 店铺与账户</strong><span id="chengfang-binding-guide">等待本地 Agent 核验；身份不完整时只读。</span></div>
+            <div class="chengfang-binding-summary"><strong>1. 本次投放范围</strong><span id="chengfang-binding-guide">打开抖店并选择千川账户后自动准备。</span></div>
             <fieldset class="chengfang-goals">
               <legend>2. 今天的经营目标</legend>
               <div id="chengfang-goal-options">
@@ -425,7 +1197,7 @@
               </div>
               <small id="chengfang-goal-status">请选择目标；这里只保存偏好，不会修改乘方策略。</small>
             </fieldset>
-            <div><strong>3. 利润与成本口径</strong><p class="chengfang-field-help">请按本店真实账本填写；平台费率不预设。空值表示未知，真实的 0 请填写 0。</p></div>
+            <div class="chengfang-profile-section-heading"><div><strong>3. 利润与成本口径</strong><p class="chengfang-field-help">请按本店真实账本填写；平台费率不预设。空值表示未知，真实的 0 请填写 0。</p></div><span id="chengfang-cost-progress">0 / 8</span></div>
             <div class="chengfang-calculator-grid">
               <label>商品售价（元）<input data-chengfang-input="price" type="number" min="0" step="0.01" placeholder="必填"></label>
               <label>商品成本（元）<input data-chengfang-input="product_cost" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
@@ -436,7 +1208,11 @@
               <label>预估退款率（%）<input data-chengfang-input="refund_rate" type="number" min="0" max="100" step="0.01" placeholder="必填，可填 0"></label>
               <label>广告消耗（元/件）<input data-chengfang-input="advertising_cost" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
             </div>
-            <div><strong>4. 经营边界</strong><p class="chengfang-field-help">这些是只读判断边界，不是平台参数，也不会自动提交。</p></div>
+            <div class="chengfang-profile-section-heading">
+              <div><strong>4. 经营边界</strong><p class="chengfang-field-help">这些是只读判断边界，不是平台参数，也不会自动提交。</p></div>
+              <div class="chengfang-profile-heading-actions"><span id="chengfang-boundary-progress">0 / 10</span><button id="chengfang-boundary-draft" type="button">生成保守草案</button></div>
+            </div>
+            <p id="chengfang-boundary-draft-status" class="chengfang-assist-status">只建议单次 5%、每日 1 次等技术护栏；预算、利润、退款和库存红线仍由你确认。</p>
             <div class="chengfang-calculator-grid">
               <label>最低单件贡献毛利（元）<input data-chengfang-boundary="minimum_contribution_margin" type="number" min="0" step="0.01" placeholder="必填，可填 0"></label>
               <label>单日预算上限（元）<input data-chengfang-boundary="daily_budget_cap" type="number" min="0" step="0.01" placeholder="必须大于 0"></label>
@@ -444,8 +1220,12 @@
               <label>退款率预警线（%）<input data-chengfang-boundary="refund_rate_ceiling" type="number" min="0" max="100" step="0.01" placeholder="0–100"></label>
               <label>库存覆盖底线（天）<input data-chengfang-boundary="inventory_days_floor" type="number" min="0" step="0.1" placeholder="必填，可填 0"></label>
               <label>单次预算调整上限（%）<input data-chengfang-boundary="single_adjustment_cap" type="number" min="0" max="100" step="0.1" placeholder="仅为未来授权边界"></label>
+              <label>单日累计调整上限（%）<input data-chengfang-boundary="daily_adjustment_cap" type="number" min="0" max="100" step="0.1" placeholder="不得低于单次上限"></label>
+              <label>单日动作次数上限<input data-chengfang-boundary="daily_action_cap" type="number" min="1" max="20" step="1" placeholder="1–20 次"></label>
+              <label>动作冷却时间（分钟）<input data-chengfang-boundary="cooldown_minutes" type="number" min="15" max="1440" step="1" placeholder="15–1440 分钟"></label>
+              <label>单次授权有效期（秒）<input data-chengfang-boundary="authorization_ttl_seconds" type="number" min="30" max="600" step="1" placeholder="30–600 秒"></label>
             </div>
-            <div class="chengfang-profile-actions"><span id="chengfang-boundary-status">请补齐经营边界。</span><button id="chengfang-profile-reset" type="button">重置本机建档</button></div>
+            <div class="chengfang-profile-actions"><div><span id="chengfang-boundary-status">请补齐经营边界。</span><small id="chengfang-profile-save-status" aria-live="polite">修改后自动保存到本机 Agent</small></div><button id="chengfang-profile-reset" type="button">重置本机建档</button></div>
           </section>
           <section class="chengfang-planner" aria-labelledby="chengfang-planner-heading">
             <div class="chengfang-planner-heading">
@@ -455,14 +1235,26 @@
             <p class="chengfang-formula">测算口径：退款后预计收入 ÷ 可承受广告消耗。佣金和平台费用暂按退款后预计收入计提；请以账户真实规则为准。</p>
             <div id="chengfang-calculation-result" class="chengfang-calculation-result empty">请补齐全部 8 项输入。空值与真实的 0 会被严格区分。</div>
             <div class="chengfang-evidence-inputs">
-              <strong>只读经营证据</strong><span>手工数据仅保存在本机；数据时间和完整度会影响结论等级。</span>
+              <div class="chengfang-profile-section-heading">
+                <div><strong>当前投放证据</strong><span>手工数据仅保存在本机；完整度、时间、消耗和订单样本不足时不会生成预算候选。</span></div>
+                <div class="chengfang-profile-heading-actions"><b id="chengfang-evidence-progress">0 / 10</b><button id="chengfang-evidence-hydrate" type="button">从同步数据补齐</button></div>
+              </div>
+              <p id="chengfang-evidence-hydrate-status" class="chengfang-assist-status">优先读取当前店铺与千川账户的最新快照；不会猜测利润、库存、履约或已实现亏损。</p>
               <div class="chengfang-calculator-grid">
                 <label>库存覆盖（天）<input data-chengfang-evidence="inventory_days" type="number" min="0" step="0.1" placeholder="待填写"></label>
                 <label>履约率（%）<input data-chengfang-evidence="fulfillment_rate" type="number" min="0" max="100" step="0.01" placeholder="待填写"></label>
                 <label>可用素材数<input data-chengfang-evidence="creative_count" type="number" min="0" step="1" placeholder="待填写"></label>
                 <label>数据完整度（%）<input data-chengfang-evidence="data_completeness" type="number" min="0" max="100" step="1" placeholder="待填写"></label>
                 <label>数据距今（分钟）<input data-chengfang-evidence="data_freshness_minutes" type="number" min="0" step="1" placeholder="待填写"></label>
+                <label>当前乘方总预算（元）<input data-chengfang-evidence="current_total_budget" type="number" min="0" step="0.01" placeholder="生成候选必填"></label>
+                <label>当前综合 ROI<input data-chengfang-evidence="actual_roi" type="number" min="0" step="0.01" placeholder="生成候选必填"></label>
+                <label>今日累计消耗（元）<input data-chengfang-evidence="today_spend" type="number" min="0" step="0.01" placeholder="至少 100 元才判断低 ROI"></label>
+                <label>今日归因订单数<input data-chengfang-evidence="attributed_orders" type="number" min="0" step="1" placeholder="至少 3 单才判断低 ROI"></label>
+                <label>今日已实现亏损（元）<input data-chengfang-evidence="daily_realized_loss" type="number" min="0" step="0.01" placeholder="按实际账本填写"></label>
+                <label>自然流成交占比（%，选填）<input data-chengfang-evidence="natural_flow_ratio" type="number" min="0" max="100" step="0.01" placeholder="用于归因校正"></label>
+                <label>付费归因订单占比（%，选填）<input data-chengfang-evidence="paid_order_ratio" type="number" min="0" max="100" step="0.01" placeholder="用于归因校正"></label>
               </div>
+              <p id="chengfang-evidence-status" class="chengfang-evidence-status">还缺 10 项当前证据；完整度需达到 80%，数据距今不超过 30 分钟。</p>
             </div>
             <section class="chengfang-readonly-foundation">
               <article><strong>商品乘方资格</strong><div id="chengfang-eligibility-empty">先补齐利润、库存、退款、履约、素材与数据质量。</div></article>
@@ -473,24 +1265,250 @@
               <div id="chengfang-scenarios" class="chengfang-scenarios empty-state">完成有效测算后显示保守、基准和进取三档假设。</div>
             </details>
           </section>
-          <section class="chengfang-shadow-program" aria-labelledby="chengfang-shadow-heading">
-            <div class="chengfang-planner-heading"><div><h4 id="chengfang-shadow-heading">7 天影子观察</h4><p>每天只生成一条本地建议，并预留 2h / 24h / 3d / 7d 回读；不会打开页面、填写或提交。</p></div><span id="chengfang-shadow-state">未开启</span></div>
+          <section id="chengfang-shadow-program" class="chengfang-shadow-program" aria-labelledby="chengfang-shadow-heading">
+            <div class="chengfang-planner-heading"><div><h4 id="chengfang-shadow-heading">7 天影子自动评估</h4><p>开启后由已启动的本地 Agent 每 5 分钟评估一次，重复证据自动去重；只生成候选并预留回读，不会打开页面、填写或提交。</p></div><span id="chengfang-shadow-state">未开启</span></div>
             <div id="chengfang-shadow-empty">先完成经营建档和可信诊断，再开启 7 天影子观察。</div>
             <div id="chengfang-shadow-readbacks" class="chengfang-shadow-readbacks"></div>
             <button id="chengfang-shadow-toggle" type="button">开启 7 天影子观察</button>
           </section>
+          <section id="chengfang-production-write" class="chengfang-trial-console" aria-labelledby="chengfang-production-heading">
+            <header class="chengfang-trial-header">
+              <div>
+                <span>受控生产写入 · 官方 API 单通道</span>
+                <h4 id="chengfang-production-heading">只允许单个乘方计划降低预算</h4>
+                <p>先读取可信官方快照，再预检目标预算。预检不会写入；输入服务器生成的精确确认词并取得一次性短时授权后，仍需再次点击执行。</p>
+              </div>
+              <div class="chengfang-production-actions">
+                <button id="chengfang-production-refresh" class="secondary-button" type="button">刷新可写计划</button>
+                <button id="chengfang-production-stop" class="danger-button" type="button">紧急停止生产</button>
+                <button id="chengfang-production-resume" class="secondary-button" type="button" hidden>解除生产紧停</button>
+              </div>
+            </header>
+            <div id="chengfang-production-banner" class="chengfang-trial-banner warning" aria-live="polite">
+              <strong id="chengfang-production-state">正在核验生产写入条件</strong>
+              <span id="chengfang-production-summary">未通过预检前不会调用官方写接口。</span>
+            </div>
+            <div class="chengfang-production-readiness" aria-labelledby="chengfang-production-readiness-title">
+              <div>
+                <span>首次写入向导</span>
+                <strong id="chengfang-production-readiness-title">完成 5 项准备后再执行</strong>
+                <small id="chengfang-production-readiness-detail">系统只显示当前需要完成的一步，不要求一次配置全部功能。</small>
+              </div>
+              <ol id="chengfang-production-readiness-steps" aria-label="乘方生产写入准备进度"></ol>
+              <button id="chengfang-production-next" class="secondary-button" type="button" data-action="refresh">查看当前下一步</button>
+            </div>
+            <div class="chengfang-trial-grid">
+              <article class="chengfang-trial-scope">
+                <div class="chengfang-trial-card-title"><strong>1. 选择唯一计划</strong><span id="chengfang-production-target-count">0 个可选</span></div>
+                <label for="chengfang-production-target">乘方计划
+                  <select id="chengfang-production-target">
+                    <option value="">等待可信官方快照</option>
+                  </select>
+                </label>
+                <p>列表显示安全清洗后的计划名、本机短码、经营类型、影响任务数和当前预算；账户、计划、任务、店铺等原始 ID 不会出现在界面中。</p>
+                <dl>
+                  <div><dt>当前预算</dt><dd id="chengfang-production-current-budget">待读取</dd></div>
+                  <div><dt>写入边界</dt><dd>仅下降 · 单次最多 20%</dd></div>
+                  <div><dt>执行通道</dt><dd>官方 API；无网页点击兜底</dd></div>
+                </dl>
+              </article>
+              <article class="chengfang-trial-guardrails">
+                <div class="chengfang-trial-card-title"><strong>2. 预检目标预算</strong><span id="chengfang-production-change">等待填写</span></div>
+                <label for="chengfang-production-budget">目标预算（元）
+                  <input id="chengfang-production-budget" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="必须低于当前预算">
+                </label>
+                <p>预检会重新核对目标、当前预算、账户权限和快照时效，不会修改千川。</p>
+                <button id="chengfang-production-prepare" type="button" disabled>预检本次降预算</button>
+              </article>
+            </div>
+            <article id="chengfang-production-authorization" class="chengfang-trial-workflow" aria-label="乘方生产写入授权" hidden>
+              <div class="chengfang-trial-card-title"><strong>3. 精确确认与一次性授权</strong><span id="chengfang-production-auth-state">等待预检</span></div>
+              <p id="chengfang-production-proposal">预检通过后显示本次唯一动作。</p>
+              <label for="chengfang-production-confirmation">请完整输入确认词
+                <input id="chengfang-production-confirmation" type="text" autocomplete="off" spellcheck="false" placeholder="必须与下方确认词完全一致">
+              </label>
+              <p>精确确认词：<code id="chengfang-production-required-confirmation">等待预检生成</code></p>
+              <footer>
+                <button id="chengfang-production-authorize" type="button" disabled>授予本次短时权限</button>
+                <button id="chengfang-production-execute" class="danger-button" type="button" disabled>执行一次官方降预算</button>
+                <button id="chengfang-production-cancel" class="secondary-button" type="button" disabled>取消本次操作</button>
+              </footer>
+            </article>
+            <article class="chengfang-trial-effect" aria-labelledby="chengfang-production-result-heading">
+              <div class="chengfang-trial-card-title">
+                <strong id="chengfang-production-result-heading">4. 官方结果回读</strong>
+                <span id="chengfang-production-result-state">尚未执行</span>
+              </div>
+              <p id="chengfang-production-result-detail">执行后立即通过官方接口回读目标预算。页面提示成功不作为验收依据。</p>
+              <div class="chengfang-trial-effect-metrics">
+                <div><span>执行前预算</span><strong id="chengfang-production-result-before">待产生</strong></div>
+                <div><span>目标预算</span><strong id="chengfang-production-result-target">待产生</strong></div>
+                <div><span>官方回读</span><strong id="chengfang-production-result-readback">待产生</strong></div>
+                <div><span>最终结论</span><strong id="chengfang-production-result-outcome">待产生</strong></div>
+              </div>
+              <div id="chengfang-production-unknown" class="chengfang-trial-outcome-limit" hidden>
+                <strong>结果未知：生产写入已冻结</strong>
+                <p>不要再次执行。请先人工核对千川，再由下方按钮只读查询官方结果；系统不会用浏览器点击补写。</p>
+                <button id="chengfang-production-reconcile" type="button" disabled>人工确认后查询官方结果</button>
+              </div>
+            </article>
+            <p id="chengfang-production-safety" class="control-task-safety">安全边界：仅单父计划降预算；写前连续两次读取官方预算，一次授权只执行一次；任何超时、歧义或回读不一致都会冻结后续写入。官方接口没有 CAS，第二次读取后仍存在极短外部并发窗口，请勿让其他投手同时修改该计划。加预算、启停、商品池、ROI 目标和批量操作仍关闭。</p>
+          </section>
+          <section id="chengfang-trial-console" class="chengfang-trial-console" aria-labelledby="chengfang-trial-heading">
+            <header class="chengfang-trial-header">
+              <div>
+                <span>A2 模拟自动投放试运行</span>
+                <h4 id="chengfang-trial-heading">先在本机跑通候选、人工审核、模拟与回读</h4>
+                <p>当前仅为 A2 模拟：不请求平台写权限、不填写页面、不提交千川，也不代表官方投放已接通。</p>
+              </div>
+              <label>运行环境
+                <select id="chengfang-trial-environment">
+                  <option value="demo">演示环境（A2 本机模拟）</option>
+                  <option value="production">生产环境（只读锁定）</option>
+                </select>
+              </label>
+            </header>
+            <div id="chengfang-trial-environment-banner" class="chengfang-trial-banner demo" aria-live="polite">
+              <strong id="chengfang-trial-environment-label">演示环境 · 本机沙盘</strong>
+              <span id="chengfang-trial-write-state">平台写入关闭 · 不会提交千川</span>
+            </div>
+            <section id="chengfang-one-click-demo" class="chengfang-one-click-demo" aria-labelledby="chengfang-one-click-demo-heading">
+              <div>
+                <span>无账户也能体验</span>
+                <strong id="chengfang-one-click-demo-heading">1 分钟一键看完 A2 自动投放演示</strong>
+                <p>使用独立合成数据演示“候选 → 模拟执行 → 模拟回读”。不是实际投放，不读取真实账户，也不会保存到真实 A2 runtime。</p>
+              </div>
+              <div class="chengfang-one-click-demo-actions">
+                <button id="chengfang-one-click-demo-run" type="button">一键生成演示效果</button>
+                <button id="chengfang-one-click-demo-clear" class="secondary-button" type="button" hidden>返回真实数据</button>
+              </div>
+              <small id="chengfang-one-click-demo-proof">SYNTHETIC · DEMO_FIXTURE · platform_write_attempted=false</small>
+            </section>
+            <div id="chengfang-trial-sync" class="chengfang-trial-sync warning">
+              <div><strong id="chengfang-trial-sync-state">每 5 分钟同步未开启</strong><span id="chengfang-trial-sync-detail">Agent 会阻止试运行，避免重复评估旧页面数据。只在你明确点击后开启。</span></div>
+              <button id="chengfang-trial-sync-toggle" type="button">开启每 5 分钟同步</button>
+            </div>
+            <div class="chengfang-trial-grid">
+              <article class="chengfang-trial-scope">
+                <div class="chengfang-trial-card-title"><strong>授权范围</strong><span id="chengfang-trial-level">A1 影子</span></div>
+                <dl>
+                  <div><dt>本次范围</dt><dd id="chengfang-trial-scope">等待选择千川账户</dd></div>
+                  <div><dt>允许动作</dt><dd id="chengfang-trial-action">仅生成降低总预算候选</dd></div>
+                  <div><dt>授权方式</dt><dd id="chengfang-trial-authorization">仅本机 A1 影子评估</dd></div>
+                  <div><dt>平台写入</dt><dd class="danger">关闭</dd></div>
+                </dl>
+              </article>
+              <article class="chengfang-trial-whitelist">
+                <div class="chengfang-trial-card-title"><strong>当前策略白名单</strong><span id="chengfang-trial-whitelist-count">0 / 1</span></div>
+                <p>只允许本地 Agent 根据店铺、千川账户和超级策略生成的唯一不透明作用域；不能手工填写计划编号。</p>
+                <div class="chengfang-trial-plan-key-row">
+                  <code id="chengfang-trial-plan-key">等待完成作用域绑定</code>
+                  <button id="chengfang-trial-whitelist-add" type="button">加入当前策略白名单</button>
+                </div>
+                <div id="chengfang-trial-whitelist-items" class="chengfang-trial-whitelist-items empty">尚未添加白名单</div>
+              </article>
+            </div>
+            <article class="chengfang-trial-guardrails">
+              <div class="chengfang-trial-card-title"><strong>预算与止损边界</strong><button id="chengfang-trial-edit-boundaries" type="button">编辑经营边界</button></div>
+              <label class="chengfang-trial-budget-control" for="chengfang-trial-pilot-budget-cap">
+                <span>A2 试运行预算上限（元）</span>
+                <input id="chengfang-trial-pilot-budget-cap" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="必须低于经营预算上限">
+                <small>这是本机模拟硬上限；不会写入乘方，且不得高于经营建档的单日预算上限。</small>
+              </label>
+              <div class="chengfang-trial-metrics">
+                <div><span>单日预算上限</span><strong id="chengfang-trial-budget-cap">待补齐</strong></div>
+                <div><span>单日亏损止损线</span><strong id="chengfang-trial-loss-cap">待补齐</strong></div>
+                <div><span>单次 / 单日调整</span><strong id="chengfang-trial-adjustment-cap">待补齐</strong></div>
+                <div><span>动作次数 / 冷却</span><strong id="chengfang-trial-frequency-cap">待补齐</strong></div>
+              </div>
+            </article>
+            <article class="chengfang-trial-workflow" aria-label="自动投放试运行状态">
+              <div class="chengfang-trial-card-title"><strong>候选 → 人工审核 → 本机模拟 → 模拟回读</strong><span id="chengfang-trial-workflow-state">等待候选</span></div>
+              <div id="chengfang-trial-steps" class="chengfang-trial-steps"></div>
+              <p id="chengfang-trial-next">完成经营建档并开启 A1，先让 Agent 生成一条影子候选。</p>
+              <footer>
+                <button id="chengfang-trial-start" type="button">开启 A2 模拟试运行</button>
+                <button id="chengfang-trial-review-accept" type="button">审核进入模拟</button>
+                <button id="chengfang-trial-review-reject" class="secondary-button" type="button">拒绝候选</button>
+                <button id="chengfang-trial-execute" type="button">执行本机模拟</button>
+                <button id="chengfang-trial-readback" type="button">完成模拟回读</button>
+                <button id="chengfang-trial-stop" class="danger-button" type="button">紧急停止 A2</button>
+              </footer>
+            </article>
+            <article class="chengfang-trial-effect" aria-labelledby="chengfang-trial-effect-heading">
+              <div class="chengfang-trial-card-title">
+                <strong id="chengfang-trial-effect-heading">本次试运行效果</strong>
+                <span id="chengfang-trial-effect-state">等待试运行数据</span>
+              </div>
+              <p id="chengfang-trial-effect-evidence" class="chengfang-trial-effect-evidence">只展示当前候选、模拟执行回执和模拟回读中的可验证字段；缺失值不会按 0 展示。</p>
+              <div class="chengfang-trial-effect-metrics">
+                <div><span>当前预算</span><strong id="chengfang-trial-effect-current">待产生</strong></div>
+                <div><span>模拟目标</span><strong id="chengfang-trial-effect-target">待产生</strong></div>
+                <div><span>预算变化额</span><strong id="chengfang-trial-effect-change">待产生</strong></div>
+                <div><span>预算变化比例</span><strong id="chengfang-trial-effect-change-pct">待产生</strong></div>
+              </div>
+              <div class="chengfang-trial-effect-proof">
+                <section>
+                  <span>模拟执行回执</span>
+                  <strong id="chengfang-trial-effect-receipt">待产生</strong>
+                  <small id="chengfang-trial-effect-receipt-detail">尚无 simulation 回执，不判断执行结果。</small>
+                </section>
+                <section>
+                  <span>模拟回读值 / 是否匹配</span>
+                  <strong id="chengfang-trial-effect-readback">待产生</strong>
+                  <small id="chengfang-trial-effect-readback-detail">尚无模拟回读，不判断是否匹配。</small>
+                </section>
+              </div>
+              <div class="chengfang-trial-outcome-limit">
+                <strong>ROI / 订单效果尚未证明</strong>
+                <p>本机模拟只能验证预算动作链路，不能证明真实流量、ROI 或订单增量；没有生产观测数据时不输出经营效果结论。</p>
+              </div>
+              <section class="chengfang-trial-observation" aria-label="生产效果观察节点">
+                <header><strong>生产效果观察节点</strong><span>仅预留，尚未开始</span></header>
+                <div id="chengfang-trial-effect-observations" class="chengfang-trial-observation-nodes">
+                  <div><b>2 小时</b><span>待生产验收</span></div><div><b>24 小时</b><span>待生产验收</span></div><div><b>3 天</b><span>待生产验收</span></div><div><b>7 天</b><span>待生产验收</span></div>
+                </div>
+              </section>
+            </article>
+            <details class="inner-fold chengfang-trial-guide">
+              <summary>最短操作引导 <span>4 步，不触碰平台写入</span></summary>
+              <ol><li>保持“演示环境”，明确点击开启每 5 分钟同步；它只读取已打开页面，不会自动打开巡店页面。</li><li>补齐经营边界，填写 A2 试运行预算上限，再点击“加入当前策略白名单”。</li><li>开启 A2 模拟，运行 A1 生成候选，人工审核后执行“本机模拟”。</li><li>完成模拟回读；目标值不一致、证据过期或触发止损时，本地 Agent 会停止 A2。</li></ol>
+            </details>
+          </section>
           <section class="chengfang-permissions" aria-labelledby="chengfang-permission-heading">
-            <div><h4 id="chengfang-permission-heading">自动化权限</h4><p>当前最终安全版只启用 L0。更高等级必须取得真实字段合同、稳定回读与明确授权后另行开放。</p></div>
-            <div class="chengfang-permission-grid">
+            <div><h4 id="chengfang-permission-heading">自动投放成熟度</h4><p id="chengfang-autopilot-summary" class="chengfang-autopilot-warning">A1 / A2 保持本机模拟；L3 仅对通过官方授权和生产预检的单计划降预算短时开放。</p></div>
+            <div id="chengfang-permission-grid" class="chengfang-permission-grid">
               <article class="active"><b>L0 · 只读诊断</b><span>已启用：同步、测算、建议、影子观察</span></article>
               <article><b>L1 · 自动导航</b><span>未启用：真实页面指纹尚未完成验真</span></article>
               <article><b>L2 · 辅助填写</b><span>未启用：无已验证字段与提交回读合同</span></article>
-              <article><b>L3 · 受控执行</b><span>未启用：无官方写接口与生产授权体系</span></article>
+              <article><b>L3 · 受控执行</b><span>按账户放行：仅单计划降预算，必须预检、精确确认、一次授权和官方回读</span></article>
             </div>
+            <div class="chengfang-autopilot-contract">
+              <div><span>执行通道</span><strong>只允许官方 API</strong><small>禁止把 DOM 点击作为乘方写入兜底</small></div>
+              <div><span>紧急停止</span><strong>默认开启</strong><small>正式授权、接口和回读未完成前不可关闭</small></div>
+              <div><span>下一验收门</span><strong id="chengfang-autopilot-next-gate">正在检查</strong><small id="chengfang-autopilot-next-detail">等待本地 Agent 返回自动投放准备度</small></div>
+            </div>
+            <article class="chengfang-agent-runtime">
+              <header><div><span>本地 Agent 决策循环</span><strong id="chengfang-runtime-status">正在读取</strong></div><b id="chengfang-runtime-count">0 次评估</b></header>
+              <p id="chengfang-runtime-latest">开启影子评估后，Agent 会持续生成可审计、不可执行的候选动作。</p>
+              <div id="chengfang-runtime-candidate" class="empty-state">当前没有预算候选。</div>
+              <div id="chengfang-runtime-feedback" class="chengfang-runtime-feedback" hidden>
+                <span>人工复盘这条建议</span>
+                <button type="button" data-chengfang-feedback="useful" data-readback="true">有用且已回读</button>
+                <button type="button" data-chengfang-feedback="not_useful" data-readback="true">不适用</button>
+                <button type="button" data-chengfang-feedback="deferred">稍后复盘</button>
+                <button type="button" data-chengfang-feedback="not_useful" data-readback="false" data-incident="true">出现异常</button>
+              </div>
+              <footer><button id="chengfang-evaluate-now" type="button">立即评估一次</button><button id="chengfang-emergency-stop" type="button" class="danger-button">停止自动评估</button></footer>
+            </article>
+            <details class="inner-fold">
+              <summary>自动操作协议 <span>每一步都必须通过</span></summary>
+              <ol class="chengfang-autopilot-flow"><li>策略草案绑定店铺、账户、超级策略和指标版本。</li><li>连续影子验证达到门槛后，才允许申请短时单次授权。</li><li>执行前重新校验数据快照、策略版本、额度、亏损、频率和冷却时间；缺失数据不会按 0 放行。</li><li>使用幂等键与乐观锁防止重复提交，检测到其他操作者修改立即停止。</li><li>执行后立即回读，并按 2h / 24h / 3d / 7d 验收；失败进入恢复或人工处理。</li><li>首阶段只为降低单策略总预算预留检查；加预算、ROI、状态和商品池操作仍关闭。</li></ol>
+            </details>
           </section>
           <details class="inner-fold chengfang-tutorial">
             <summary>3 分钟使用教程 <span>第一次使用建议阅读</span></summary>
-            <ol><li>打开正确的抖店与千川账户，点击“同步当前千川页”核验身份。</li><li>选择经营目标，按本店真实账本填写成本与经营边界；不知道的平台费率保持空白。</li><li>补齐库存、履约、素材和数据时间，查看今日唯一动作及其证据。</li><li>开启 7 天影子观察；它只记录建议与回读槽，不会替你修改乘方。</li><li>每天回到本页同步数据并复盘；数据不足时先补数据，不按猜测执行。</li></ol>
+            <ol><li>打开正确的抖店与千川账户，点击“同步当前千川页”核验身份。</li><li>选择经营目标，按本店真实账本填写成本与经营边界；不知道的平台费率保持空白。</li><li>补齐库存、履约、素材、数据时间，以及当前总预算、综合 ROI、消耗、订单和亏损。</li><li>开启 7 天影子自动评估；Agent 常驻后每 5 分钟判断一次，重复证据不会重复记账。</li><li>查看最新候选及原因，按真实结果反馈有用性；A1 阶段不会替你修改乘方。</li></ol>
           </details>
           <details class="inner-fold chengfang-blockers" open>
             <summary>当前阻塞与数据缺口 <span id="chengfang-blocker-count">正在检查</span></summary>
@@ -499,25 +1517,51 @@
         </div>
       </section>
 
-      <section class="module-section wide-module" data-owner="内容">
-        <div class="section-heading"><h3>千川素材表现</h3><span id="creative-status">等待数据</span></div>
-        <p class="section-intro">先判断哪些素材在消耗、哪些值得复用、哪些应该停止测试，再查看单条视频。</p>
-        <div id="creative-metrics" class="metric-strip"></div>
-        <div class="content-analysis-method"><strong>内容漏斗诊断</strong><span id="creative-analysis-method">展示 → 点击 → 成交 → ROI</span></div>
-        <div id="creative-test-matrix" class="creative-test-matrix empty-state">同步素材数据后，这里会生成单变量测试矩阵。</div>
-        <details class="inner-fold content-memory-card" open>
-          <summary>本店内容记忆 <span id="content-memory-status">积累中</span></summary>
-          <p id="content-memory-note" class="section-intro">至少积累两条不同素材后，系统才会把线索升级为较可信规律。</p>
-          <div id="content-memory-patterns" class="content-memory-patterns empty-state">尚未沉淀出可复用的内容规律。</div>
-        </details>
-        <div id="creative-actions" class="stack empty-state">同步巨量千川视频库后，这里会给出停测、复用和补测建议。</div>
-        <details class="inner-fold">
-          <summary>展开单条视频明细 <span id="creative-count">0 条</span></summary>
-          <div id="creative-videos" class="stack empty-state">暂时没有可分析的视频数据。</div>
-        </details>
+      <section id="content-workbench" class="module-section wide-module material-library" data-owner="内容" aria-labelledby="material-library-title">
+        <header class="material-library-heading">
+          <div>
+            <span>内容素材</span>
+            <h3 id="material-library-title">素材库</h3>
+            <p>这里只看素材名称、状态和核心表现。</p>
+          </div>
+          <div class="material-library-actions">
+            <span><b id="creative-count">0 条</b><small id="creative-status">等待数据</small></span>
+            <button id="material-library-sync" type="button">同步素材</button>
+          </div>
+        </header>
+        <div id="creative-metrics" class="metric-strip material-library-metrics"></div>
+        <div id="creative-videos" class="material-card-grid empty-state">同步千川视频库后，这里会直接展示素材卡。</div>
+
+        <div class="business-support" hidden aria-hidden="true">
+          <div class="content-analysis-method"><strong>素材漏斗诊断</strong><span id="creative-analysis-method">展示 → 点击 → 成交 → ROI</span></div>
+          <details class="inner-fold material-governance-card">
+            <summary>素材治理策略包 <span id="material-governance-status">等待素材数据</span></summary>
+            <p class="section-intro">按优先级首次命中，把素材分入保护、复测、测试、观察或停测候选池；停测候选不会自动删除。</p>
+            <div class="material-governance-metrics">
+              <article><span>保护复用</span><strong id="material-governance-protect">0 条</strong></article>
+              <article><span>停测候选</span><strong id="material-governance-retire">0 条</strong></article>
+              <article><span>复测 / 测试</span><strong id="material-governance-retest">0 条</strong></article>
+              <article><span>规则版本</span><strong id="material-governance-version">v1 · 本机</strong></article>
+            </div>
+            <div id="material-governance-blockers" class="material-governance-blockers">先同步千川视频库，选择账户并设置判断门槛。</div>
+            <div id="material-governance-rules" class="material-governance-rules empty-state">等待生成按优先级排列的素材规则。</div>
+            <div id="material-governance-preview" class="material-governance-preview empty-state">命中规则后展示素材分池预览。</div>
+            <footer>
+              <p id="material-governance-notice">规则只保存到本机，不上传素材名称，不会修改千川。</p>
+              <button id="material-governance-save" type="button" disabled>保存素材治理包到本机</button>
+            </footer>
+          </details>
+          <div id="creative-test-matrix" class="creative-test-matrix empty-state">同步素材数据后，这里会生成单变量测试矩阵。</div>
+          <details class="inner-fold content-memory-card">
+            <summary>本店素材记忆 <span id="content-memory-status">积累中</span></summary>
+            <p id="content-memory-note" class="section-intro">至少积累两条不同素材后，系统才会把线索升级为较可信规律。</p>
+            <div id="content-memory-patterns" class="content-memory-patterns empty-state">尚未沉淀出可复用的素材规律。</div>
+          </details>
+          <div id="creative-actions" class="stack empty-state">同步巨量千川视频库后，这里会生成素材判断。</div>
+        </div>
       </section>
 
-      <section class="module-section wide-module automation-section" data-owner="直播投放">
+      <section id="automation-section" class="module-section wide-module automation-section professional-experience-only" data-owner="直播投放">
         <div class="section-heading"><h3>自动化投放准备度</h3><span id="automation-status">影子模式</span></div>
         <article id="automation-off-state" class="automation-off-state">
           <strong>投放自动化尚未开启</strong>
@@ -543,9 +1587,15 @@
           </header>
           <div id="preflight-checks" class="preflight-checks"></div>
           <p id="preflight-next">首批只检查降低预算动作，不开放自动放量。</p>
+          <section id="archived-readback-hub" class="archived-readback-hub" hidden>
+            <div><strong>仍可继续核验的归档动作</strong><span id="archived-readback-count">0 项</span></div>
+            <small>这些动作不会自动重投；即使当前已切换到其他计划，也可以继续做只读回读。</small>
+            <div id="archived-readback-list" class="archived-readback-list"></div>
+          </section>
           <footer>
             <button id="preflight-reread" type="button">读取当前千川页并复核</button>
             <button id="preflight-authorize" type="button" hidden>最终确认并生成授权</button>
+            <button id="preflight-archive" type="button" class="danger" hidden>归档未决动作</button>
             <button id="preflight-stop" type="button" class="danger">紧急停止</button>
           </footer>
         </article>
@@ -560,14 +1610,14 @@
         </div>
       </section>
 
-      <section class="module-section shadow-section" data-owner="直播投放">
+      <section class="module-section shadow-section professional-experience-only" data-owner="直播投放">
         <div class="section-heading"><h3>人工操作核验</h3><span id="shadow-count">0 项</span></div>
         <p class="section-intro">插件不会自动修改计划。你在千川人工操作后，再回来读取页面核对结果。</p>
         <div id="shadow-summary" class="metric-strip"></div>
         <div id="shadow-actions" class="stack empty-state">确认调整方案后，这里会提示人工操作步骤和核验结果。</div>
       </section>
 
-      <section class="module-section" data-owner="直播投放">
+      <section id="product-plan-management-section" class="module-section professional-experience-only" data-owner="直播投放">
         <div class="section-heading"><h3>今日投放调整</h3><span id="plan-count">0 项</span></div>
         <p class="section-intro">按优先级逐项处理；每条建议都包含判断依据、调整范围和验收指标。</p>
         <div id="plans" class="stack empty-state">同步千川计划和报表后，这里会生成今天的止损、观察和放量清单。</div>
@@ -579,7 +1629,54 @@
         <div id="stop-loss-queue" class="stack empty-state">同步千川计划和报表后，这里会生成今日止损优先级。</div>
       </section>
 
-      <section class="module-section inventory-section" data-owner="货架商品">
+      <section id="batch-plan-preparation" class="module-section wide-module batch-plan-preparation professional-experience-only" data-owner="直播投放" aria-labelledby="batch-plan-preparation-title">
+        <div class="section-heading batch-plan-preparation-heading">
+          <div>
+            <span id="batch-plan-mode-label">乘方推广 · 批量创建</span>
+            <h3 id="batch-plan-preparation-title">批量创建计划准备台</h3>
+            <p>先把创建条件核对清楚，再生成本地草稿。当前不会绕过平台授权，也不会静默提交真实计划。</p>
+          </div>
+          <b>本地预演</b>
+        </div>
+        <div class="batch-plan-steps" aria-label="批量创建计划三步流程">
+          <div class="current"><b>1</b><span>选择账户</span><small>锁定广告账户作用域</small></div>
+          <div><b>2</b><span>选择推广对象</span><small>直播间或商品 ID</small></div>
+          <div><b>3</b><span>配置经营参数</span><small>预算、ROI 与命名</small></div>
+        </div>
+        <div class="batch-plan-builder">
+          <section>
+            <h4>1 · 账户与对象</h4>
+            <label>广告账户<select id="batch-plan-account"><option value="">请选择已核对账户</option></select></label>
+            <label>计划类型<select id="batch-plan-type"><option value="product">商品计划</option><option value="live">直播计划</option></select></label>
+            <label>推广对象 ID<textarea id="batch-plan-targets" rows="6" placeholder="每行填写一个商品 ID 或直播间 ID；一次最多 20 个"></textarea></label>
+          </section>
+          <section>
+            <h4>2 · 经营参数</h4>
+            <label>计划名称前缀<input id="batch-plan-name" type="text" maxlength="30" placeholder="例如：秋季上新"></label>
+            <div class="batch-plan-number-grid">
+              <label>单计划预算<input id="batch-plan-budget" type="number" min="1" step="10" value="1000"></label>
+              <label>ROI 目标<input id="batch-plan-roi" type="number" min="0.1" max="30" step="0.1" value="3.0"></label>
+            </div>
+            <label class="switch-row"><input id="batch-plan-long-term" type="checkbox" checked> 从今天开始长期投放</label>
+            <label class="switch-row"><input id="batch-plan-star-material" type="checkbox"> 记录千川星选素材偏好</label>
+            <label class="switch-row"><input id="batch-plan-smart-coupon" type="checkbox"> 记录智能优惠券偏好</label>
+          </section>
+          <section class="batch-plan-review">
+            <h4>3 · 生成与复核</h4>
+            <div id="batch-plan-review-summary">补齐账户、推广对象和经营参数后生成本地草稿。</div>
+            <button id="batch-plan-generate" type="button">生成批量计划草稿</button>
+            <button id="batch-plan-copy" type="button" class="secondary" disabled>复制草稿 JSON</button>
+            <small>这里只创建本地草稿，不打开、填写或提交千川页面。</small>
+          </section>
+        </div>
+        <div id="batch-plan-result" class="batch-plan-result empty-state">尚未生成批量计划草稿。</div>
+        <div class="batch-plan-preparation-footer">
+          <p><strong>生产提交门槛：</strong>官方账户授权、创建接口、字段合同、幂等键、逐批确认和结果回读必须全部通过；当前自动提交始终关闭。</p>
+          <div><button type="button" data-workspace-key="batch-account-check" data-workspace-target="oceanengine-oauth-card">检查账户授权</button></div>
+        </div>
+      </section>
+
+      <section class="module-section inventory-section legacy-product-detail" data-owner="">
         <div class="section-heading"><h3>库存风险与补货</h3><span id="inventory-count">0 项</span></div>
         <p class="section-intro">默认显示最紧急的 4 项。先保障主推商品不断货，再决定是否继续放量。</p>
         <div id="inventory" class="stack inventory-grid empty-state">同步商品或库存页面后，这里会按紧急程度排列补货任务。</div>
@@ -610,7 +1707,7 @@
         </section>
       </details>
 
-      <details class="fold-card">
+      <details id="strategy-settings-card" class="fold-card workspace-system-card">
         <summary>策略阈值 <span>本机设置</span></summary>
       <section class="settings-card inner-card">
         <div class="section-heading"><h3>策略阈值</h3><span>本机设置</span></div>
@@ -636,7 +1733,7 @@
       </section>
       </details>
 
-      <details class="fold-card">
+      <details id="report-center-card" class="fold-card workspace-system-card">
         <summary>日志生成 <span id="report-template-label">默认经营日报</span></summary>
         <section class="report-settings">
           <p class="settings-intro">直接使用默认模板，或选择一种现成模板后再生成。只有选择“自定义模板”时才需要填写内容。</p>
@@ -673,11 +1770,29 @@
 
       <section class="privacy-card">
         <strong>本地优先，所有执行动作需人工确认</strong>
-        <p>扩展不读取 Cookie；数据仅发送至本机 127.0.0.1。当前只生成调整建议、预警和报告，不会自动修改预算、库存或计划状态。</p>
+        <p>扩展不读取 Cookie；数据仅发送至本机 127.0.0.1。默认只做建议、预演和报告；只有切换到受控模式、通过单计划执行前回读并输入一次性授权口令后，才会立即提交该次预算或暂停操作。</p>
       </section>
-    </main>
+        </main>
+      </section>
+    </div>
+    <script src="runtime-recovery.js"></script>
+    <script src="bridge-auth.js"></script>
+    <script src="scan-scope-policy.js"></script>
     <script src="connection-guide-policy.js"></script>
     <script src="chengfang-planner.js"></script>
+    <script src="chengfang-trial-policy.js"></script>
+    <script src="chengfang-profile-draft.js"></script>
+    <script src="autopilot-center.js"></script>
+    <script src="control-task-center.js"></script>
+    <script src="automation-policy-center.js"></script>
+    <script src="oceanengine-account-center.js"></script>
+    <script src="material-governance.js"></script>
+    <script src="promotion-plan-center.js"></script>
+    <script src="promotion-bulk-actions.js"></script>
+    <script src="promotion-operation-log.js"></script>
+    <script src="product-capability.js"></script>
+    <script src="simple-experience.js"></script>
+    <script src="journey-orchestrator.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

@@ -3,14 +3,19 @@ from __future__ import annotations
 import hashlib
 import base64
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 from unittest import mock
+from urllib.error import HTTPError, URLError
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import offline_upgrade
 from offline_upgrade import (
     ActivationError,
     BundleValidationError,
@@ -22,9 +27,12 @@ from offline_upgrade import (
     read_current,
     read_installed_version,
     mark_pending_upgrade,
+    packaged_agent_self_test,
     prepare_pending_upgrade,
     confirm_pending_upgrade,
     rollback_pending_upgrade,
+    _RejectLocalHealthRedirects,
+    _read_local_health,
     main,
 )
 
@@ -56,6 +64,102 @@ class OfflineUpgradeTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_windows_maintenance_mutex_name_matches_powershell_contract(self) -> None:
+        root = r"C:\Users\Example\AppData\Local\DianAgent"
+        canonical = root.rstrip("\\/").upper()
+        expected = "Local\\DianAgentMaintenance-" + hashlib.sha256(
+            canonical.encode("utf-8")
+        ).hexdigest().upper()[:16]
+        self.assertEqual(expected, offline_upgrade._windows_maintenance_mutex_name(root))
+
+    def test_mutating_updater_fails_closed_on_primary_install_journal(self) -> None:
+        self.install_root.mkdir()
+        journal = self.install_root / ".install-transaction.json"
+        journal.write_text('{"state":"activating"}\n', encoding="utf-8")
+        with self.assertRaisesRegex(ActivationError, "install or maintenance-tools transaction"):
+            offline_upgrade._assert_no_primary_install_transaction(self.install_root)
+        self.assertEqual('{"state":"activating"}\n', journal.read_text(encoding="utf-8"))
+
+    def test_mutating_updater_fails_closed_on_release_tools_journal(self) -> None:
+        self.install_root.mkdir()
+        journal = self.install_root / ".release-tools-transaction.json"
+        journal.write_text('{"state":"activating"}\n', encoding="utf-8")
+        with self.assertRaisesRegex(ActivationError, "install or maintenance-tools transaction"):
+            offline_upgrade._assert_no_primary_install_transaction(self.install_root)
+        self.assertEqual('{"state":"activating"}\n', journal.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-mutex contract")
+    def test_mutating_updater_cli_refuses_shared_maintenance_lock(self) -> None:
+        self.install_root.mkdir()
+        sentinel = self.install_root / "must-survive.txt"
+        sentinel.write_text("owned by another operation\n", encoding="utf-8")
+        with offline_upgrade._windows_installation_maintenance_lock(
+            self.install_root, timeout_seconds=1
+        ):
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(offline_upgrade.__file__).resolve()),
+                    "cleanup",
+                    "--install-root",
+                    str(self.install_root),
+                    "--apply",
+                    "--maintenance-lock-timeout-seconds",
+                    "1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(2, completed.returncode, completed.stderr)
+        self.assertIn("already in progress", completed.stderr)
+        self.assertEqual("owned by another operation\n", sentinel.read_text(encoding="utf-8"))
+
+    def test_local_health_redirects_are_rejected(self) -> None:
+        handler = _RejectLocalHealthRedirects()
+        response = mock.Mock()
+        with self.assertRaisesRegex(URLError, "do not allow redirects"):
+            handler.redirect_request(
+                mock.Mock(),
+                response,
+                302,
+                "Found",
+                {},
+                "https://attacker.invalid/healthy",
+            )
+        response.close.assert_called_once_with()
+
+    def test_local_health_http_error_closes_response(self) -> None:
+        response = mock.Mock()
+        error = HTTPError("http://127.0.0.1:8765/health/live", 503, "unavailable", {}, response)
+        with mock.patch.object(offline_upgrade._LOCAL_HEALTH_OPENER, "open", side_effect=error):
+            self.assertIsNone(_read_local_health("http://127.0.0.1:8765/health/live"))
+        response.close.assert_called_once_with()
+
+    def test_packaged_self_test_never_opens_the_production_data_directory(self) -> None:
+        release = self.sandbox / "release"
+        executable = release / "program" / "DianAgent.exe"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"self-test-fixture")
+        captured = {}
+
+        def fake_run(_command, **kwargs):
+            captured.update(kwargs)
+            data_dir = Path(kwargs["env"]["DIAN_AGENT_DATA_DIR"])
+            log_dir = Path(kwargs["env"]["DIAN_AGENT_LOG_DIR"])
+            self.assertTrue(data_dir.parent.is_dir())
+            self.assertEqual(data_dir.parent, log_dir.parent)
+            return mock.Mock(returncode=0)
+
+        with mock.patch("offline_upgrade.subprocess.run", side_effect=fake_run):
+            self.assertTrue(packaged_agent_self_test(release, self.install_root))
+
+        production_data = (self.install_root / "data").resolve()
+        production_logs = (self.install_root / "logs").resolve()
+        self.assertNotEqual(production_data, Path(captured["env"]["DIAN_AGENT_DATA_DIR"]).resolve())
+        self.assertNotEqual(production_logs, Path(captured["env"]["DIAN_AGENT_LOG_DIR"]).resolve())
 
     def _bundle(
         self,
@@ -237,6 +341,44 @@ class OfflineUpgradeTests(unittest.TestCase):
         self.assertEqual("3.8.0", read_current(self.install_root)["version"])
         self.assertEqual(previous_extension, (self.install_root / "extension-current" / "manifest.json").read_bytes())
         self.assertFalse((self.install_root / "versions" / "3.9.0").exists())
+
+    def test_interrupted_rollback_preparation_never_publishes_an_incomplete_transaction(self) -> None:
+        install_bundle(self._bundle("3.8.0"), self.install_root, current_version="3.7.0")
+        real_atomic_write = offline_upgrade._atomic_write
+
+        def interrupt_before_state(path: Path, content: bytes) -> None:
+            if path.name == "state.json":
+                raise KeyboardInterrupt("simulated hard interruption")
+            real_atomic_write(path, content)
+
+        with mock.patch.object(offline_upgrade, "_atomic_write", side_effect=interrupt_before_state):
+            with self.assertRaisesRegex(KeyboardInterrupt, "hard interruption"):
+                prepare_pending_upgrade(self.install_root)
+
+        rollback = self.install_root / ".offline-upgrade-rollback"
+        self.assertFalse(rollback.exists())
+        abandoned = list(self.install_root.glob(".offline-prep-*"))
+        self.assertEqual(1, len(abandoned))
+
+        prepared = prepare_pending_upgrade(self.install_root)
+
+        self.assertEqual(rollback, prepared)
+        self.assertTrue((rollback / "state.json").is_file())
+        self.assertEqual([], list(self.install_root.glob(".offline-prep-*")))
+
+    def test_new_prepare_never_removes_a_published_transaction(self) -> None:
+        install_bundle(self._bundle("3.8.0"), self.install_root, current_version="3.7.0")
+        rollback = prepare_pending_upgrade(self.install_root)
+        result = install_bundle(self._bundle("3.9.0"), self.install_root)
+        mark_pending_upgrade(self.install_root, result["version"])
+        state_before = (rollback / "state.json").read_bytes()
+        pointer_before = (self.install_root / "current.json").read_bytes()
+
+        with self.assertRaisesRegex(ActivationError, "awaiting confirm or rollback"):
+            prepare_pending_upgrade(self.install_root)
+
+        self.assertEqual(state_before, (rollback / "state.json").read_bytes())
+        self.assertEqual(pointer_before, (self.install_root / "current.json").read_bytes())
 
     def test_fresh_app_layout_supplies_current_version_for_compatibility(self) -> None:
         app = self.install_root / "app" / "3.7.0"

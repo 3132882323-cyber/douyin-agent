@@ -17,6 +17,8 @@
   const BOUNDARY_FIELDS = Object.freeze([
     "minimum_contribution_margin", "daily_budget_cap", "daily_loss_cap",
     "refund_rate_ceiling", "inventory_days_floor", "single_adjustment_cap",
+    "daily_adjustment_cap", "daily_action_cap", "cooldown_minutes",
+    "authorization_ttl_seconds",
   ]);
 
   function parseField(raw, kind) {
@@ -71,10 +73,20 @@
       refund_rate_ceiling: parseField(input.refund_rate_ceiling, "rate"),
       inventory_days_floor: parseField(input.inventory_days_floor, "money"),
       single_adjustment_cap: parseField(input.single_adjustment_cap, "rate"),
+      daily_adjustment_cap: parseField(input.daily_adjustment_cap, "rate"),
+      daily_action_cap: parseField(input.daily_action_cap, "money"),
+      cooldown_minutes: parseField(input.cooldown_minutes, "money"),
+      authorization_ttl_seconds: parseField(input.authorization_ttl_seconds, "money"),
     };
     const missing = BOUNDARY_FIELDS.filter((key) => parsed[key].status === "missing");
     const invalid = BOUNDARY_FIELDS.filter((key) => parsed[key].status === "invalid");
     if (parsed.daily_budget_cap.status === "present" && parsed.daily_budget_cap.value <= 0) invalid.push("daily_budget_cap");
+    if (parsed.daily_action_cap.status === "present" && (!Number.isInteger(parsed.daily_action_cap.value) || parsed.daily_action_cap.value < 1 || parsed.daily_action_cap.value > 20)) invalid.push("daily_action_cap");
+    if (parsed.cooldown_minutes.status === "present" && (parsed.cooldown_minutes.value < 15 || parsed.cooldown_minutes.value > 1440)) invalid.push("cooldown_minutes");
+    if (parsed.authorization_ttl_seconds.status === "present" && (parsed.authorization_ttl_seconds.value < 30 || parsed.authorization_ttl_seconds.value > 600)) invalid.push("authorization_ttl_seconds");
+    if (parsed.single_adjustment_cap.status === "present" && parsed.daily_adjustment_cap.status === "present" && parsed.single_adjustment_cap.value > parsed.daily_adjustment_cap.value) {
+      invalid.push("single_adjustment_cap", "daily_adjustment_cap");
+    }
     return {
       status: invalid.length ? "invalid" : missing.length ? "incomplete" : "ready",
       parsed,
@@ -82,6 +94,8 @@
       invalid: [...new Set(invalid)],
       local_only: true,
       execution_allowed: false,
+      emergency_stop_active: true,
+      adapter_policy: "official_api_only",
     };
   }
 

@@ -7,15 +7,24 @@ evidence remains ``unknown`` and therefore cannot enter legacy plan writes.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
-PROMOTION_MODES = frozenset({"standard", "full_domain", "chengfang", "unknown"})
+PROMOTION_MODES = frozenset({"standard", "full_domain", "chengfang", "suixintui", "unknown"})
 LEGACY_SINGLE_PLAN_OPERATIONS = frozenset({"adjust_budget", "restore_budget", "pause_plan"})
 METRIC_DEFINITIONS = frozenset({"pay_roi", "net_revenue_roi", "gross_profit_roi", "unknown"})
 COST_FIELDS = ("ad_spend", "commission", "platform_fee", "discount", "refund", "subsidy", "product_cost", "fulfillment_cost")
 RESULT_FIELDS = ("pay_amount", "net_revenue", "orders", "contribution_margin", "refund_amount", "inventory_change")
 DETERMINISTIC_MAX_FRESHNESS_SECONDS = 30 * 60
 DETERMINISTIC_MIN_COMPLETENESS = 0.80
+
+
+def _finite_number(value: Any) -> int | float | None:
+    """Return a real finite JSON number without treating booleans as numbers."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(float(value)) else None
 
 
 def normalize_promotion_mode(value: Any) -> str:
@@ -29,6 +38,13 @@ def normalize_promotion_mode(value: Any) -> str:
         "全域推广": "full_domain",
         "chengfang": "chengfang",
         "乘方": "chengfang",
+        "suixintui": "suixintui",
+        "sui_xin_tui": "suixintui",
+        "随心推": "suixintui",
+        "随心推推广": "suixintui",
+        "小店随心推": "suixintui",
+        "千川随心推": "suixintui",
+        "巨量千川随心推": "suixintui",
     }
     return aliases.get(normalized, "unknown")
 
@@ -38,7 +54,15 @@ def build_promotion_context(value: Any = None) -> dict[str, Any]:
     mode = normalize_promotion_mode(raw.get("promotion_mode") if raw else value)
     account = raw.get("account_scope") if isinstance(raw.get("account_scope"), dict) else {}
     evidence = raw.get("promotion_mode_evidence") if isinstance(raw.get("promotion_mode_evidence"), dict) else raw.get("evidence") if isinstance(raw.get("evidence"), dict) else {}
-    conflict = evidence.get("conflict") is True or str(evidence.get("source") or "") == "conflicting_visible_labels"
+    quality = raw.get("data_quality") if isinstance(raw.get("data_quality"), dict) else {}
+    # A conflict asserted by the collector is first-class evidence.  Do not
+    # erase it merely because the normalized evidence object lacks a conflict
+    # flag; write guards must fail closed on either representation.
+    conflict = (
+        evidence.get("conflict") is True
+        or str(evidence.get("source") or "") == "conflicting_visible_labels"
+        or quality.get("mode_conflict") is True
+    )
     if conflict:
         mode = "unknown"
     metric = raw.get("metric_contract") if isinstance(raw.get("metric_contract"), dict) else raw.get("metric") if isinstance(raw.get("metric"), dict) else {}
@@ -47,11 +71,30 @@ def build_promotion_context(value: Any = None) -> dict[str, Any]:
         metric_definition = "unknown"
     costs = raw.get("cost_ledger") if isinstance(raw.get("cost_ledger"), dict) else {}
     results = raw.get("result_ledger") if isinstance(raw.get("result_ledger"), dict) else {}
-    normalized_costs = {key: costs[key] for key in COST_FIELDS if isinstance(costs.get(key), (int, float)) and not isinstance(costs.get(key), bool)}
-    normalized_results = {key: results[key] for key in RESULT_FIELDS if isinstance(results.get(key), (int, float)) and not isinstance(results.get(key), bool)}
+    normalized_costs = {
+        key: finite
+        for key in COST_FIELDS
+        if (finite := _finite_number(costs.get(key))) is not None
+    }
+    normalized_results = {
+        key: finite
+        for key in RESULT_FIELDS
+        if (finite := _finite_number(results.get(key))) is not None
+    }
     strategy = raw.get("strategy") if isinstance(raw.get("strategy"), dict) else {}
     strategy_id = str(strategy.get("strategy_id") or raw.get("strategy_id") or "")[:128]
-    quality = raw.get("data_quality") if isinstance(raw.get("data_quality"), dict) else {}
+    freshness_value = _finite_number(quality.get("freshness_seconds"))
+    freshness_provided = freshness_value is not None and (
+        quality.get("freshness_provided") is True
+        if "freshness_provided" in quality
+        else "freshness_seconds" in quality and quality.get("freshness_seconds") is not None
+    )
+    completeness_value = _finite_number(quality.get("completeness"))
+    if completeness_value is None or not 0 <= float(completeness_value) <= 1:
+        completeness_value = 0.0
+    evidence_captured_at = _finite_number(evidence.get("captured_at_ms"))
+    if evidence_captured_at is None or evidence_captured_at < 0:
+        evidence_captured_at = 0
     store_id = str(account.get("store_id") or "")[:128]
     account_id = str(account.get("account_id") or "")[:128]
     binding_conflict = account.get("conflict") is True or str(account.get("binding_status") or "") == "conflict"
@@ -85,7 +128,7 @@ def build_promotion_context(value: Any = None) -> dict[str, Any]:
         "denominator": str(metric.get("denominator") or "")[:120],
         "attribution_window": str(metric.get("attribution_window") or metric.get("period") or "")[:80],
         "refund_policy": str(metric.get("refund_policy") or "")[:120],
-        "value": metric.get("value") if isinstance(metric.get("value"), (int, float)) and not isinstance(metric.get("value"), bool) else None,
+        "value": _finite_number(metric.get("value")),
     }
     return {
         "schema_version": 2,
@@ -100,7 +143,7 @@ def build_promotion_context(value: Any = None) -> dict[str, Any]:
         "promotion_mode_evidence": {
             "source": str(evidence.get("source") or "unverified")[:80],
             "label": str(evidence.get("label") or "")[:120],
-            "captured_at_ms": int(evidence.get("captured_at_ms") or 0),
+            "captured_at_ms": int(evidence_captured_at),
             "conflict": conflict,
             "confidence": confidence,
         },
@@ -109,7 +152,7 @@ def build_promotion_context(value: Any = None) -> dict[str, Any]:
             "strategy_id": strategy_id,
             "goal": str(strategy.get("goal") or "")[:120],
             "status": str(strategy.get("status") or "unknown")[:80],
-            "total_budget": strategy.get("total_budget") if isinstance(strategy.get("total_budget"), (int, float)) else None,
+            "total_budget": _finite_number(strategy.get("total_budget")),
             "platform_managed_fields": [str(item)[:80] for item in strategy.get("platform_managed_fields", raw.get("platform_managed_fields", [])) if isinstance(item, str)][:30],
         },
         "metric_contract": metric_contract,
@@ -121,12 +164,13 @@ def build_promotion_context(value: Any = None) -> dict[str, Any]:
         "evidence": {
             "source": str(evidence.get("source") or "unverified")[:80],
             "label": str(evidence.get("label") or "")[:120],
-            "captured_at_ms": int(evidence.get("captured_at_ms") or 0),
+            "captured_at_ms": int(evidence_captured_at),
         },
         "data_quality": {
             "confidence": confidence,
-            "freshness_seconds": int(quality.get("freshness_seconds") or 0),
-            "completeness": round(float(quality.get("completeness") or 0), 4),
+            "freshness_seconds": int(freshness_value or 0),
+            "freshness_provided": freshness_provided,
+            "completeness": round(float(completeness_value), 4),
             "metric_conflict": quality.get("metric_conflict") is True,
             "mode_conflict": conflict,
             "identity_conflict": binding_conflict,
@@ -149,7 +193,7 @@ def assess_deterministic_data_gate(promotion_context: Any = None) -> dict[str, A
         blockers.append("ACCOUNT_SCOPE_CONFLICT")
     if quality.get("mode_conflict") or quality.get("metric_conflict"):
         blockers.append("DATA_CONTRACT_CONFLICT")
-    if freshness <= 0 or freshness > DETERMINISTIC_MAX_FRESHNESS_SECONDS:
+    if not quality.get("freshness_provided") or freshness < 0 or freshness > DETERMINISTIC_MAX_FRESHNESS_SECONDS:
         blockers.append("DATA_STALE_OR_UNTIMED")
     if completeness < DETERMINISTIC_MIN_COMPLETENESS:
         blockers.append("DATA_COMPLETENESS_LOW")
@@ -198,21 +242,49 @@ def build_chengfang_dashboard_summary(promotion_context: Any = None) -> dict[str
     }
 
 
-def legacy_execution_guard(operation_type: Any, promotion_context: Any) -> dict[str, Any]:
+def legacy_execution_guard(
+    operation_type: Any,
+    promotion_context: Any,
+    *,
+    expected_account_key: Any = None,
+) -> dict[str, Any]:
     context = build_promotion_context(promotion_context)
+    data_gate = assess_deterministic_data_gate(context)
     operation = str(operation_type or "").strip()
     mode = context["promotion_mode"]
+    expected_account = str(expected_account_key or "").strip().lower()
+    context_account = str(context.get("account_scope", {}).get("account_id") or "").strip().lower()
+    account_mismatch = bool(expected_account and context_account and expected_account != context_account)
     identity_blocked = not context["write_identity_complete"]
-    blocked = operation in LEGACY_SINGLE_PLAN_OPERATIONS and (mode in {"chengfang", "unknown"} or identity_blocked)
-    if mode == "chengfang":
+    data_blocked = data_gate["deterministic_advice_allowed"] is not True
+    blocked = account_mismatch or (
+        operation in LEGACY_SINGLE_PLAN_OPERATIONS
+        and (mode in {"chengfang", "suixintui", "unknown"} or identity_blocked or data_blocked)
+    )
+    if account_mismatch:
+        code = "ACTION_CONTEXT_ACCOUNT_MISMATCH"
+        reason = "Action target account does not match the promotion context account."
+    elif mode == "chengfang":
         code = "UNSUPPORTED_FOR_CHENGFANG"
         reason = "乘方由平台协同管理，旧单计划预算、暂停和恢复执行器已停用。"
+    elif mode == "suixintui":
+        code = "UNSUPPORTED_FOR_SUIXINTUI"
+        reason = "随心推尚未建立独立的执行、回读和回滚合同，禁止复用标准、全域或乘方执行器。"
     elif mode == "unknown":
         code = "PROMOTION_MODE_UNVERIFIED"
         reason = "尚未确认当前投放模式，禁止使用旧单计划预算、暂停和恢复执行器。"
     elif identity_blocked:
         code = "PROMOTION_SCOPE_UNVERIFIED"
         reason = "店铺、千川账户、策略或指标合同绑定不完整或存在冲突，禁止执行投放写操作。"
+    elif data_blocked:
+        code = str((data_gate.get("blocked_reasons") or ["DATA_QUALITY_UNVERIFIED"])[0])
+        reason = {
+            "ACCOUNT_SCOPE_CONFLICT": "店铺或千川账户作用域存在冲突，禁止执行投放写操作。",
+            "DATA_CONTRACT_CONFLICT": "投放模式或指标口径存在冲突，禁止执行投放写操作。",
+            "DATA_STALE_OR_UNTIMED": "计划证据已过期或缺少可信时间，请重新同步后再执行。",
+            "DATA_COMPLETENESS_LOW": "计划证据完整度不足，禁止执行投放写操作。",
+            "METRIC_CONTRACT_UNVERIFIED": "指标口径或版本尚未验真，禁止执行投放写操作。",
+        }.get(code, "当前数据尚未通过确定性证据门禁，禁止执行投放写操作。")
     else:
         code = "ALLOWED"
         reason = "当前投放模式允许进入既有受监督检查。"
@@ -222,6 +294,7 @@ def legacy_execution_guard(operation_type: Any, promotion_context: Any) -> dict[
         "reason": reason,
         "promotion_mode": mode,
         "operation_type": operation,
+        "data_gate": data_gate,
     }
 
 
@@ -231,7 +304,7 @@ def build_chengfang_readiness(promotion_context: Any = None) -> dict[str, Any]:
     profit_fields = {"ad_spend", "commission", "platform_fee", "discount", "refund", "product_cost", "fulfillment_cost"}
     missing_profit_fields = sorted(profit_fields - set(context["cost_ledger"]))
     blockers = [
-        "未取得或验证乘方官方写接口合同。",
+        "官方写能力已发现，但当前应用权限、账户白名单与字段合同尚未受控验收。",
         "未建立乘方策略级执行、回读和回滚协议。",
     ]
     if context["promotion_mode"] == "unknown":

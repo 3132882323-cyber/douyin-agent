@@ -29,6 +29,8 @@ if (-not $pythonCommand) {
 }
 if (-not $pythonCommand) { throw "Python 3.10+ with cryptography is required on the release build machine." }
 
+$releaseCheck = Join-Path $PSScriptRoot "check_public_release.py"
+
 $distribution = "production"
 if ($DevelopmentTestSigning) {
   if ($SigningPrivateKeyPath -or $SigningKeyId) {
@@ -64,10 +66,32 @@ if (-not $SkipBuild) {
 }
 
 $programSource = Join-Path $projectDir "dist\agent\DianAgent.exe"
+$publicBuildSource = Join-Path $projectDir "dist\agent\PUBLIC_BUILD.json"
 $modernSource = Join-Path $projectDir "dist\dian-agent-modern"
 $compatibleSource = Join-Path $projectDir "dist\dian-agent-compatible"
-foreach ($required in @($programSource, $modernSource, $compatibleSource)) {
+foreach ($required in @($programSource, $publicBuildSource, $modernSource, $compatibleSource)) {
   if (-not (Test-Path -LiteralPath $required)) { throw "Missing release artifact: $required" }
+}
+
+# -SkipBuild is permitted only for artifacts already proven to come from the
+# sanitized community builder.  A private build deliberately removes this
+# marker, so it can never be repackaged as a public offline update by accident.
+$publicBuild = Get-Content -Raw -Encoding UTF8 -LiteralPath $publicBuildSource | ConvertFrom-Json
+if ($publicBuild.schema_version -ne 1 -or
+    [string]$publicBuild.product -ne "DianAgent" -or
+    [string]$publicBuild.version -ne $version -or
+    [string]$publicBuild.edition -ne "community" -or
+    [string]$publicBuild.build_flavor -ne "public_community" -or
+    [string]$publicBuild.source_boundary -ne "verified_sanitized_source" -or
+    $publicBuild.commercial_modules_included -ne $false -or
+    $publicBuild.redistributable -ne $true) {
+  throw "Public build provenance is missing, stale, or invalid; rebuild with tools\build_release.ps1."
+}
+foreach ($browserRoot in @($modernSource, $compatibleSource)) {
+  $browserManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $browserRoot "manifest.json") | ConvertFrom-Json
+  if ([string]$browserManifest.version -ne $version) {
+    throw "Browser package version does not match the public Agent provenance: $browserRoot"
+  }
 }
 
 $outputRoot = Join-Path $projectDir "dist\offline"
@@ -90,6 +114,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stagingFull "extension\mod
 New-Item -ItemType Directory -Force -Path (Join-Path $stagingFull "extension\compatible") | Out-Null
 
 Copy-Item -LiteralPath $programSource -Destination (Join-Path $stagingFull "program\DianAgent.exe") -Force
+Copy-Item -LiteralPath $publicBuildSource -Destination (Join-Path $stagingFull "PUBLIC_BUILD.json") -Force
 Copy-Item -Path (Join-Path $modernSource "*") -Destination (Join-Path $stagingFull "extension\modern") -Recurse -Force
 Copy-Item -Path (Join-Path $compatibleSource "*") -Destination (Join-Path $stagingFull "extension\compatible") -Recurse -Force
 
@@ -188,8 +213,15 @@ try {
   Remove-Item -LiteralPath $signerScriptPath -Force -ErrorAction SilentlyContinue
 }
 
+& $pythonCommand $releaseCheck --artifact $stagingFull
+if ($LASTEXITCODE -ne 0) { throw "Public offline bundle staging boundary check failed." }
 if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Force }
 Compress-Archive -Path (Join-Path $stagingFull "*") -DestinationPath $bundlePath -CompressionLevel Optimal
+& $pythonCommand $releaseCheck --artifact $bundlePath
+if ($LASTEXITCODE -ne 0) {
+  Remove-Item -LiteralPath $bundlePath -Force -ErrorAction SilentlyContinue
+  throw "Public offline bundle ZIP boundary check failed."
+}
 $bundleHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundlePath).Hash.ToLowerInvariant()
 Set-Content -LiteralPath "$bundlePath.sha256" -Encoding ASCII -Value "$bundleHash  $(Split-Path -Leaf $bundlePath)"
 Remove-Item -LiteralPath $stagingFull -Recurse -Force

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "pack_id": "industry.food",
+  "industry": "food",
+  "display_name": "食品生鲜经营知识包",
+  "publisher": "店策官方",
+  "channel": "stable",
+  "min_agent_version": "4.6.0",
+  "pack_version": "2026.08.22.1",
+  "published_at": "2026-08-22T00:00:00+08:00",
+  "expires_at": "2031-08-22T00:00:00+08:00",
+  "capabilities": ["保质期库存", "爆量承接", "货损风险", "投放止损"],
+  "required_metrics": ["inventory.available", "sales.last_24h", "spend", "roi", "data_age_minutes"],
+  "rules": [
+    {
+      "rule_id": "food.inventory.fulfillment_risk",
+      "version": 1,
+      "priority": 12,
+      "enabled": true,
+      "conditions": {
+        "all": [
+          {"field": "inventory.available", "operator": "<=", "formula": "inventory_warning_line * 3"},
+          {"field": "sales.last_24h", "operator": ">", "value": 0}
+        ]
+      },
+      "result": {
+        "level": "high",
+        "title": "食品库存需按 SKU 与批次核对",
+        "message": "全店仍有出单且库存汇总值触及预警线；当前数据不含批次和保质期，请按同一 SKU 核对批次、在途库存与发货产能。",
+        "action": {"type": "check_inventory", "label": "核对批次保质期、在途库存和发货上限"},
+        "acceptance": {"metric": "inventory.available", "target": "完成同一 SKU 的批次、保质期、在途与发货产能核对"}
+      }
+    },
+    {
+      "rule_id": "food.qianchuan.fulfillment_guard",
+      "version": 1,
+      "priority": 20,
+      "enabled": true,
+      "conditions": {
+        "all": [
+          {"field": "spend", "operator": ">=", "value_from": "min_spend"},
+          {"field": "roi", "operator": "<", "formula": "roi_target * 0.85"},
+          {"field": "data_age_minutes", "operator": "<=", "value": 30}
+        ]
+      },
+      "result": {
+        "level": "medium",
+        "title": "食品投放表现需联动履约复核",
+        "message": "账户汇总消耗达到判断门槛且 ROI 低于目标；当前不能直接归因，继续放量前请按同一计划与 SKU 核对成本、批次和发货能力。",
+        "action": {"type": "manual_review", "label": "复核成交成本、库存批次和当日发货能力"},
+        "acceptance": {"metric": "roi", "observation_minutes": 60, "target": "ROI 与履约能力同时回到安全区"}
+      }
+    }
+  ],
+  "sha256": "be314204fb587645b07728412026297547d04169d537ce8c763fb39a9227a951",
+  "trusted_builtin": true
+}

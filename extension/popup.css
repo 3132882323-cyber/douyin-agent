@@ -65,6 +65,25 @@ h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .overall.ok { border-color: #abefc6; background: var(--green-bg); }
 .overall.warn { border-color: #fedf89; background: var(--amber-bg); }
 .overall.error { border-color: #fecdca; background: var(--red-bg); }
+.repair-agent-button { margin-left: auto; min-height: 34px; border: 1px solid #fda29b; border-radius: 8px; padding: 0 10px; color: var(--red); background: #fff; cursor: pointer; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.repair-agent-button:hover { border-color: #f04438; background: #fff8f7; }
+.repair-agent-button:disabled { cursor: wait; opacity: .65; }
+
+.popup-next-step { display: grid; gap: 12px; margin-top: 12px; padding: 16px; border: 1px solid #bfdbfe; border-radius: 13px; background: #f8fbff; }
+.popup-next-step span { display: block; color: #175cd3; font-size: 10px; font-weight: 800; letter-spacing: .06em; }
+.popup-next-step strong { display: block; margin-top: 4px; color: #0f172a; font-size: 17px; line-height: 1.35; }
+.popup-next-step p { margin: 5px 0 0; color: #64748b; font-size: 12px; line-height: 1.5; }
+.popup-next-step button { width: 100%; min-height: 42px; border: 0; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 800; }
+.popup-next-step button:disabled { cursor: wait; opacity: .6; }
+.popup-more { margin-top: 12px; border-top: 1px solid #eef2f6; }
+.popup-more > summary { padding: 12px 2px 4px; color: #64748b; cursor: pointer; font-size: 11px; font-weight: 700; }
+
+.demo-entry { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; margin-top: 12px; padding: 13px; border: 2px solid #84adff; border-radius: 12px; background: linear-gradient(135deg, #eaf2ff, #f8fbff); }
+.demo-entry span { display: block; color: #2459c7; font-size: 10px; font-weight: 800; }
+.demo-entry strong { display: block; margin-top: 2px; color: #132b5b; font-size: 16px; }
+.demo-entry p { margin: 4px 0 0; color: #4d5d78; font-size: 11px; line-height: 1.45; }
+.demo-entry button { min-height: 40px; border: 0; border-radius: 9px; padding: 0 14px; color: #fff; background: var(--brand); cursor: pointer; font-size: 12px; font-weight: 800; }
+.demo-entry button:hover { background: var(--brand-dark); }
 
 .pulse { width: 9px; height: 9px; border-radius: 50%; background: #98a2b3; box-shadow: 0 0 0 4px rgba(152, 162, 179, .13); }
 .overall.ok .pulse { background: #12b76a; box-shadow: 0 0 0 4px rgba(18, 183, 106, .13); }
@@ -90,6 +109,9 @@ h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfe; }
 .settings-row strong { display: block; font-size: 12px; }
 .settings-row p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+.settings-action { flex: 0 0 auto; min-height: 44px; border: 1px solid #84adff; border-radius: 9px; padding: 0 12px; color: #175cd3; background: #fff; cursor: pointer; touch-action: manipulation; font-size: 12px; font-weight: 800; }
+.settings-action:hover { background: #eef4ff; }
+.settings-action:disabled { cursor: wait; opacity: .65; }
 .shield { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--green-bg); color: var(--green); font-size: 13px; font-weight: 800; }
 .api-sentinel { margin-top: 12px; padding: 12px; border: 1px solid #b2ccff; border-radius: 12px; background: #f5f8ff; }
 .api-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
@@ -105,7 +127,7 @@ h1 { margin: 0; font-size: 16px; line-height: 1.2; }
 .switch input:checked + span { background: var(--brand); }
 .switch input:checked + span::after { transform: translateX(16px); }
 
-.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; }
+.actions { display: grid; grid-template-columns: 1fr; gap: 9px; margin-top: 10px; }
 .actions button { min-height: 38px; border-radius: 9px; border: 1px solid transparent; cursor: pointer; font-size: 12px; font-weight: 700; }
 .actions button:disabled { opacity: .55; cursor: wait; }
 .primary { background: var(--brand); color: #fff; }

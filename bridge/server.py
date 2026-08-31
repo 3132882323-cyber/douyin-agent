@@ -22,6 +22,7 @@ BRIDGE_DIR = str(Path(__file__).resolve().parent)
 if BRIDGE_DIR not in sys.path:
     sys.path.insert(0, BRIDGE_DIR)
 
+from ai_decision import DECISION_PROPOSAL_SCHEMA
 from http_receiver import (
     STALE_SECONDS,
     _cached,
@@ -54,6 +55,22 @@ from http_receiver import (
     save_agent_settings,
     update_task_state,
 )
+
+# These optional wrappers are the only integration seam between MCP and the AI
+# subsystem.  Their contract is deliberately proposal-only: build a sanitized
+# context pack, enqueue an untrusted proposal, or list queued proposals.  MCP
+# never imports an authorization/execution primitive and remains usable while
+# older local Agent builds are being upgraded.
+try:
+    from http_receiver import (
+        get_ai_context_pack as _get_ai_context_pack,
+        get_ai_proposals as _get_ai_proposals,
+        submit_ai_proposal as _submit_ai_proposal,
+    )
+except ImportError:  # pragma: no cover - exercised through adapter behavior
+    _get_ai_context_pack = None
+    _get_ai_proposals = None
+    _submit_ai_proposal = None
 
 app = Server("dian-agent")
 
@@ -107,6 +124,61 @@ TOOLS = [
         name="get_bridge_status",
         description="检查本地数据桥状态和各页面的数据新鲜度",
         inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_ai_context_pack",
+        description="读取供外部 AI 分析的脱敏聚合上下文；不包含 Cookie、Token、客户/订单明细或整页原文，且不能执行投放操作",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="submit_ai_proposal",
+        description="验证并存入一条外部 AI 建议；建议始终不可信且不可执行，不授权、不确认也不修改浏览器或投放平台",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "proposal": {
+                    **deepcopy(DECISION_PROPOSAL_SCHEMA),
+                    "description": "DecisionProposalV1 建议对象，由本地规则再次执行权威校验",
+                },
+                "provider_id": {
+                    "type": "string",
+                    "description": "可选 AI Provider 标识，仅用于本地审计",
+                    "default": "mcp",
+                    "maxLength": 80,
+                },
+                "model": {
+                    "type": "string",
+                    "description": "可选模型标识，仅用于本地审计",
+                    "default": "",
+                    "maxLength": 120,
+                },
+                "context_hash": {
+                    "type": "string",
+                    "description": "建议所依据的脱敏上下文哈希",
+                    "default": "",
+                    "maxLength": 128,
+                },
+            },
+            "required": ["proposal"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="get_ai_proposals",
+        description="读取本机 AI 建议队列及校验状态；只读且所有建议均不可直接执行",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 50,
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
     ),
     Tool(
         name="get_qianchuan_adjustments",
@@ -230,9 +302,56 @@ TOOLS = [
     ),
 ]
 
+# The stdio MCP endpoint is intended for third-party AI clients.  Keep its
+# public surface narrower than the local HTTP/UI surface: raw snapshots,
+# reports, settings and task mutation tools remain local implementation
+# details and cannot be reached by guessing an unlisted tool name.
+AI_SAFE_TOOL_NAMES = frozenset({
+    "get_ai_context_pack",
+    "submit_ai_proposal",
+    "get_ai_proposals",
+})
+_LEGACY_LOCAL_TOOLS = tuple(TOOLS)
+TOOLS = [tool for tool in _LEGACY_LOCAL_TOOLS if tool.name in AI_SAFE_TOOL_NAMES]
+
 
 def _text(value: Any) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(value, ensure_ascii=False, indent=2))]
+
+
+def _ai_proposal_only_response(value: Any) -> dict[str, Any]:
+    """Seal every AI MCP response with a non-execution capability claim."""
+
+    result = deepcopy(value) if isinstance(value, dict) else {"data": deepcopy(value)}
+    result["mode"] = "proposal_only"
+    result["execution_allowed"] = False
+    result["can_execute"] = False
+    result["execution_performed"] = False
+    return result
+
+
+def _ai_unavailable_response() -> dict[str, Any]:
+    return _ai_proposal_only_response(
+        {
+            "ok": False,
+            "error": {
+                "code": "AI_BRIDGE_UNAVAILABLE",
+                "message": "本地 AI 建议模块尚未就绪，请更新或重启本地 Agent。",
+            },
+        }
+    )
+
+
+def _ai_rejected_response() -> dict[str, Any]:
+    return _ai_proposal_only_response(
+        {
+            "ok": False,
+            "error": {
+                "code": "AI_PROPOSAL_REJECTED",
+                "message": "AI 建议未通过本地格式或安全校验，未进入建议队列。",
+            },
+        }
+    )
 
 
 def _public_snapshot(snapshot: dict[str, Any] | None, include_page_text: bool) -> dict[str, Any]:
@@ -256,6 +375,14 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     arguments = arguments or {}
+    if name not in AI_SAFE_TOOL_NAMES:
+        return _text(_ai_proposal_only_response({
+            "ok": False,
+            "error": {
+                "code": "MCP_TOOL_NOT_ALLOWED",
+                "message": "外部 AI 只能读取脱敏经营上下文并提交不可执行提案。",
+            },
+        }))
     if name in {"get_doudian_data", "get_qianchuan_data"}:
         source = "doudian" if name == "get_doudian_data" else "qianchuan"
         page_type = str(arguments.get("page_type") or "") or None
@@ -286,6 +413,40 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 },
             }
         )
+
+    if name == "get_ai_context_pack":
+        if _get_ai_context_pack is None:
+            return _text(_ai_unavailable_response())
+        try:
+            return _text(_ai_proposal_only_response(_get_ai_context_pack()))
+        except Exception:
+            return _text(_ai_rejected_response())
+
+    if name == "submit_ai_proposal":
+        proposal = arguments.get("proposal")
+        if not isinstance(proposal, dict) or _submit_ai_proposal is None:
+            return _text(_ai_unavailable_response() if _submit_ai_proposal is None else _ai_rejected_response())
+        try:
+            result = _submit_ai_proposal(
+                proposal,
+                provider_id=str(arguments.get("provider_id") or "mcp")[:80],
+                model=str(arguments.get("model") or "")[:120],
+                context_hash=str(arguments.get("context_hash") or "")[:128],
+            )
+            return _text(_ai_proposal_only_response(result))
+        except Exception:
+            return _text(_ai_rejected_response())
+
+    if name == "get_ai_proposals":
+        if _get_ai_proposals is None:
+            return _text(_ai_unavailable_response())
+        try:
+            limit = max(1, min(100, int(arguments.get("limit") or 50)))
+            return _text(_ai_proposal_only_response(_get_ai_proposals(limit=limit)))
+        except (TypeError, ValueError):
+            return _text(_ai_rejected_response())
+        except Exception:
+            return _text(_ai_rejected_response())
 
     if name == "get_qianchuan_adjustments":
         return _text({"recommendations": _cached("plan_recs", build_plan_recommendations), "mode": "proposal_only", "execution_enabled": False})

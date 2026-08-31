@@ -1,0 +1,4 @@
+-r requirements.txt
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+pip-audit==2.10.1

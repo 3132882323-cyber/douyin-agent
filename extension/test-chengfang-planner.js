@@ -36,13 +36,24 @@ assert.equal(shadow.record.execution_allowed, false);
 assert.deepEqual(Object.keys(shadow.record.readbacks), ["2h", "24h", "3d", "7d"]);
 assert.equal(planner.buildShadowRecord({ goal: "profit" }).status, "incomplete");
 
-const boundaries = { minimum_contribution_margin: "5", daily_budget_cap: "5000", daily_loss_cap: "300", refund_rate_ceiling: "25", inventory_days_floor: "7", single_adjustment_cap: "10" };
+const boundaries = {
+  minimum_contribution_margin: "5", daily_budget_cap: "5000", daily_loss_cap: "300",
+  refund_rate_ceiling: "25", inventory_days_floor: "7", single_adjustment_cap: "10",
+  daily_adjustment_cap: "20", daily_action_cap: "2", cooldown_minutes: "30",
+  authorization_ttl_seconds: "60",
+};
 const validBoundaries = planner.validateBoundaries(boundaries);
 assert.equal(validBoundaries.status, "ready");
 assert.equal(validBoundaries.execution_allowed, false);
 assert.equal(planner.validateBoundaries({ ...boundaries, daily_loss_cap: "" }).status, "incomplete");
 assert.equal(planner.validateBoundaries({ ...boundaries, daily_budget_cap: "0" }).status, "invalid");
 assert.equal(planner.validateBoundaries({ ...boundaries, refund_rate_ceiling: "101" }).status, "invalid");
+assert.equal(planner.validateBoundaries({ ...boundaries, daily_adjustment_cap: "5" }).status, "invalid");
+assert.equal(planner.validateBoundaries({ ...boundaries, daily_action_cap: "1.5" }).status, "invalid");
+assert.equal(planner.validateBoundaries({ ...boundaries, cooldown_minutes: "5" }).status, "invalid");
+assert.equal(planner.validateBoundaries({ ...boundaries, authorization_ttl_seconds: "10" }).status, "invalid");
+assert.equal(validBoundaries.emergency_stop_active, true);
+assert.equal(validBoundaries.adapter_policy, "official_api_only");
 
 const insufficientDecision = planner.buildDecisionBrief({ goal: "profit", calculation: ready, boundaries: validBoundaries, qualification, bottlenecks: { status: "clear", primary: null }, readiness: { identity_ready: false, metric_ready: false, data_ready: false } });
 assert.equal(insufficientDecision.action, "先补齐店铺与账户身份");

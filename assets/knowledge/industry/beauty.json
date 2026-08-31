@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "pack_id": "industry.beauty",
+  "industry": "beauty",
+  "display_name": "美妆个护经营知识包",
+  "publisher": "店策官方",
+  "channel": "stable",
+  "min_agent_version": "4.6.0",
+  "pack_version": "2026.08.22.1",
+  "published_at": "2026-08-22T00:00:00+08:00",
+  "expires_at": "2031-08-22T00:00:00+08:00",
+  "capabilities": ["爆品库存", "套组承接", "素材疲劳", "投放止损"],
+  "required_metrics": ["inventory.available", "sales.last_24h", "spend", "roi", "data_age_minutes"],
+  "rules": [
+    {
+      "rule_id": "beauty.inventory.hero_sku_risk",
+      "version": 1,
+      "priority": 15,
+      "enabled": true,
+      "conditions": {
+        "all": [
+          {"field": "inventory.available", "operator": "<=", "formula": "inventory_warning_line * 2.5"},
+          {"field": "sales.last_24h", "operator": ">", "value": 0}
+        ]
+      },
+      "result": {
+        "level": "high",
+        "title": "美妆库存需按主推 SKU 与套组核对",
+        "message": "全店仍有出单且库存汇总值触及预警线；当前数据不足以确认爆品缺货，请按同一 SKU 核对正装、赠品和套组库存。",
+        "action": {"type": "check_inventory", "label": "核对主推 SKU、赠品和套组库存"},
+        "acceptance": {"metric": "inventory.available", "target": "完成同一 SKU、赠品与套组库存核对，并确认承接方案"}
+      }
+    },
+    {
+      "rule_id": "beauty.qianchuan.creative_fatigue",
+      "version": 1,
+      "priority": 25,
+      "enabled": true,
+      "conditions": {
+        "all": [
+          {"field": "spend", "operator": ">=", "value_from": "min_spend"},
+          {"field": "roi", "operator": "<", "formula": "roi_target * 0.9"},
+          {"field": "data_age_minutes", "operator": "<=", "value": 30}
+        ]
+      },
+      "result": {
+        "level": "medium",
+        "title": "美妆投放表现需联动套组复核",
+        "message": "账户汇总消耗达到判断门槛且 ROI 低于目标；当前不能直接归因，请按同一计划复核素材疲劳、到手价和套组承接。",
+        "action": {"type": "manual_review", "label": "复核素材频次、到手价和套组转化"},
+        "acceptance": {"metric": "roi", "observation_minutes": 60, "target": "ROI 停止下滑或恢复到目标的 90%"}
+      }
+    }
+  ],
+  "sha256": "7e691e98f8bf9d1207ae3c7b84c57a7961e42bf3c596633b33a6543cfdb9f87b",
+  "trusted_builtin": true
+}

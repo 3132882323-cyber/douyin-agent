@@ -4,7 +4,7 @@ set "PROJECT_DIR=%~dp0"
 
 echo.
 echo ============================================
-echo   Dian Agent v4.1.0 Setup
+echo   Dian Agent v4.14.9 Setup
 echo ============================================
 echo   Local-first Douyin commerce operations
 echo   AI connection is optional

@@ -81,31 +81,36 @@ class MultiStoreCatalogTests(unittest.TestCase):
 
     def test_operation_context_allows_review_for_fresh_official_store(self):
         now = int(time.time())
-        result = http_receiver.build_operation_context(
-            catalog={
-                "selected_store_key": "acct_ready",
-                "selected_account_key": "acct_ready_account",
-                "stores": [{
-                    "key": "acct_ready",
-                    "label": "甲店",
-                    "state": "ready",
-                    "state_label": "官方 API 可用",
-                    "channel": "official_api",
-                    "advertiser_count": 1,
-                    "page_count": 4,
-                    "qianchuan_page_count": 4,
-                    "account_keys": ["acct_ready_account"],
-                    "updated_at": now,
-                }],
-            },
-            receipt={
-                "account_key": "",
-                "finished_at": 0,
-                "analysis_ready": False,
-                "summary": {"coverage_rate": 0},
-                "warnings": [],
-            },
-        )
+        core_snapshots = [
+            {"source": "doudian", "page_type": page_type, "quality_score": 90, "age_seconds": 60, "timestamp_conflict": False}
+            for page_type in ["overview", "orders", "products", "shelf"]
+        ]
+        with patch.object(http_receiver, "list_snapshots", return_value=core_snapshots):
+            result = http_receiver.build_operation_context(
+                catalog={
+                    "selected_store_key": "acct_ready",
+                    "selected_account_key": "acct_ready_account",
+                    "stores": [{
+                        "key": "acct_ready",
+                        "label": "甲店",
+                        "state": "ready",
+                        "state_label": "官方 API 可用",
+                        "channel": "official_api",
+                        "advertiser_count": 1,
+                        "page_count": 4,
+                        "qianchuan_page_count": 4,
+                        "account_keys": ["acct_ready_account"],
+                        "updated_at": now,
+                    }],
+                },
+                receipt={
+                    "account_key": "",
+                    "finished_at": 0,
+                    "analysis_ready": False,
+                    "summary": {"coverage_rate": 0},
+                    "warnings": [],
+                },
+            )
         self.assertEqual(result["state"], "ready")
         self.assertTrue(result["execution_review_allowed"])
         self.assertEqual(result["source_label"], "千川官方 API")

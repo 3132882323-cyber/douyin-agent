@@ -10,10 +10,10 @@ if ($Manifest.manifest_version -ne 3) { throw "manifest_version must be 3" }
 if ($Manifest.host_permissions -contains "<all_urls>") { throw "<all_urls> is not allowed" }
 
 $RequiredFiles = @(
-  "manifest.json", "background.js", "scan-policy.js", "content-common.js", "content-doudian.js",
-  "content-qianchuan.js", "popup.html", "popup.css", "popup.js",
-  "welcome.html", "welcome.js",
-  "sidepanel.html", "sidepanel.css", "sidepanel.js", "icon48.png", "icon128.png",
+  "manifest.json", "background.js", "bridge-auth.js", "runtime-recovery.js", "scan-scope-policy.js", "scan-policy.js", "execution-readback-policy.js", "execution-sender-policy.js", "content-common.js", "content-doudian.js",
+  "content-qianchuan.js", "platform-assistant.js", "popup.html", "popup.css", "popup.js",
+  "welcome.html", "welcome.js", "product-capability.js",
+  "sidepanel.html", "sidepanel.css", "sidepanel.js", "connection-guide-policy.js", "journey-orchestrator.js", "chengfang-planner.js", "chengfang-trial-policy.js", "chengfang-profile-draft.js", "autopilot-center.js", "control-task-center.js", "automation-policy-center.js", "oceanengine-account-center.js", "material-governance.js", "promotion-plan-center.js", "promotion-bulk-actions.js", "promotion-operation-log.js", "simple-experience.js", "icon48.png", "icon128.png",
   "upgrade.html", "upgrade.js", "sync.html", "sync.js", "scan.html", "scan.js", "cancel-scan.html", "cancel-scan.js", "retry-scan.html", "retry-scan.js", "smoke-scan.html", "smoke-scan.js"
 )
 foreach ($File in $RequiredFiles) {

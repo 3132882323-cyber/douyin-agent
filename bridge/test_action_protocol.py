@@ -1,6 +1,6 @@
 import unittest
 
-from action_protocol import assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
+from action_protocol import action_integrity_hash, assess_automation_readiness, build_action_draft, transition_action, validate_action_draft
 
 
 class ActionProtocolTests(unittest.TestCase):
@@ -48,17 +48,62 @@ class ActionProtocolTests(unittest.TestCase):
         self.assertIn("TARGET_ID_MISSING", codes)
         self.assertFalse(draft["can_confirm"])
 
+    def test_action_and_context_accounts_must_match_case_insensitively(self):
+        context = {"account_scope": {"account_id": " Account-1 "}}
+        same_account = self._draft(account_key="ACCOUNT-1", promotion_context=context)
+        self.assertTrue(same_account["can_confirm"])
+
+        mismatched = self._draft(account_key="account-1", promotion_context={
+            "account_scope": {"account_id": "account-2"},
+        })
+        self.assertFalse(mismatched["can_confirm"])
+        self.assertIn("ACTION_CONTEXT_ACCOUNT_MISMATCH", {
+            item["code"] for item in mismatched["blocked_reasons"]
+        })
+
+    def test_recomputed_public_hash_cannot_authorize_cross_account_action(self):
+        forged = self._draft(account_key="account-1", promotion_context={
+            "account_scope": {"account_id": "account-2"},
+        })
+        forged["blocked_reasons"] = []
+        forged["can_confirm"] = True
+        forged_hash = action_integrity_hash(forged)
+        forged["integrity_hash"] = forged_hash
+        forged["action_id"] = forged_hash[:24]
+        forged["idempotency_key"] = f"dian-action-{forged_hash[:32]}"
+
+        codes = {item["code"] for item in validate_action_draft(forged, now_ms=1_001_000)}
+        self.assertIn("ACTION_CONTEXT_ACCOUNT_MISMATCH", codes)
+        self.assertNotIn("INTEGRITY_CHECK_FAILED", codes)
+
     def test_stale_or_low_quality_data_blocks_confirmation(self):
         draft = self._draft(captured_at_ms=1, now_ms=700_000, quality_score=60)
         codes = {item["code"] for item in draft["blocked_reasons"]}
         self.assertIn("DATA_STALE", codes)
         self.assertIn("DATA_QUALITY_LOW", codes)
 
+    def test_future_capture_time_cannot_extend_action_validity(self):
+        draft = self._draft(captured_at_ms=2_000_000, now_ms=1_000_000)
+        codes = {item["code"] for item in draft["blocked_reasons"]}
+        self.assertIn("CAPTURE_TIME_IN_FUTURE", codes)
+        self.assertFalse(draft["can_confirm"])
+        self.assertIn("CAPTURE_TIME_IN_FUTURE", {
+            item["code"] for item in validate_action_draft(draft, now_ms=1_000_000)
+        })
+
     def test_change_limits_are_enforced(self):
         increase = self._draft(target_value=600)
         decrease = self._draft(target_value=300)
         self.assertIn("INCREASE_LIMIT_EXCEEDED", {item["code"] for item in increase["blocked_reasons"]})
         self.assertIn("DECREASE_LIMIT_EXCEEDED", {item["code"] for item in decrease["blocked_reasons"]})
+
+    def test_non_finite_and_boolean_budget_values_fail_closed(self):
+        for current, target in ((float("nan"), 400), (500, float("inf")), (True, 1)):
+            with self.subTest(current=current, target=target):
+                draft = self._draft(current_value=current, target_value=target)
+                self.assertFalse(draft["can_confirm"])
+                codes = {item["code"] for item in draft["blocked_reasons"]}
+                self.assertTrue({"CURRENT_VALUE_MISSING", "TARGET_VALUE_INVALID"} & codes)
 
     def test_integrity_change_is_detected(self):
         draft = self._draft()

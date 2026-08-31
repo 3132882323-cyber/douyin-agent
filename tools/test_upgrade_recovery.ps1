@@ -7,21 +7,41 @@ $sandboxParentFull = [IO.Path]::GetFullPath($sandboxParent)
 $python = Join-Path $projectDir "bridge\.venv\Scripts\python.exe"
 $updaterScript = Join-Path $projectDir "bridge\offline_upgrade.py"
 $agentSource = Join-Path $projectDir "dist\agent\DianAgent.exe"
+$actualVersion = [string](Get-Content -LiteralPath (Join-Path $projectDir "extension\manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
 $starter = Join-Path $PSScriptRoot "start_agent.ps1"
 $watchdog = Join-Path $PSScriptRoot "watchdog_release.ps1"
-foreach ($required in @($python, $updaterScript, $agentSource, $starter, $watchdog)) {
+$trustPolicy = Join-Path $PSScriptRoot "windows_trust_policy.ps1"
+foreach ($required in @($python, $updaterScript, $agentSource, $starter, $watchdog, $trustPolicy)) {
   if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Recovery test prerequisite is missing: $required" }
+}
+$sourceVersionText = Get-Content -LiteralPath (Join-Path $projectDir "bridge\version.py") -Raw -Encoding UTF8
+$sourceVersionMatch = [regex]::Match($sourceVersionText, '(?m)^\s*AGENT_VERSION\s*=\s*["'']([^"'']+)["'']\s*$')
+if (-not $actualVersion -or -not $sourceVersionMatch.Success -or $sourceVersionMatch.Groups[1].Value -ne $actualVersion) {
+  throw "Recovery test source version mismatch: bridge/version.py and extension/manifest.json must match exactly."
+}
+$agentVersionInfo = (Get-Item -LiteralPath $agentSource).VersionInfo
+$agentFileVersion = [string]$agentVersionInfo.FileVersion
+$agentProductVersion = [string]$agentVersionInfo.ProductVersion
+if ($agentFileVersion -ne $actualVersion -or $agentProductVersion -ne $actualVersion) {
+  throw "Recovery test requires a fresh DianAgent.exe for $actualVersion; found FileVersion=$agentFileVersion ProductVersion=$agentProductVersion. Run tools/build_agent.ps1 first."
 }
 
 function Stop-SandboxAgents([string]$Root) {
   $prefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+  $ownedPids = @()
   Get-CimInstance Win32_Process -Filter "Name='DianAgent.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
     if ($_.ExecutablePath) {
       $path = [IO.Path]::GetFullPath([string]$_.ExecutablePath)
       if ($path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $ownedPids += [int]$_.ProcessId
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
       }
     }
+  }
+  $deadline = (Get-Date).AddSeconds(5)
+  while ($ownedPids.Count -gt 0 -and (Get-Date) -lt $deadline) {
+    $ownedPids = @($ownedPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($ownedPids.Count -gt 0) { Start-Sleep -Milliseconds 100 }
   }
 }
 
@@ -40,8 +60,9 @@ function Initialize-Case([string]$Name, [string]$CurrentVersion, [string]$Previo
     Stop-SandboxAgents $rootFull
     Remove-Item -LiteralPath $rootFull -Recurse -Force
   }
-  New-Item -ItemType Directory -Force -Path (Join-Path $root "tools"), (Join-Path $root "data"), (Join-Path $root "logs") | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $root "tools"), (Join-Path $root "data"), (Join-Path $root "logs"), (Join-Path $root "config") | Out-Null
   Copy-Item -LiteralPath $watchdog -Destination (Join-Path $root "tools\watchdog_release.ps1")
+  Copy-Item -LiteralPath $trustPolicy -Destination (Join-Path $root "tools\windows_trust_policy.ps1")
   $wrapper = "@echo off`r`n`"$python`" `"$updaterScript`" %*`r`n"
   Set-Content -LiteralPath (Join-Path $root "tools\DianAgentUpdater.cmd") -Encoding ASCII -Value $wrapper
 
@@ -77,6 +98,15 @@ function Initialize-Case([string]$Name, [string]$CurrentVersion, [string]$Previo
     had_extension = $false
     previous_version = $PreviousVersion
     new_version = $CurrentVersion
+    prepared_at = "2026-08-03T00:00:00+00:00"
+  })
+  Write-Utf8Json (Join-Path $root "config\distribution_state.json") ([ordered]@{
+    source = "developer"
+    browser = "chrome"
+    version = $CurrentVersion
+    extension_id = ("a" * 32)
+    reported_at = "2026-08-04T00:00:00+00:00"
+    origin_verified = $true
   })
   return $root
 }
@@ -84,18 +114,18 @@ function Initialize-Case([string]$Name, [string]$CurrentVersion, [string]$Previo
 New-Item -ItemType Directory -Force -Path $sandboxParentFull | Out-Null
 $powershell = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
 try {
-  $healthyRoot = Initialize-Case "healthy-confirm" "4.0.0" "3.9.0" $true
+  $healthyRoot = Initialize-Case "healthy-confirm" $actualVersion "4.10.0" $true
   & $powershell -NoProfile -ExecutionPolicy Bypass -File $starter -InstallRoot $healthyRoot -Port 18765 `
     -StartupTimeoutSeconds 8 -UpdaterPath (Join-Path $healthyRoot "tools\DianAgentUpdater.cmd")
   if ($LASTEXITCODE -ne 0) { throw "Healthy pending upgrade recovery returned $LASTEXITCODE." }
   if (Test-Path -LiteralPath (Join-Path $healthyRoot ".offline-upgrade-rollback")) {
     throw "Healthy pending upgrade was not confirmed."
   }
-  $health = Invoke-RestMethod -Uri "http://127.0.0.1:18765/health" -TimeoutSec 3
-  if ($health.version -ne "4.0.0") { throw "Healthy recovery started the wrong version." }
+  $health = Invoke-RestMethod -Uri "http://127.0.0.1:18765/health/live" -TimeoutSec 3
+  if ([string]$health.version -ne $actualVersion) { throw "Healthy recovery started the wrong version." }
   Stop-SandboxAgents $healthyRoot
 
-  $rollbackRoot = Initialize-Case "unhealthy-rollback" "4.1.0" "4.0.0" $false
+  $rollbackRoot = Initialize-Case "unhealthy-rollback" "99.0.0" $actualVersion $false
   & $powershell -NoProfile -ExecutionPolicy Bypass -File $starter -InstallRoot $rollbackRoot -Port 18766 `
     -StartupTimeoutSeconds 8 -UpdaterPath (Join-Path $rollbackRoot "tools\DianAgentUpdater.cmd")
   if ($LASTEXITCODE -ne 4) { throw "Unhealthy pending upgrade should return recovery code 4, got $LASTEXITCODE." }
@@ -103,10 +133,41 @@ try {
     throw "Unhealthy pending upgrade transaction was not rolled back."
   }
   $pointer = Get-Content -LiteralPath (Join-Path $rollbackRoot "current.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-  if ([string]$pointer.version -ne "4.0.0") { throw "Rollback did not restore the previous pointer." }
-  $health = Invoke-RestMethod -Uri "http://127.0.0.1:18766/health" -TimeoutSec 3
-  if ($health.version -ne "4.0.0") { throw "Previous Agent did not become healthy after rollback." }
+  if ([string]$pointer.version -ne $actualVersion) { throw "Rollback did not restore the previous pointer." }
+  $health = Invoke-RestMethod -Uri "http://127.0.0.1:18766/health/live" -TimeoutSec 3
+  if ([string]$health.version -ne $actualVersion) { throw "Previous Agent did not become healthy after rollback." }
   Stop-SandboxAgents $rollbackRoot
+
+  # A watchdog safety/integrity failure is not evidence that the pending Agent
+  # version is unhealthy. It must fail fast and preserve the pending
+  # transaction for explicit repair instead of invoking the rollback updater.
+  $blockedRoot = Initialize-Case "safety-failure" $actualVersion "4.10.0" $true
+  $blockedWatchdog = Join-Path $blockedRoot "tools\watchdog_release.ps1"
+  [IO.File]::WriteAllText(
+    $blockedWatchdog,
+    "param([string]`$InstallRoot,[int]`$Port,[int]`$StartupTimeoutSeconds)`r`nexit 4`r`n",
+    (New-Object Text.UTF8Encoding($false))
+  )
+  $updaterMarker = Join-Path $blockedRoot "updater-called.txt"
+  $blockedUpdater = Join-Path $blockedRoot "tools\DianAgentUpdater.cmd"
+  [IO.File]::WriteAllText(
+    $blockedUpdater,
+    "@echo off`r`n> `"$updaterMarker`" echo called`r`nexit /b 0`r`n",
+    [Text.Encoding]::ASCII
+  )
+  $blockedStartedAt = Get-Date
+  & $powershell -NoProfile -ExecutionPolicy Bypass -File $starter -InstallRoot $blockedRoot -Port 18767 `
+    -StartupTimeoutSeconds 8 -UpdaterPath $blockedUpdater
+  $blockedExitCode = $LASTEXITCODE
+  $blockedElapsedSeconds = ((Get-Date) - $blockedStartedAt).TotalSeconds
+  if ($blockedExitCode -eq 0) { throw "A watchdog safety failure was accepted as a healthy startup." }
+  if ($blockedElapsedSeconds -ge 7) { throw "A watchdog safety failure did not fail fast." }
+  if (Test-Path -LiteralPath $updaterMarker) { throw "A watchdog safety failure incorrectly invoked version rollback." }
+  $blockedPointer = Get-Content -LiteralPath (Join-Path $blockedRoot "current.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ([string]$blockedPointer.version -ne $actualVersion) { throw "A watchdog safety failure changed the active version pointer." }
+  if (-not (Test-Path -LiteralPath (Join-Path $blockedRoot ".offline-upgrade-rollback") -PathType Container)) {
+    throw "A watchdog safety failure discarded the pending recovery evidence."
+  }
 } finally {
   if (Test-Path -LiteralPath $sandboxParentFull) {
     Get-ChildItem -LiteralPath $sandboxParentFull -Directory -ErrorAction SilentlyContinue | ForEach-Object {

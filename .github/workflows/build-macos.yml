@@ -1,0 +1,52 @@
+name: Build macOS preview packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            bridge/requirements.txt
+            bridge/requirements-build.txt
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.architecture }}"
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r bridge/requirements.txt
+      - name: Run Python tests
+        working-directory: bridge
+        run: python -m unittest discover -s . -p 'test_*.py'
+      - name: Run extension tests
+        run: |
+          for test_file in extension/test-*.js; do node "$test_file"; done
+          for script_file in extension/*.js; do node --check "$script_file"; done
+      - name: Build native preview
+        run: |
+          chmod +x tools/macos/*.sh tools/macos/*.command
+          ./tools/macos/build_release.sh
+      - name: Verify artifact architecture
+        run: file dist/agent-macos/DianAgent | grep "${{ matrix.architecture }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DianAgent-macos-${{ matrix.architecture }}
+          path: |
+            dist/release/DianAgent-v*-macos-${{ matrix.architecture }}.zip
+            dist/release/DianAgent-v*-macos-${{ matrix.architecture }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

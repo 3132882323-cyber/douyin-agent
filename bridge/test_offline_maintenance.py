@@ -51,6 +51,25 @@ class OfflineMaintenanceTests(unittest.TestCase):
                 os.utime(Path(base) / name, (stamp, stamp))
         os.utime(path, (stamp, stamp))
 
+    def _authenticated_extension_report(
+        self, version: str, reported_at: str = "2026-08-04T00:00:00+00:00"
+    ) -> None:
+        config = self.root / "config"
+        config.mkdir(exist_ok=True)
+        (config / "distribution_state.json").write_text(
+            json.dumps(
+                {
+                    "source": "developer",
+                    "browser": "chrome",
+                    "version": version,
+                    "extension_id": "a" * 32,
+                    "reported_at": reported_at,
+                    "origin_verified": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+
     def test_cleanup_dry_run_and_apply_preserve_active_recent_and_fresh_layout(self) -> None:
         active = self._version("3.8.0")
         recent = self._version("3.9.0")
@@ -102,10 +121,13 @@ class OfflineMaintenanceTests(unittest.TestCase):
                     "had_extension": True,
                     "previous_version": "3.8.0",
                     "new_version": "3.9.0",
+                    "prepared_at": "2026-08-03T00:00:00+00:00",
                 }
             ),
             encoding="utf-8",
         )
+
+        self._authenticated_extension_report("3.9.0")
         for path in (previous, active, orphan, staging, completed):
             self._make_old(path)
 
@@ -192,13 +214,15 @@ class OfflineMaintenanceTests(unittest.TestCase):
                     "had_extension": False,
                     "previous_version": "3.8.0",
                     "new_version": "3.9.0",
+                    "prepared_at": "2026-08-03T00:00:00+00:00",
                 }
             ),
             encoding="utf-8",
         )
 
+        self._authenticated_extension_report("3.9.0")
         with mock.patch.object(offline_upgrade, "_read_local_health", return_value={"status": "ok", "version": "3.9.0"}):
-            result = recover_pending_upgrade(self.root, health_url="http://127.0.0.1:8765/health")
+            result = recover_pending_upgrade(self.root, health_url="http://127.0.0.1:8765/health/live")
 
         self.assertEqual("healthy_upgrade_confirmed", result["status"])
         self.assertEqual("3.9.0", transaction_status(self.root)["current_version"])
@@ -224,12 +248,12 @@ class OfflineMaintenanceTests(unittest.TestCase):
             encoding="utf-8",
         )
         with mock.patch.object(offline_upgrade, "_read_local_health", return_value=None):
-            waiting = recover_pending_upgrade(self.root, health_url="http://127.0.0.1:8765/health")
+            waiting = recover_pending_upgrade(self.root, health_url="http://127.0.0.1:8765/health/live")
             self.assertEqual("pending_health_unconfirmed", waiting["status"])
             self.assertEqual("3.9.0", transaction_status(self.root)["current_version"])
             rolled_back = recover_pending_upgrade(
                 self.root,
-                health_url="http://127.0.0.1:8765/health",
+                health_url="http://127.0.0.1:8765/health/live",
                 rollback_if_unhealthy=True,
             )
 
@@ -252,15 +276,65 @@ class OfflineMaintenanceTests(unittest.TestCase):
                     "had_extension": False,
                     "previous_version": "3.8.0",
                     "new_version": None,
+                    "prepared_at": "2026-08-03T00:00:00+00:00",
                 }
             ),
             encoding="utf-8",
         )
+        self._authenticated_extension_report("3.9.0")
         with mock.patch.object(offline_upgrade, "_read_local_health", return_value={"status": "ok", "version": "3.9.0"}):
-            result = recover_pending_upgrade(self.root, health_url="http://127.0.0.1:8765/health")
+            result = recover_pending_upgrade(self.root, health_url="http://127.0.0.1:8765/health/live")
 
         self.assertEqual("healthy_upgrade_confirmed", result["status"])
         self.assertEqual("3.9.0", transaction_status(self.root)["current_version"])
+        self.assertFalse(rollback.exists())
+
+    def test_healthy_target_retains_rollback_until_fresh_authenticated_extension_report(self) -> None:
+        self._version("3.8.0")
+        self._version("3.9.0")
+        self._pointer("3.9.0")
+        rollback = self.root / ".offline-upgrade-rollback"
+        rollback.mkdir()
+        self._pointer("3.8.0", rollback / "previous-current.json")
+        (rollback / "state.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "had_current": True,
+                    "had_extension": False,
+                    "previous_version": "3.8.0",
+                    "new_version": "3.9.0",
+                    "prepared_at": "2026-08-03T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(
+            offline_upgrade,
+            "_read_local_health",
+            return_value={"status": "ok", "version": "3.9.0"},
+        ):
+            waiting = recover_pending_upgrade(
+                self.root, health_url="http://127.0.0.1:8765/health/live"
+            )
+            self.assertEqual("pending_extension_confirmation", waiting["status"])
+            self.assertTrue(rollback.is_dir())
+
+            self._authenticated_extension_report(
+                "3.9.0", reported_at="2026-08-02T00:00:00+00:00"
+            )
+            stale = recover_pending_upgrade(
+                self.root, health_url="http://127.0.0.1:8765/health/live"
+            )
+            self.assertEqual("pending_extension_confirmation", stale["status"])
+            self.assertEqual("authenticated_extension_report_stale", stale["extension_confirmation"])
+            self.assertTrue(rollback.is_dir())
+
+            self._authenticated_extension_report("3.9.0")
+            confirmed = recover_pending_upgrade(
+                self.root, health_url="http://127.0.0.1:8765/health/live"
+            )
+        self.assertEqual("healthy_upgrade_confirmed", confirmed["status"])
         self.assertFalse(rollback.exists())
 
 

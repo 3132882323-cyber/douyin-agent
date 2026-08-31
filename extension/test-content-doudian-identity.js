@@ -4,7 +4,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync(require.resolve("./content-doudian.js"), "utf8");
 
-async function capture({ pathname, search = "", attrs = [], storageValues = {} }) {
+async function capture({ pathname, search = "", attrs = [], storageValues = {}, bodyText = "", bootstrapScripts = [] }) {
   let listener;
   let pushed;
   const context = {
@@ -12,6 +12,10 @@ async function capture({ pathname, search = "", attrs = [], storageValues = {} }
     location: { href: `https://fxg.jinritemai.com${pathname}${search}`, pathname, search, hash: "" },
     document: {
       documentElement: {},
+      body: { innerText: bodyText },
+      scripts: bootstrapScripts.map((value) => typeof value === "string"
+        ? { src: "", textContent: value }
+        : { src: value.src || "", textContent: value.textContent || "" }),
       querySelector() { return null; },
       querySelectorAll(selector) {
         return selector === "[data-shop-id], [data-store-id]" ? attrs.map((value) => ({
@@ -59,10 +63,78 @@ async function capture({ pathname, search = "", attrs = [], storageValues = {} }
   assert.strictEqual(unresolved.response.store, null);
   assert.strictEqual(unresolved.pushed.identity_status, "unresolved");
 
+  const visibleOverviewIdentity = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    bodyText: "欢迎回来  店铺ID：55667788  今日经营数据",
+  });
+  assert.strictEqual(visibleOverviewIdentity.response.store.key, "resolved_55667788");
+  assert.strictEqual(visibleOverviewIdentity.pushed.identity_claims[0].evidence_source, "overview_visible_text");
+
+  const innerPageVisibleTextIsNotProof = await capture({
+    pathname: "/ffa/morder/order/list",
+    bodyText: "订单所属店铺ID：55667788",
+  });
+  assert.strictEqual(innerPageVisibleTextIsNotProof.pushed.identity_status, "unresolved");
+
+  const bootstrapIdentity = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    bootstrapScripts: ['window.__BOOTSTRAP__={"shop":{"sec_shop_id":"55667788","shop_type":1}}'],
+  });
+  assert.strictEqual(bootstrapIdentity.response.store.key, "resolved_55667788");
+  assert.strictEqual(bootstrapIdentity.pushed.identity_claims[0].evidence_source, "bootstrap_sec_shop_id");
+
+  const externalScriptIsNotIdentity = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    bootstrapScripts: [{ src: "https://example.invalid/app.js", textContent: '{"sec_shop_id":"55667788"}' }],
+  });
+  assert.strictEqual(externalScriptIsNotIdentity.pushed.identity_status, "unresolved");
+
+  const ambiguousBootstrapIsNotProof = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    bootstrapScripts: ['{"sec_shop_id":"55667788"}', '{"sec_shop_id":"11223344"}'],
+  });
+  assert.strictEqual(ambiguousBootstrapIsNotProof.pushed.identity_status, "unresolved");
+
+  const bootstrapConflict = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    search: "?shop_id=778899",
+    bootstrapScripts: ['{"sec_shop_id":"55667788"}'],
+  });
+  assert.strictEqual(bootstrapConflict.pushed.identity_status, "conflict");
+
   const conflict = await capture({ pathname: "/ffa/mshop/homepage/index", search: "?shop_id=778899", attrs: ["112233"] });
   assert.strictEqual(conflict.response.store, null);
   assert.strictEqual(conflict.pushed.identity_status, "conflict");
   assert.deepStrictEqual(Array.from(conflict.pushed.identity_claims), []);
+  assert.deepStrictEqual(Array.from(conflict.pushed.identity_conflicts), ["douyin_shop_id"]);
+
+  const ambiguousCache = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    storageValues: { shopId: "778899", store_id: "112233" },
+  });
+  assert.strictEqual(ambiguousCache.response.store, null);
+  assert.strictEqual(ambiguousCache.pushed.identity_status, "unresolved");
+  assert.deepStrictEqual(Array.from(ambiguousCache.pushed.identity_claims), []);
+
+  const historicalShopListIsNotProof = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    storageValues: { shopList: JSON.stringify([{ shop_id: "778899" }]) },
+  });
+  assert.strictEqual(historicalShopListIsNotProof.pushed.identity_status, "unresolved");
+  assert.deepStrictEqual(Array.from(historicalShopListIsNotProof.pushed.identity_claims), []);
+
+  const genericScalarCacheIsNotProof = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    storageValues: { shopId: "778899" },
+  });
+  assert.strictEqual(genericScalarCacheIsNotProof.pushed.identity_status, "unresolved");
+
+  const activeScalarCache = await capture({
+    pathname: "/ffa/mshop/homepage/index",
+    storageValues: { activeShopId: "778899" },
+  });
+  assert.strictEqual(activeScalarCache.pushed.identity_claims[0].raw_id, "778899");
+  assert.strictEqual(activeScalarCache.pushed.identity_claims[0].evidence_source, "allowlisted_storage");
 
   console.log("content-doudian identity tests passed");
 })().catch((error) => {

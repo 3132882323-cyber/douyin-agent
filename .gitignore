@@ -1,9 +1,12 @@
 # Local business data and generated reports
 bridge/data/
+bridge/backup/
 bridge/bridge.log
 bridge/bridge.stdout.log
 bridge/bridge.stderr.log
 bridge/config/
+bridge/logs/
+bridge/knowledge/
 reports/
 .env
 .env.*
@@ -13,6 +16,35 @@ reports/
 *.pem
 *.crx
 dist/
+
+# Closed-source commercial capabilities must live in a separate private repo.
+# These ignores are a last-resort git safety net; release builds also fail when
+# any of these paths exist inside the public source tree or final artifact.
+private/
+enterprise/
+commercial_private/
+commercial-private/
+.entitlements/
+*.license
+
+# Transitional flat-file denylist for the commercial Chengfang runtime.
+# Keep this synchronized with tools/check_public_release.py until these files
+# are moved into the separate private repository.
+/bridge/chengfang_autopilot.py
+/bridge/chengfang_autopilot_runtime.py
+/bridge/chengfang_evidence.py
+/bridge/chengfang_official_contract.py
+/bridge/chengfang_official_adapter.py
+/bridge/chengfang_production_controller.py
+/bridge/chengfang_production_targets.py
+/bridge/test_chengfang_autopilot.py
+/bridge/test_chengfang_autopilot_runtime.py
+/bridge/test_chengfang_evidence.py
+/bridge/test_chengfang_official_contract.py
+/bridge/test_chengfang_official_adapter.py
+/bridge/test_chengfang_production_controller.py
+/bridge/test_chengfang_production_http.py
+/bridge/test_chengfang_production_targets.py
 
 # Python and local environments
 __pycache__/
