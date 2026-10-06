@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "edition": "free_plugin_modules",
+  "as_of": "2026-10-06",
+  "complete_extension_release": false,
+  "runtime_dependencies": [],
+  "test_only_dependencies": ["Node.js", "Playwright and installed Chrome for the optional browser fixture"],
+  "files": [
+    "README.md",
+    "PUBLIC_FILES.json",
+    "extension/product-package-queue.js",
+    "extension/test-product-package-queue.js",
+    "extension/test-product-package-queue-recovery.js",
+    "extension/category-required-attribute-check-core.js",
+    "extension/test-category-required-attribute-check-core.js",
+    "extension/complex-sku-native-dom-reader.js",
+    "extension/test-complex-sku-native-dom-reader.js",
+    "tools/smoke_complex_sku_native_dom_reader.cjs"
+  ]
+}

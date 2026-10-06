@@ -1,5 +1,7 @@
 # 店策 Agent｜抖音电商 × 千川乘方经营大脑
 
+免费插件的独立模块与合成测试更新见 [community/free-plugin](community/free-plugin/README.md)。这不是完整插件新版发布，不包含私有投放逻辑或真实商家资料。
+
 [![Version](https://img.shields.io/badge/version-4.14.9-2563eb)](extension/manifest.json)
 [![Browser](https://img.shields.io/badge/Chrome%20%7C%20Edge%20%7C%20360%20%7C%20QQ-MV3-16a34a)](BROWSER_SUPPORT.md)
 [![License](https://img.shields.io/badge/license-MIT-f59e0b)](LICENSE)
