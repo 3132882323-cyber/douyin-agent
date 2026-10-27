@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "edition": "free_plugin_modules",
-  "as_of": "2026-10-06",
+  "as_of": "2026-10-27",
   "complete_extension_release": false,
   "runtime_dependencies": [],
   "test_only_dependencies": ["Node.js", "Playwright and installed Chrome for the optional browser fixture"],
@@ -15,6 +15,13 @@
     "extension/test-category-required-attribute-check-core.js",
     "extension/complex-sku-native-dom-reader.js",
     "extension/test-complex-sku-native-dom-reader.js",
-    "tools/smoke_complex_sku_native_dom_reader.cjs"
+    "tools/smoke_complex_sku_native_dom_reader.cjs",
+    "extension/shelf-tools-core.js",
+    "extension/shelf-detail-core.js",
+    "extension/product-move-core.js",
+    "extension/test-shelf-tools-core.js",
+    "extension/test-shelf-detail-public.js",
+    "extension/test-product-move-core.js",
+    "extension/test-product-move-price-rule.js"
   ]
 }
