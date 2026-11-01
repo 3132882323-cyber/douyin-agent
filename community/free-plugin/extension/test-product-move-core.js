@@ -525,4 +525,44 @@ test("metadata accessors and credential additions are invalid without reads",()=
 test("specifications do not inherit attribute enum metadata capability",()=>{const p=pkg();p.skus[0].specifications[0].source_metadata=enumAttribute().source_metadata;assert.equal(core.normalizePackage(p).ok,false);});
 test("duplicate source property identities cannot survive as different names",()=>{const a=enumAttribute(),b=enumAttribute();b.name="另一名称";assert.equal(core.normalizePackage(pkg({attributes:[a,b]})).ok,false);});
 test("draft source subtype normalizes and roundtrips only exact current draft URL",()=>{const p=pkg();p.source.source_kind='doudian_draft_product';p.source.source_url='https://fxg.jinritemai.com/ffa/g/create?product_id='+p.source.product_id+'&entrance=draft';assert.equal(core.normalizePackage(p).ok,true);assert.equal(core.normalizePackage(JSON.parse(JSON.stringify(p))).product.source.source_kind,'doudian_draft_product');for(const suffix of ['&entrance=edit','&product_id='+p.source.product_id,'&page=2']){const q=JSON.parse(JSON.stringify(p));q.source.source_url+=suffix;assert.equal(core.normalizePackage(q).ok,false);}p.source.source_url=p.source.source_url.replace('entrance=draft','entrance=edit');assert.equal(core.normalizePackage(p).ok,false);});
+// All local template and specification cases below are synthetic data only.
+const localTemplate=()=>{
+  const p=pkg();p.source={platform:'local_template',source_kind:'local_template_product',product_id:'local_synthetic_one',captured_at:'2026-11-01T00:00:00.000Z'};
+  p.title='合成原标题不改';p.skus=[{sku_id:'variant_synthetic_blue',specifications:[{name:'颜色',value:'加绒蓝'}],price_raw:'12.30',stock_raw:'0',merchant_code_raw:'00007'},{sku_id:'variant_synthetic_red',specifications:[{name:'颜色',value:'红'}],price_raw:'15.00',stock_raw:'2',merchant_code_raw:'00008'}];
+  p.media={main_images:[],detail_images:[],sku_images:[],videos:[]};p.coverage={sku_complete:true,media_complete:false};return p;
+};
+test('local template identity stays separate from a platform product',()=>{
+  const p=localTemplate(),before=JSON.stringify(p),checked=core.normalizePackage(p);
+  assert.equal(checked.ok,true,JSON.stringify(checked.issues));assert.equal(checked.product.source.platform,'local_template');assert.equal(checked.product.source.product_id,'local_synthetic_one');assert.equal(JSON.stringify(p),before);assert.equal(core.normalizePackage(JSON.parse(JSON.stringify(checked.product))).ok,true);
+});
+test('local template cannot claim shop or platform source metadata',()=>{
+  for(const extra of [{product_id:'1000000000000000001'},{source_kind:'doudian_store_product'},{store_key:'synthetic-shop'},{source_url:'https://fxg.jinritemai.com/ffa/g/list'},{context_key:'synthetic-context'}]){const p=localTemplate();Object.assign(p.source,extra);assert.equal(core.normalizePackage(p).ok,false);}
+});
+test('local template timestamps must be real UTC dates',()=>{
+  for(const timestamp of ['2026-02-30T00:00:00.000Z','not-a-date','2026-11-01T08:00:00+08:00']){const p=localTemplate();p.source.captured_at=timestamp;assert.equal(core.normalizePackage(p).ok,false);}
+});
+test('local variant identity rejects platform IDs and duplicates',()=>{
+  for(const update of [p=>p.skus[0].sku_id='1000000000000000002',p=>p.skus[1].sku_id=p.skus[0].sku_id,p=>delete p.skus[0].sku_id]){const p=localTemplate();update(p);assert.equal(core.normalizePackage(p).ok,false);}
+});
+test('local template cannot attest platform sale status or complete uploaded media',()=>{
+  for(const update of [p=>p.skus[0].status_raw='售卖中',p=>p.coverage.media_complete=true,p=>p.attributes=[enumAttribute()]]){const p=localTemplate();update(p);assert.equal(core.normalizePackage(p).ok,false);}
+});
+test('specification projection preserves title price stock codes and media',()=>{
+  const p=localTemplate(),before=JSON.stringify(p),result=core.prepareSpecificationSource(p,{remove_words:'加绒'});
+  assert.equal(result.ok,true,JSON.stringify(result.issues));assert.equal(result.product.title,p.title);assert.equal(result.product.skus[0].specifications[0].value,'蓝');assert.equal(result.changes.length,2);assert.equal(JSON.stringify(p),before);
+  for(let i=0;i<p.skus.length;i++)for(const key of ['sku_id','price_raw','stock_raw','merchant_code_raw'])assert.equal(result.product.skus[i][key],p.skus[i][key]);
+  assert.deepEqual(result.product.media,p.media);for(const key of ['platform_write','platform_saved_verified','full_product_ready'])assert.equal(result[key],false);
+});
+test('incomplete specification source returns no adopted product',()=>{
+  const p=localTemplate();p.coverage.sku_complete=false;const result=core.prepareSpecificationSource(p,{});assert.equal(result.ok,false);assert.equal(result.product,null);assert(result.issues.some(issue=>issue.code==='specification_complete_required'));
+});
+test('projection rejects missing source identities without guessing',()=>{
+  const p=pkg();delete p.skus[0].sku_id;const result=core.prepareSpecificationSource(p,{});assert.equal(result.ok,false);assert.equal(result.product,null);
+});
+test('projection refuses collisions atomically and leaves input unchanged',()=>{
+  const p=localTemplate();p.skus[1].specifications[0].value='蓝';const before=JSON.stringify(p),result=core.prepareSpecificationSource(p,{remove_words:'加绒'});assert.equal(result.ok,false);assert.equal(result.product,null);assert.equal(JSON.stringify(p),before);
+});
+test('projection does not accept calculated previews as original source packages',()=>{
+  const result=core.prepareSpecificationSource(preview(),{});assert.equal(result.ok,false);assert.equal(result.product,null);assert.equal(result.platform_write,false);
+});
 process.stdout.write(tests + " product move core tests passed.\n");
