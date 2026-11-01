@@ -120,6 +120,7 @@
     async function resume(){if(disposed||working||unsettled||readSettlementUnknown||task?.state!=="paused")return snapshot();if(!current()){finishStopped("页面或店铺已变化，请重新选择商品。");return snapshot();}pauseRequested=false;consecutiveFailures=0;return run();}
     async function reconcile({confirmed=false}={}){
       if(confirmed!==true)throw Error('请明确确认仅只读核对资料库，不会重复保存。');
+      if(readSettlementUnknown)throw Error(unknownReadMessage);
       if(disposed||working||unsettled||reconciling||!current())throw Error('旧请求尚未结束或来源已变化，不能核对。');
       if(typeof readHistory!=='function')throw Error('资料库只读核对连接尚未接入。');
       const ownerTask=task,items=task?.items.filter(i=>i.state==='needs_review')||[];
