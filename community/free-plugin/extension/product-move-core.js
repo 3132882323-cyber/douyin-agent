@@ -127,6 +127,19 @@
   }
   function source(value, issues) {
     const path = "source", out = {};
+    if (plain(value) && own(value, "platform") === "local_template") {
+      fields(value, ["platform", "source_kind", "product_id", "captured_at"], path, issues);
+      out.platform = "local_template";
+      if (own(value, "source_kind") !== "local_template_product") issue(issues, "source.source_kind", "local_source_kind_required", "本地模板必须明确标为本地商品资料。");
+      else out.source_kind = "local_template_product";
+      const id = own(value, "product_id");
+      if (typeof id !== "string" || !/^local_[A-Za-z0-9_-]{1,122}$/.test(id)) issue(issues, "source.product_id", "local_identity_required", "本地商品键须使用独立本机编号，不能作为平台商品编号。");
+      else out.product_id = id;
+      const captured = own(value, "captured_at"), date = typeof captured === "string" ? new Date(captured) : null;
+      if (typeof captured !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(captured) || !Number.isFinite(date?.getTime()) || date.toISOString().slice(0, 19) !== captured.slice(0, 19)) issue(issues, "source.captured_at", "local_timestamp_required", "本地模板读取时间无效，请重新读取文件。");
+      else out.captured_at = captured;
+      return out;
+    }
     if (!fields(value, ["platform", "source_kind", "product_id", "shop_name", "store_key", "source_url", "context_key", "captured_at"], path, issues)) return undefined;
     if (own(value, "platform") !== "doudian") issue(issues, "source.platform", "unsupported_source", "来源平台必须是 doudian。");
     else out.platform = "doudian";
@@ -227,6 +240,16 @@
       }
     }
     if (has(input, "warnings")) out.warnings = array(own(input, "warnings"), "warnings", LIMITS.warnings, issues, (entry, at) => text(entry, at, issues, 500));
+    if (out.source?.platform === "local_template") {
+      const ids = new Set();
+      for (const [index, row] of (out.skus || []).entries()) {
+        if (typeof row.sku_id !== "string" || !/^variant_[A-Za-z0-9_-]{1,120}$/.test(row.sku_id) || ids.has(row.sku_id)) issue(issues, "skus." + index + ".sku_id", "local_variant_identity_required", "本地规格键缺失、重复或不属于本机资料。");
+        ids.add(row.sku_id);
+        if (has(row, "status_raw")) issue(issues, "skus." + index + ".status_raw", "local_platform_status_forbidden", "本地模板不能声明平台售卖状态。");
+      }
+      if ((out.attributes || []).some(entry => has(entry, "source_metadata"))) issue(issues, "attributes", "local_native_metadata_forbidden", "本地属性不能声明平台已读取的属性身份。");
+      if (out.coverage?.media_complete === true) issue(issues, "coverage.media_complete", "local_media_verification_forbidden", "模板中的素材链接尚未核对，不能标为平台素材已读全。");
+    }
     return { ok: !issues.length, product: issues.length ? null : out, issues };
   }
   function mapping(value, path, issues) {
@@ -386,6 +409,31 @@
     if (Array.isArray(value)) return "[" + value.map(stable).join(",") + "]";
     if (value && typeof value === "object") return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + stable(value[key])).join(",") + "}";
     return JSON.stringify(value);
+  }
+  // A separate source projection for an explicitly chosen specification step.
+  // Never consume a whole preview as a source: that would carry calculated
+  // prices, guessed readiness or target mappings into later native steps.
+  function prepareSpecificationSource(input, specificationRule) {
+    const parsed = normalizePackage(input), configured = normalizeConfig({ target_platform: "doudian", specification_policy: specificationRule });
+    const issues = [...parsed.issues, ...configured.issues];
+    const result = { ok: false, product: null, policy: null, changes: [], issues, platform_write: false, platform_saved_verified: false, full_product_ready: false };
+    if (issues.length) return result;
+    const product = parsed.product, rule = configured.config.specification_policy;
+    if (product.coverage?.sku_complete !== true) issue(issues, "coverage.sku_complete", "specification_complete_required", "来源规格尚未读全，不能把部分组合交给规格创建。");
+    const ids = new Set();
+    for (const [index, row] of (product.skus || []).entries()) {
+      if (!row.sku_id || ids.has(row.sku_id)) issue(issues, "skus." + index + ".sku_id", "specification_source_identity_required", "来源规格编号缺失或重复，无法保留每个组合的价格、编码和图片对应。");
+      ids.add(row.sku_id);
+    }
+    if (!product.skus?.length) issue(issues, "skus", "specifications_unknown", "没有可用于创建的完整规格资料。");
+    if (issues.length) return result;
+    const adapted = adaptSpecifications(product.skus, rule, issues);
+    if (issues.length) return result;
+    result.product = { ...product, skus: product.skus.map((row, index) => ({ ...row, specifications: adapted ? adapted[index] : row.specifications })) };
+    result.policy = rule;
+    result.changes = product.skus.map((row, index) => ({ sku_id: row.sku_id, before: row.specifications, after: result.product.skus[index].specifications }));
+    result.ok = true;
+    return result;
   }
   function keyFor(product, config) {
     const value = stable([product, config]); let a = 2166136261, b = 2246822519;
@@ -615,5 +663,5 @@
     return { ok: !issues.length, tasks: issues.length ? [] : tasks, duplicate_count: duplicates, issues };
   }
   function calculatePriceRule(rawMajor,rule){const checked=normalizeConfig({target_platform:'doudian',intent:'preview',price_policy:rule,stock_policy:{mode:'preserve_raw'}});if(!checked.ok)return{ok:false,value:null,issues:checked.issues};const issues=[];if(!decimal(rawMajor,false))issue(issues,'price_raw','price_source_unavailable','原价必须是明确十进制文本，未把空值或未知值补零。');if(issues.length)return{ok:false,value:null,issues};const p=checked.config.price_policy,value=p.mode==='formula'?formulaPrice(rawMajor,p,'price_value',issues):p.mode==='set'?p.value:rawMajor;return{ok:!issues.length,value:issues.length?null:value,issues};}
-  return Object.freeze({ LIMITS, STATES, SOURCE_KINDS, normalizePackage, normalizeConfig, buildPreview, dedupKey, createTask, normalizeTask, transitionTask, normalizeResult, createBatch,calculatePriceRule });
+  return Object.freeze({ LIMITS, STATES, SOURCE_KINDS, normalizePackage, normalizeConfig, buildPreview, prepareSpecificationSource, dedupKey, createTask, normalizeTask, transitionTask, normalizeResult, createBatch,calculatePriceRule });
 });

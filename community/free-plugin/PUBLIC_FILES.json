@@ -1,7 +1,9 @@
 {
   "schema_version": 1,
   "edition": "free_plugin_modules",
-  "as_of": "2026-10-27",
+  "as_of": "2026-11-01",
+  "source_module_version": "4.15.93",
+  "updated_modules": ["extension/product-package-queue.js", "extension/product-move-core.js"],
   "complete_extension_release": false,
   "runtime_dependencies": [],
   "test_only_dependencies": ["Node.js", "Playwright and installed Chrome for the optional browser fixture"],
